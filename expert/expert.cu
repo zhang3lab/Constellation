@@ -123,6 +123,10 @@ __global__ void partial_up_gate_kernel(
     int hidden_dim,
     int inter_dim) {
     __shared__ float x_sh[K_TILE];
+    __shared__ float up_scale_sh;
+    __shared__ float gate_scale_sh;
+    __shared__ uint8_t up_w_sh[N_TILE][K_TILE];
+    __shared__ uint8_t gate_w_sh[N_TILE][K_TILE];
 
     const int out_tile = blockIdx.x;
     const int batch_idx = blockIdx.y;
@@ -145,7 +149,9 @@ __global__ void partial_up_gate_kernel(
 
     for (int k_tile_id = first_k_tile; k_tile_id < last_k_tile_exclusive; ++k_tile_id) {
         const int k0 = k_tile_id * K_TILE;
+        const int tile_id = tile_id_of(out_tile, k_tile_id, num_k_tiles);
 
+        // Load activation tile.
         if (row_in_tile < K_TILE) {
             const int k = k0 + row_in_tile;
             x_sh[row_in_tile] =
@@ -153,31 +159,39 @@ __global__ void partial_up_gate_kernel(
                     ? __half2float(d_input[batch_idx * hidden_dim + k])
                     : 0.0f;
         }
+
+        // Load per-tile scales once.
+        if (row_in_tile == 0) {
+            up_scale_sh = w_up.scales[tile_id];
+            gate_scale_sh = w_gate.scales[tile_id];
+        }
+
+        // Cooperative load of full weight tiles into shared.
+        const uint8_t* up_tile_weights =
+            w_up.weights + packed_tile_base(tile_id);
+        const uint8_t* gate_tile_weights =
+            w_gate.weights + packed_tile_base(tile_id);
+
+        for (int idx = row_in_tile; idx < N_TILE * K_TILE; idx += N_TILE) {
+            const int r = idx / K_TILE;
+            const int c = idx % K_TILE;
+            up_w_sh[r][c] = up_tile_weights[idx];
+            gate_w_sh[r][c] = gate_tile_weights[idx];
+        }
+
         __syncthreads();
 
         if (valid) {
-            const int tile_id = tile_id_of(out_tile, k_tile_id, num_k_tiles);
-
-            const float up_tile_scale = w_up.scales[tile_id];
-            const float gate_tile_scale = w_gate.scales[tile_id];
-
-            const uint8_t* up_tile_weights =
-                w_up.weights + packed_tile_base(tile_id);
-            const uint8_t* gate_tile_weights =
-                w_gate.weights + packed_tile_base(tile_id);
-
-            const size_t row_base = static_cast<size_t>(row_in_tile) * K_TILE;
-
 #pragma unroll
             for (int kk = 0; kk < K_TILE; ++kk) {
                 const int k = k0 + kk;
                 if (k >= k_begin && k < k_end && k < hidden_dim) {
                     const float x = x_sh[kk];
-                    const uint8_t up_packed = up_tile_weights[row_base + kk];
-                    const uint8_t gate_packed = gate_tile_weights[row_base + kk];
+                    const uint8_t up_packed = up_w_sh[row_in_tile][kk];
+                    const uint8_t gate_packed = gate_w_sh[row_in_tile][kk];
 
-                    up_acc += x * (decode_fp8_byte(up_packed, w_up.fp8_format) * up_tile_scale);
-                    gate_acc += x * (decode_fp8_byte(gate_packed, w_gate.fp8_format) * gate_tile_scale);
+                    up_acc += x * (decode_fp8_byte(up_packed, w_up.fp8_format) * up_scale_sh);
+                    gate_acc += x * (decode_fp8_byte(gate_packed, w_gate.fp8_format) * gate_scale_sh);
                 }
             }
         }
