@@ -12,7 +12,7 @@ namespace {
 
 constexpr int N_TILE = kPackedNTile;         // 128
 constexpr int K_TILE = kPackedKTile;         // 64
-constexpr int P = 8;                         // K partitions for tiny-batch path
+constexpr int P = 24;                        // K partitions for tiny-batch path
 constexpr int B_MAX = kTinyBatchMaxTokens;   // 8
 
 __device__ __forceinline__ float decode_fp8_e4m3(uint8_t x) {
