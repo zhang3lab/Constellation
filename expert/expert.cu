@@ -239,6 +239,8 @@ __global__ void partial_down_kernel(
     int hidden_dim,
     int inter_dim) {
     __shared__ float fused_sh[K_TILE];
+    __shared__ float down_scale_sh;
+    __shared__ uint8_t down_w_sh[N_TILE][K_TILE];
 
     const int out_tile = blockIdx.x;
     const int batch_idx = blockIdx.y;
@@ -260,7 +262,9 @@ __global__ void partial_down_kernel(
 
     for (int k_tile_id = first_k_tile; k_tile_id < last_k_tile_exclusive; ++k_tile_id) {
         const int k0 = k_tile_id * K_TILE;
+        const int tile_id = tile_id_of(out_tile, k_tile_id, num_k_tiles);
 
+        // Load fused tile.
         if (row_in_tile < K_TILE) {
             const int k = k0 + row_in_tile;
             fused_sh[row_in_tile] =
@@ -268,20 +272,32 @@ __global__ void partial_down_kernel(
                     ? fused[batch_idx * inter_dim + k]
                     : 0.0f;
         }
+
+        // Load per-tile scale once.
+        if (row_in_tile == 0) {
+            down_scale_sh = w_down.scales[tile_id];
+        }
+
+        // Cooperative load of full weight tile into shared.
+        const uint8_t* down_tile_weights =
+            w_down.weights + packed_tile_base(tile_id);
+
+        for (int idx = row_in_tile; idx < N_TILE * K_TILE; idx += N_TILE) {
+            const int r = idx / K_TILE;
+            const int c = idx % K_TILE;
+            down_w_sh[r][c] = down_tile_weights[idx];
+        }
+
         __syncthreads();
 
         if (valid) {
-            const int tile_id = tile_id_of(out_tile, k_tile_id, num_k_tiles);
-            const float tile_scale = w_down.scales[tile_id];
-            const uint8_t* tile_weights = w_down.weights + packed_tile_base(tile_id);
-            const size_t row_base = static_cast<size_t>(row_in_tile) * K_TILE;
-
 #pragma unroll
             for (int kk = 0; kk < K_TILE; ++kk) {
                 const int k = k0 + kk;
                 if (k >= k_begin && k < k_end && k < inter_dim) {
-                    const uint8_t packed = tile_weights[row_base + kk];
-                    acc += fused_sh[kk] * (decode_fp8_byte(packed, w_down.fp8_format) * tile_scale);
+                    const uint8_t packed = down_w_sh[row_in_tile][kk];
+                    acc += fused_sh[kk] *
+                           (decode_fp8_byte(packed, w_down.fp8_format) * down_scale_sh);
                 }
             }
         }
