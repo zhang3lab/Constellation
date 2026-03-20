@@ -4,30 +4,9 @@
 #include <cstdint>
 
 #include "common/protocol.h"
+#include "common/wire_reader.h"
 
 namespace common {
-namespace {
-
-bool ReadU32(const std::string& buf, std::size_t* offset, std::uint32_t* out) {
-    if (*offset + 4 > buf.size()) return false;
-    const std::uint8_t* p =
-        reinterpret_cast<const std::uint8_t*>(buf.data() + *offset);
-    *out = static_cast<std::uint32_t>(p[0]) |
-           (static_cast<std::uint32_t>(p[1]) << 8) |
-           (static_cast<std::uint32_t>(p[2]) << 16) |
-           (static_cast<std::uint32_t>(p[3]) << 24);
-    *offset += 4;
-    return true;
-}
-
-bool ReadI32(const std::string& buf, std::size_t* offset, std::int32_t* out) {
-    std::uint32_t tmp = 0;
-    if (!ReadU32(buf, offset, &tmp)) return false;
-    *out = static_cast<std::int32_t>(tmp);
-    return true;
-}
-
-}  // namespace
 
 std::string EncodePlacementPlanBody(
     const std::vector<PlacementAssignment>& assignments) {
