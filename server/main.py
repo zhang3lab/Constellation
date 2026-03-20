@@ -20,6 +20,7 @@ def main():
     coord.print_placement()
     coord.send_placement_plan()
     coord.test_send_load_weights_begin()
+    coord.test_send_full_load_sequence()
 
 
 if __name__ == "__main__":

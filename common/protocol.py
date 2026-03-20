@@ -275,3 +275,80 @@ def decode_load_weights_begin(body: bytes):
         "tensor_kind": tensor_kind,
         "total_bytes": total_bytes,
     }
+
+def encode_load_weights_chunk(msg):
+    chunk_data = msg["chunk_data"]
+    if not isinstance(chunk_data, (bytes, bytearray)):
+        raise ValueError("chunk_data must be bytes-like")
+
+    body = bytearray()
+    body += pack_i32(int(msg["expert_id"]))
+    body += pack_i32(int(msg["local_gpu_id"]))
+    body += pack_i32(int(msg["tensor_kind"]))
+    body += pack_u64(int(msg["chunk_offset"]))
+    body += pack_u32(len(chunk_data))
+    body += chunk_data
+    return bytes(body)
+
+def decode_load_weights_chunk(body: bytes):
+    offset = 0
+    expert_id, offset = unpack_i32(body, offset)
+    local_gpu_id, offset = unpack_i32(body, offset)
+
+    tensor_kind_raw, offset = unpack_i32(body, offset)
+    try:
+        tensor_kind = TensorKind(tensor_kind_raw)
+    except ValueError as exc:
+        raise ProtocolError(f"invalid tensor_kind: {tensor_kind_raw}") from exc
+
+    chunk_offset, offset = unpack_u64(body, offset)
+    chunk_size, offset = unpack_u32(body, offset)
+
+    if offset + chunk_size > len(body):
+        raise ProtocolError("buffer too short while reading chunk_data")
+    chunk_data = body[offset : offset + chunk_size]
+    offset += chunk_size
+
+    if offset != len(body):
+        raise ProtocolError(
+            f"load_weights_chunk has trailing bytes: parsed {offset}, total {len(body)}"
+        )
+
+    return {
+        "expert_id": expert_id,
+        "local_gpu_id": local_gpu_id,
+        "tensor_kind": tensor_kind,
+        "chunk_offset": chunk_offset,
+        "chunk_data": chunk_data,
+    }
+
+def encode_load_weights_end(msg):
+    body = bytearray()
+    body += pack_i32(int(msg["expert_id"]))
+    body += pack_i32(int(msg["local_gpu_id"]))
+    body += pack_i32(int(msg["tensor_kind"]))
+    return bytes(body)
+
+def decode_load_weights_end(body: bytes):
+    offset = 0
+    expert_id, offset = unpack_i32(body, offset)
+    local_gpu_id, offset = unpack_i32(body, offset)
+
+    tensor_kind_raw, offset = unpack_i32(body, offset)
+    try:
+        tensor_kind = TensorKind(tensor_kind_raw)
+    except ValueError as exc:
+        raise ProtocolError(f"invalid tensor_kind: {tensor_kind_raw}") from exc
+
+    if offset != len(body):
+        raise ProtocolError(
+            f"load_weights_end has trailing bytes: parsed {offset}, total {len(body)}"
+        )
+
+    return {
+        "expert_id": expert_id,
+        "local_gpu_id": local_gpu_id,
+        "tensor_kind": tensor_kind,
+    }
+
+

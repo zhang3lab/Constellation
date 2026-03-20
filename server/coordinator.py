@@ -174,3 +174,45 @@ class Coordinator:
             f"expert={p['expert_id']} local_gpu_id={p['local_gpu_id']} "
             f"tensor_kind={msg['tensor_kind'].name} total_bytes={msg['total_bytes']}"
         )
+
+    def test_send_full_load_sequence(self) -> None:
+        if not self.placements:
+            raise RuntimeError("placements are empty")
+     
+        p = self.placements[0]
+     
+        fake_chunk = b"hello_fake_weight_bytes"
+        total_bytes = len(fake_chunk)
+     
+        begin_msg = {
+            "expert_id": p["expert_id"],
+            "local_gpu_id": p["local_gpu_id"],
+            "tensor_kind": TensorKind.WUp,
+            "total_bytes": total_bytes,
+        }
+     
+        chunk_msg = {
+            "expert_id": p["expert_id"],
+            "local_gpu_id": p["local_gpu_id"],
+            "tensor_kind": TensorKind.WUp,
+            "chunk_offset": 0,
+            "chunk_data": fake_chunk,
+        }
+     
+        end_msg = {
+            "expert_id": p["expert_id"],
+            "local_gpu_id": p["local_gpu_id"],
+            "tensor_kind": TensorKind.WUp,
+        }
+     
+        client = NodeClient(p["host"], p["control_port"])
+        with client:
+            client.send_load_weights_begin(begin_msg)
+            client.send_load_weights_chunk(chunk_msg)
+            client.send_load_weights_end(end_msg)
+     
+        print(
+            f"sent full load sequence to {p['node_instance_id']} "
+            f"expert={p['expert_id']} local_gpu_id={p['local_gpu_id']} "
+            f"tensor_kind={begin_msg['tensor_kind'].name} total_bytes={total_bytes}"
+        )

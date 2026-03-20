@@ -29,9 +29,18 @@ struct ExpertResidency {
     bool ready = false;
 };
 
+struct ActiveLoad {
+    bool active = false;
+    int expert_id = -1;
+    common::TensorKind tensor_kind = common::TensorKind::WUp;
+    std::uint64_t total_bytes = 0;
+    std::uint64_t received_bytes = 0;
+};
+
 struct ControlState {
     common::NodeStatus node_status = common::NodeStatus::Booting;
     std::unordered_map<int, ExpertResidency> expert_table;
+    ActiveLoad active_load;
 };
 
 int ListenTcp(int port) {
@@ -306,6 +315,177 @@ bool HandleLoadWeightsBegin(
     return ok;
 }
 
+bool HandleLoadWeightsChunk(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    common::LoadWeightsChunkMsg msg;
+    if (!common::DecodeLoadWeightsChunkBody(req_body, &msg)) {
+        std::fprintf(stderr, "[%s] failed to decode LoadWeightsChunk\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    if (!state->active_load.active) {
+        std::fprintf(stderr, "[%s] LoadWeightsChunk with no active load\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    auto it = state->expert_table.find(msg.expert_id);
+    if (it == state->expert_table.end()) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsChunk for unknown expert=%d\n",
+                     info.node_id.c_str(), msg.expert_id);
+        return false;
+    }
+
+    if (it->second.local_gpu_id != msg.local_gpu_id) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsChunk gpu mismatch for expert=%d: "
+                     "got local_gpu_id=%d expected=%d\n",
+                     info.node_id.c_str(),
+                     msg.expert_id,
+                     msg.local_gpu_id,
+                     it->second.local_gpu_id);
+        return false;
+    }
+
+    if (state->active_load.expert_id != msg.expert_id) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsChunk expert mismatch: got=%d expected=%d\n",
+                     info.node_id.c_str(),
+                     msg.expert_id,
+                     state->active_load.expert_id);
+        return false;
+    }
+
+    if (state->active_load.tensor_kind != msg.tensor_kind) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsChunk tensor_kind mismatch\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    if (msg.chunk_offset != state->active_load.received_bytes) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsChunk offset mismatch: got=%llu expected=%llu\n",
+                     info.node_id.c_str(),
+                     static_cast<unsigned long long>(msg.chunk_offset),
+                     static_cast<unsigned long long>(state->active_load.received_bytes));
+        return false;
+    }
+
+    state->active_load.received_bytes +=
+        static_cast<std::uint64_t>(msg.chunk_data.size());
+
+    std::printf("[%s] received LoadWeightsChunk rid=%u "
+                "expert=%d local_gpu_id=%d tensor_kind=%s chunk_offset=%llu chunk_size=%zu "
+                "received=%llu/%llu\n",
+                info.node_id.c_str(),
+                req.request_id,
+                msg.expert_id,
+                msg.local_gpu_id,
+                TensorKindName(msg.tensor_kind),
+                static_cast<unsigned long long>(msg.chunk_offset),
+                msg.chunk_data.size(),
+                static_cast<unsigned long long>(state->active_load.received_bytes),
+                static_cast<unsigned long long>(state->active_load.total_bytes));
+
+    bool ok = SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
+    if (ok) {
+        std::printf("[%s] sent LoadWeightsAck rid=%u\n",
+                    info.node_id.c_str(), req.request_id);
+    }
+    return ok;
+}
+
+bool HandleLoadWeightsEnd(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    common::LoadWeightsEndMsg msg;
+    if (!common::DecodeLoadWeightsEndBody(req_body, &msg)) {
+        std::fprintf(stderr, "[%s] failed to decode LoadWeightsEnd\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    if (!state->active_load.active) {
+        std::fprintf(stderr, "[%s] LoadWeightsEnd with no active load\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    auto it = state->expert_table.find(msg.expert_id);
+    if (it == state->expert_table.end()) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsEnd for unknown expert=%d\n",
+                     info.node_id.c_str(), msg.expert_id);
+        return false;
+    }
+
+    if (it->second.local_gpu_id != msg.local_gpu_id) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsEnd gpu mismatch for expert=%d: "
+                     "got local_gpu_id=%d expected=%d\n",
+                     info.node_id.c_str(),
+                     msg.expert_id,
+                     msg.local_gpu_id,
+                     it->second.local_gpu_id);
+        return false;
+    }
+
+    if (state->active_load.expert_id != msg.expert_id) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsEnd expert mismatch: got=%d expected=%d\n",
+                     info.node_id.c_str(),
+                     msg.expert_id,
+                     state->active_load.expert_id);
+        return false;
+    }
+
+    if (state->active_load.tensor_kind != msg.tensor_kind) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsEnd tensor_kind mismatch\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    if (state->active_load.received_bytes != state->active_load.total_bytes) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsEnd byte mismatch: received=%llu expected=%llu\n",
+                     info.node_id.c_str(),
+                     static_cast<unsigned long long>(state->active_load.received_bytes),
+                     static_cast<unsigned long long>(state->active_load.total_bytes));
+        return false;
+    }
+
+    it->second.ready = true;
+
+    std::printf("[%s] received LoadWeightsEnd rid=%u "
+                "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu -> ready=1\n",
+                info.node_id.c_str(),
+                req.request_id,
+                msg.expert_id,
+                msg.local_gpu_id,
+                TensorKindName(msg.tensor_kind),
+                static_cast<unsigned long long>(state->active_load.total_bytes));
+
+    state->active_load = ActiveLoad{};
+
+    bool ok = SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
+    if (ok) {
+        std::printf("[%s] sent LoadWeightsAck rid=%u\n",
+                    info.node_id.c_str(), req.request_id);
+    }
+    return ok;
+}
+
 bool DispatchRequest(
     int fd,
     const common::NodeInfo& info,
@@ -323,6 +503,10 @@ bool DispatchRequest(
             return HandlePlacementPlan(fd, info, state, req, req_body);
         case common::MsgType::LoadWeightsBegin:
             return HandleLoadWeightsBegin(fd, info, state, req, req_body);
+	case common::MsgType::LoadWeightsChunk:
+            return HandleLoadWeightsChunk(fd, info, state, req, req_body);
+        case common::MsgType::LoadWeightsEnd:
+            return HandleLoadWeightsEnd(fd, info, state, req, req_body);
         default:
             std::fprintf(stderr, "[%s] unsupported msg_type: %u\n",
                          info.node_id.c_str(), req.msg_type);
