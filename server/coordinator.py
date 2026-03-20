@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 
 from server.client import NodeClient
+from server.placement import build_first_fit_placement
 
 
 class Coordinator:
