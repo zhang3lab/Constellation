@@ -1,0 +1,67 @@
+from typing import Any, Dict, List
+
+
+class PlacementError(RuntimeError):
+    pass
+
+
+def build_first_fit_placement(
+    gpu_inventory: List[Dict[str, Any]],
+    num_experts: int,
+    expert_mem_bytes: int,
+    memory_utilization: float = 0.9,
+) -> List[Dict[str, Any]]:
+    if num_experts < 0:
+        raise ValueError(f"num_experts must be >= 0, got {num_experts}")
+    if expert_mem_bytes <= 0:
+        raise ValueError(f"expert_mem_bytes must be > 0, got {expert_mem_bytes}")
+    if not (0.0 < memory_utilization <= 1.0):
+        raise ValueError(
+            f"memory_utilization must be in (0, 1], got {memory_utilization}"
+        )
+
+    gpus = []
+    for gpu in gpu_inventory:
+        g = dict(gpu)
+        g["remaining_mem_bytes"] = int(gpu["free_mem_bytes"] * memory_utilization)
+        g["assigned_expert_ids"] = []
+        gpus.append(g)
+
+    placements: List[Dict[str, Any]] = []
+
+    for expert_id in range(num_experts):
+        chosen = None
+
+        for gpu in gpus:
+            if gpu["remaining_mem_bytes"] >= expert_mem_bytes:
+                chosen = gpu
+                break
+
+        if chosen is None:
+            max_remaining = max((gpu["remaining_mem_bytes"] for gpu in gpus), default=0)
+            raise PlacementError(
+                f"unable to place expert {expert_id}: "
+                f"need {expert_mem_bytes} bytes, "
+                f"max remaining across GPUs is {max_remaining} bytes"
+            )
+
+        chosen["remaining_mem_bytes"] -= expert_mem_bytes
+        chosen["assigned_expert_ids"].append(expert_id)
+
+        placements.append(
+            {
+                "expert_id": expert_id,
+                "node_instance_id": chosen["node_instance_id"],
+                "reported_node_id": chosen["reported_node_id"],
+                "host": chosen["host"],
+                "control_port": chosen["control_port"],
+                "gpu_uid_global": chosen["gpu_uid_global"],
+                "gpu_uid_reported": chosen["gpu_uid_reported"],
+                "local_gpu_id": chosen["local_gpu_id"],
+                "worker_port": chosen["worker_port"],
+                "gpu_name": chosen["gpu_name"],
+                "expert_mem_bytes": expert_mem_bytes,
+            }
+        )
+
+    return placements

@@ -8,6 +8,7 @@ class Coordinator:
         self.nodes = nodes
         self.node_inventories: List[Dict[str, Any]] = []
         self.gpu_inventory: List[Dict[str, Any]] = []
+        self.placements: List[Dict[str, Any]] = []
 
     def discover_nodes(self) -> None:
         self.node_inventories = []
@@ -81,4 +82,31 @@ class Coordinator:
                 f"free={free_gib:.2f}GiB/{total_gib:.2f}GiB "
                 f"worker_port={gpu['worker_port']} "
                 f"status={gpu['gpu_status']}"
+            )
+
+    def build_placement(
+        self,
+        num_experts: int,
+        expert_mem_bytes: int,
+        memory_utilization: float = 0.9,
+    ) -> None:
+        self.placements = build_first_fit_placement(
+            gpu_inventory=self.gpu_inventory,
+            num_experts=num_experts,
+            expert_mem_bytes=expert_mem_bytes,
+            memory_utilization=memory_utilization,
+        )
+
+    def print_placement(self) -> None:
+        print(f"built placement for {len(self.placements)} experts")
+        for p in self.placements:
+            gib = p["expert_mem_bytes"] / (1024 ** 3)
+            print(
+                f"expert={p['expert_id']} "
+                f"node_instance_id={p['node_instance_id']} "
+                f"gpu_uid_global={p['gpu_uid_global']} "
+                f"local_gpu_id={p['local_gpu_id']} "
+                f"worker_port={p['worker_port']} "
+                f"gpu_name={p['gpu_name']} "
+                f"expert_mem={gib:.2f}GiB"
             )
