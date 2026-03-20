@@ -5,7 +5,7 @@ class PlacementError(RuntimeError):
     pass
 
 
-def build_first_fit_placement(
+def build_balanced_placement(
     gpu_inventory: List[Dict[str, Any]],
     num_experts: int,
     expert_mem_bytes: int,
@@ -22,8 +22,10 @@ def build_first_fit_placement(
 
     gpus = []
     for gpu in gpu_inventory:
+        capacity_bytes = int(gpu["free_mem_bytes"] * memory_utilization)
         g = dict(gpu)
-        g["remaining_mem_bytes"] = int(gpu["free_mem_bytes"] * memory_utilization)
+        g["capacity_bytes"] = capacity_bytes
+        g["remaining_mem_bytes"] = capacity_bytes
         g["assigned_expert_ids"] = []
         gpus.append(g)
 
@@ -31,11 +33,18 @@ def build_first_fit_placement(
 
     for expert_id in range(num_experts):
         chosen = None
+        chosen_score = None
 
         for gpu in gpus:
-            if gpu["remaining_mem_bytes"] >= expert_mem_bytes:
+            if gpu["remaining_mem_bytes"] < expert_mem_bytes:
+                continue
+
+            after_bytes = gpu["remaining_mem_bytes"] - expert_mem_bytes
+            score = after_bytes / max(gpu["capacity_bytes"], 1)
+
+            if chosen is None or score < chosen_score:
                 chosen = gpu
-                break
+                chosen_score = score
 
         if chosen is None:
             max_remaining = max((gpu["remaining_mem_bytes"] for gpu in gpus), default=0)
