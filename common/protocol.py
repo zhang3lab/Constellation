@@ -1,0 +1,203 @@
+import enum
+import struct
+from typing import Tuple, TypedDict
+
+
+MAGIC = 0x45585054  # "EXPT"
+VERSION = 1
+
+# Wire format is little-endian:
+# uint32 magic
+# uint16 version
+# uint16 msg_type
+# uint32 request_id
+# uint32 body_len
+HEADER_STRUCT = struct.Struct("<IHHII")
+HEADER_SIZE = HEADER_STRUCT.size
+
+U32 = struct.Struct("<I")
+I32 = struct.Struct("<i")
+U64 = struct.Struct("<Q")
+
+MAX_STRING_BYTES = 1 << 20   # 1 MiB, very generous for names/ids
+MAX_GPUS_PER_NODE = 1024
+
+
+class ProtocolError(RuntimeError):
+    pass
+
+
+class MsgType(enum.IntEnum):
+    InventoryRequest = 1
+    InventoryReply = 2
+
+    PlacementPlan = 10
+
+    LoadWeightsBegin = 20
+    LoadWeightsChunk = 21
+    LoadWeightsEnd = 22
+    LoadDone = 23
+
+    CommitServing = 30
+
+    InferRequest = 40
+    InferResponse = 41
+
+    HeartbeatRequest = 50
+    HeartbeatReply = 51
+
+    ErrorReport = 60
+
+
+class HeaderDict(TypedDict):
+    magic: int
+    version: int
+    msg_type: MsgType
+    request_id: int
+    body_len: int
+
+
+def pack_header(msg_type: MsgType, request_id: int, body_len: int) -> bytes:
+    if request_id < 0 or request_id > 0xFFFFFFFF:
+        raise ValueError(f"request_id out of range: {request_id}")
+    if body_len < 0 or body_len > 0xFFFFFFFF:
+        raise ValueError(f"body_len out of range: {body_len}")
+
+    return HEADER_STRUCT.pack(
+        MAGIC,
+        VERSION,
+        int(msg_type),
+        request_id,
+        body_len,
+    )
+
+
+def unpack_header(data: bytes) -> HeaderDict:
+    if len(data) != HEADER_SIZE:
+        raise ProtocolError(
+            f"bad header size: got {len(data)} bytes, expected {HEADER_SIZE}"
+        )
+
+    magic, version, msg_type_raw, request_id, body_len = HEADER_STRUCT.unpack(data)
+
+    try:
+        msg_type = MsgType(msg_type_raw)
+    except ValueError as exc:
+        raise ProtocolError(f"unknown msg_type: {msg_type_raw}") from exc
+
+    return {
+        "magic": magic,
+        "version": version,
+        "msg_type": msg_type,
+        "request_id": request_id,
+        "body_len": body_len,
+    }
+
+
+def check_magic_version(header: HeaderDict) -> None:
+    if header["magic"] != MAGIC:
+        raise ProtocolError(
+            f"bad magic: got {header['magic']:#x}, expected {MAGIC:#x}"
+        )
+    if header["version"] != VERSION:
+        raise ProtocolError(
+            f"bad version: got {header['version']}, expected {VERSION}"
+        )
+
+
+def pack_u32(x: int) -> bytes:
+    if x < 0 or x > 0xFFFFFFFF:
+        raise ValueError(f"u32 out of range: {x}")
+    return U32.pack(x)
+
+
+def pack_i32(x: int) -> bytes:
+    if x < -0x80000000 or x > 0x7FFFFFFF:
+        raise ValueError(f"i32 out of range: {x}")
+    return I32.pack(x)
+
+
+def pack_u64(x: int) -> bytes:
+    if x < 0 or x > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"u64 out of range: {x}")
+    return U64.pack(x)
+
+
+def unpack_u32(buf: bytes, offset: int) -> Tuple[int, int]:
+    if offset + 4 > len(buf):
+        raise ProtocolError("buffer too short while reading u32")
+    return U32.unpack_from(buf, offset)[0], offset + 4
+
+
+def unpack_i32(buf: bytes, offset: int) -> Tuple[int, int]:
+    if offset + 4 > len(buf):
+        raise ProtocolError("buffer too short while reading i32")
+    return I32.unpack_from(buf, offset)[0], offset + 4
+
+
+def unpack_u64(buf: bytes, offset: int) -> Tuple[int, int]:
+    if offset + 8 > len(buf):
+        raise ProtocolError("buffer too short while reading u64")
+    return U64.unpack_from(buf, offset)[0], offset + 8
+
+
+def pack_string(s: str) -> bytes:
+    raw = s.encode("utf-8")
+    if len(raw) > 0xFFFFFFFF:
+        raise ValueError("string too long for u32 length prefix")
+    return pack_u32(len(raw)) + raw
+
+
+def unpack_string(buf: bytes, offset: int) -> Tuple[str, int]:
+    n, offset = unpack_u32(buf, offset)
+    if n > MAX_STRING_BYTES:
+        raise ProtocolError(f"string too long: {n} bytes")
+    if offset + n > len(buf):
+        raise ProtocolError("buffer too short while reading string")
+    raw = buf[offset : offset + n]
+    return raw.decode("utf-8"), offset + n
+
+
+def decode_inventory_reply(body: bytes):
+    offset = 0
+
+    node_id, offset = unpack_string(body, offset)
+    node_status, offset = unpack_u32(body, offset)
+    num_gpus, offset = unpack_u32(body, offset)
+
+    if num_gpus > MAX_GPUS_PER_NODE:
+        raise ProtocolError(f"unreasonable num_gpus: {num_gpus}")
+
+    gpus = []
+    for _ in range(num_gpus):
+        gpu_uid, offset = unpack_string(body, offset)
+        local_gpu_id, offset = unpack_i32(body, offset)
+        gpu_name, offset = unpack_string(body, offset)
+        total_mem_bytes, offset = unpack_u64(body, offset)
+        free_mem_bytes, offset = unpack_u64(body, offset)
+        worker_port, offset = unpack_u32(body, offset)
+        gpu_status, offset = unpack_u32(body, offset)
+
+        gpus.append(
+            {
+                "gpu_uid": gpu_uid,
+                "local_gpu_id": local_gpu_id,
+                "gpu_name": gpu_name,
+                "total_mem_bytes": total_mem_bytes,
+                "free_mem_bytes": free_mem_bytes,
+                "worker_port": worker_port,
+                "gpu_status": gpu_status,
+            }
+        )
+
+    if offset != len(body):
+        raise ProtocolError(
+            f"inventory reply has trailing bytes: parsed {offset}, total {len(body)}"
+        )
+
+    return {
+        "node_id": node_id,
+        "node_status": node_status,
+        "num_gpus": num_gpus,
+        "gpus": gpus,
+    }
