@@ -256,6 +256,7 @@ bool HandlePlacementPlan(
         state->expert_table[a.expert_id] = r;
     }
 
+    state->active_load = ActiveLoad{};
     PrintExpertTable(info, *state);
 
     bool ok = SendEmptyAck(fd, common::MsgType::PlacementAck, req.request_id);
@@ -298,6 +299,19 @@ bool HandleLoadWeightsBegin(
         return false;
     }
 
+    if (state->active_load.active) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsBegin while another load is active\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    state->active_load.active = true;
+    state->active_load.expert_id = msg.expert_id;
+    state->active_load.tensor_kind = msg.tensor_kind;
+    state->active_load.total_bytes = msg.total_bytes;
+    state->active_load.received_bytes = 0;
+
     std::printf("[%s] received LoadWeightsBegin rid=%u "
                 "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu\n",
                 info.node_id.c_str(),
@@ -306,6 +320,12 @@ bool HandleLoadWeightsBegin(
                 msg.local_gpu_id,
                 TensorKindName(msg.tensor_kind),
                 static_cast<unsigned long long>(msg.total_bytes));
+
+    std::printf("[%s] active_load armed: expert=%d tensor_kind=%s total=%llu\n",
+                info.node_id.c_str(),
+                state->active_load.expert_id,
+                TensorKindName(state->active_load.tensor_kind),
+                static_cast<unsigned long long>(state->active_load.total_bytes));
 
     bool ok = SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
     if (ok) {
@@ -503,7 +523,7 @@ bool DispatchRequest(
             return HandlePlacementPlan(fd, info, state, req, req_body);
         case common::MsgType::LoadWeightsBegin:
             return HandleLoadWeightsBegin(fd, info, state, req, req_body);
-	case common::MsgType::LoadWeightsChunk:
+        case common::MsgType::LoadWeightsChunk:
             return HandleLoadWeightsChunk(fd, info, state, req, req_body);
         case common::MsgType::LoadWeightsEnd:
             return HandleLoadWeightsEnd(fd, info, state, req, req_body);
