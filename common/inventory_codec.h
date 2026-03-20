@@ -28,6 +28,8 @@ namespace common {
 //     u64 free_mem_bytes
 //     u32 worker_port
 //     u32 gpu_status
-std::string EncodeInventoryReplyBody(const NodeInfo& node);
+std::string EncodeInventoryReplyBody(
+    const NodeInfo& node,
+    NodeStatus node_status);
 
 }  // namespace common

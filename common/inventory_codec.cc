@@ -4,12 +4,14 @@
 
 namespace common {
 
-std::string EncodeInventoryReplyBody(const NodeInfo& node) {
+std::string EncodeInventoryReplyBody(
+    const NodeInfo& node,
+    NodeStatus node_status) {
     std::string body;
     body.reserve(256 + node.gpus.size() * 128);
 
     AppendString(&body, node.node_id);
-    AppendU32(&body, static_cast<std::uint32_t>(node.status));
+    AppendU32(&body, static_cast<std::uint32_t>(node_status));
     AppendU32(&body, static_cast<std::uint32_t>(node.gpus.size()));
 
     for (const auto& gpu : node.gpus) {

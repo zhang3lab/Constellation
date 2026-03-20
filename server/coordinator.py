@@ -1,5 +1,6 @@
 from typing import Any, Dict, List
 
+from common.protocol import TensorKind
 from server.client import NodeClient
 from server.placement import build_balanced_placement
 
@@ -111,3 +112,65 @@ class Coordinator:
                 f"gpu_name={p['gpu_name']} "
                 f"expert_mem={gib:.2f}GiB"
             )
+
+    def group_placements_by_node(self):
+        grouped = {}
+     
+        for p in self.placements:
+            node_instance_id = p["node_instance_id"]
+            grouped.setdefault(node_instance_id, []).append(
+                {
+                    "expert_id": p["expert_id"],
+                    "local_gpu_id": p["local_gpu_id"],
+                }
+            )
+     
+        for node_instance_id in grouped:
+            grouped[node_instance_id].sort(
+                key=lambda x: (x["local_gpu_id"], x["expert_id"])
+            )
+     
+        return grouped
+
+    def send_placement_plan(self) -> None:
+        grouped = self.group_placements_by_node()
+     
+        for node in self.node_inventories:
+            node_instance_id = node["node_instance_id"]
+            host = node["host"]
+            control_port = node["control_port"]
+     
+            assignments = grouped.get(node_instance_id, [])
+     
+            client = NodeClient(host, control_port)
+            with client:
+                client.send_placement_plan(assignments)
+     
+            print(
+                f"sent placement to {node_instance_id} "
+                f"reported_node_id={node['reported_node_id']} "
+                f"assignments={len(assignments)}"
+            )
+
+    def test_send_load_weights_begin(self) -> None:
+        if not self.placements:
+            raise RuntimeError("placements are empty")
+     
+        p = self.placements[0]
+     
+        msg = {
+            "expert_id": p["expert_id"],
+            "local_gpu_id": p["local_gpu_id"],
+            "tensor_kind": TensorKind.WUp,
+            "total_bytes": 123456,
+        }
+     
+        client = NodeClient(p["host"], p["control_port"])
+        with client:
+            client.send_load_weights_begin(msg)
+     
+        print(
+            f"sent LoadWeightsBegin to {p['node_instance_id']} "
+            f"expert={p['expert_id']} local_gpu_id={p['local_gpu_id']} "
+            f"tensor_kind={msg['tensor_kind'].name} total_bytes={msg['total_bytes']}"
+        )

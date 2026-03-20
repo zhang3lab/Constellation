@@ -51,7 +51,6 @@ struct NodeInfo {
     std::string node_id;
     std::string host;
     std::int32_t control_port = -1;
-    NodeStatus status = NodeStatus::Booting;
     std::vector<GpuInfo> gpus;
 };
 

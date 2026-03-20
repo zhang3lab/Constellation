@@ -6,6 +6,8 @@ from common.protocol import (
     VERSION,
     MsgType,
     HEADER_SIZE,
+    encode_load_weights_begin,
+    encode_placement_plan,
     decode_inventory_reply,
     pack_header,
     unpack_header,
@@ -139,5 +141,23 @@ class NodeClient:
             req_type=MsgType.HeartbeatRequest,
             resp_type=MsgType.HeartbeatReply,
             body=b"",
+            request_id=request_id,
+        )
+
+    def send_placement_plan(self, assignments, request_id=None) -> bytes:
+        body = encode_placement_plan(assignments)
+        return self.request(
+            req_type=MsgType.PlacementPlan,
+            resp_type=MsgType.PlacementAck,
+            body=body,
+            request_id=request_id,
+        )
+
+    def send_load_weights_begin(self, msg, request_id=None) -> bytes:
+        body = encode_load_weights_begin(msg)
+        return self.request(
+            req_type=MsgType.LoadWeightsBegin,
+            resp_type=MsgType.LoadWeightsAck,
+            body=body,
             request_id=request_id,
         )

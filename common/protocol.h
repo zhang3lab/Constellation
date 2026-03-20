@@ -14,11 +14,13 @@ enum class MsgType : std::uint16_t {
     InventoryReply = 2,
 
     PlacementPlan = 10,
+    PlacementAck = 11,
 
     LoadWeightsBegin = 20,
     LoadWeightsChunk = 21,
     LoadWeightsEnd = 22,
     LoadDone = 23,
+    LoadWeightsAck = 24,
 
     CommitServing = 30,
 
@@ -29,6 +31,12 @@ enum class MsgType : std::uint16_t {
     HeartbeatReply = 51,
 
     ErrorReport = 60,
+};
+
+enum class TensorKind : std::int32_t {
+    WUp = 0,
+    WGate = 1,
+    WDown = 2,
 };
 
 struct MsgHeader {

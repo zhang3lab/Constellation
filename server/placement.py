@@ -33,18 +33,21 @@ def build_balanced_placement(
 
     for expert_id in range(num_experts):
         chosen = None
-        chosen_score = None
+        chosen_key = None
 
         for gpu in gpus:
             if gpu["remaining_mem_bytes"] < expert_mem_bytes:
                 continue
 
             after_bytes = gpu["remaining_mem_bytes"] - expert_mem_bytes
-            score = after_bytes / max(gpu["capacity_bytes"], 1)
+            util_after = 1.0 - (after_bytes / max(gpu["capacity_bytes"], 1))
+            assigned_count = len(gpu["assigned_expert_ids"])
 
-            if chosen is None or score < chosen_score:
+            key = (assigned_count, util_after)
+
+            if chosen is None or key < chosen_key:
                 chosen = gpu
-                chosen_score = score
+                chosen_key = key
 
         if chosen is None:
             max_remaining = max((gpu["remaining_mem_bytes"] for gpu in gpus), default=0)

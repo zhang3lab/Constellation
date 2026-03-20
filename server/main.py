@@ -18,6 +18,8 @@ def main():
         memory_utilization=0.9,
     )
     coord.print_placement()
+    coord.send_placement_plan()
+    coord.test_send_load_weights_begin()
 
 
 if __name__ == "__main__":

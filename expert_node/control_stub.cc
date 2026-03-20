@@ -3,21 +3,36 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <cuda_runtime.h>
 
 #include "common/header_codec.h"
 #include "common/inventory_codec.h"
+#include "common/placement_codec.h"
 #include "common/protocol.h"
 #include "common/socket_utils.h"
 #include "common/types.h"
+#include "common/weight_codec.h"
 
 namespace {
+
+struct ExpertResidency {
+    int expert_id = -1;
+    int local_gpu_id = -1;
+    bool ready = false;
+};
+
+struct ControlState {
+    common::NodeStatus node_status = common::NodeStatus::Booting;
+    std::unordered_map<int, ExpertResidency> expert_table;
+};
 
 int ListenTcp(int port) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -42,18 +57,29 @@ int ListenTcp(int port) {
     return fd;
 }
 
+const char* TensorKindName(common::TensorKind k) {
+    switch (k) {
+        case common::TensorKind::WUp:
+            return "w_up";
+        case common::TensorKind::WGate:
+            return "w_gate";
+        case common::TensorKind::WDown:
+            return "w_down";
+        default:
+            return "unknown";
+    }
+}
+
 common::NodeInfo BuildRealInventory(int control_port, int worker_port_base) {
     common::NodeInfo node;
     node.node_id = "node0";
     node.host = "127.0.0.1";
     node.control_port = control_port;
-    node.status = common::NodeStatus::Registered;
 
     int num_devices = 0;
     cudaError_t err = cudaGetDeviceCount(&num_devices);
     if (err != cudaSuccess) {
         std::fprintf(stderr, "cudaGetDeviceCount failed: %s\n", cudaGetErrorString(err));
-        node.status = common::NodeStatus::Failed;
         return node;
     }
 
@@ -97,7 +123,217 @@ common::NodeInfo BuildRealInventory(int control_port, int worker_port_base) {
     return node;
 }
 
-bool HandleOneRequest(int fd, const common::NodeInfo& info) {
+void PrintExpertTable(const common::NodeInfo& info, const ControlState& state) {
+    std::vector<int> expert_ids;
+    expert_ids.reserve(state.expert_table.size());
+
+    for (const auto& kv : state.expert_table) {
+        expert_ids.push_back(kv.first);
+    }
+    std::sort(expert_ids.begin(), expert_ids.end());
+
+    std::printf("[%s] expert_table size = %zu\n",
+                info.node_id.c_str(),
+                state.expert_table.size());
+
+    for (int expert_id : expert_ids) {
+        const auto& r = state.expert_table.at(expert_id);
+        std::printf("[%s]   expert=%d local_gpu_id=%d ready=%d\n",
+                    info.node_id.c_str(),
+                    r.expert_id,
+                    r.local_gpu_id,
+                    static_cast<int>(r.ready));
+    }
+}
+
+bool SendEmptyAck(
+    int fd,
+    common::MsgType ack_type,
+    std::uint32_t request_id) {
+    common::MsgHeader resp{};
+    resp.magic = common::kMagic;
+    resp.version = common::kVersion;
+    resp.msg_type = static_cast<std::uint16_t>(ack_type);
+    resp.request_id = request_id;
+    resp.body_len = 0;
+    return common::SendMessage(fd, resp, std::string());
+}
+
+bool HandleInventoryRequest(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    if (!req_body.empty()) {
+        std::fprintf(stderr, "InventoryRequest body must be empty\n");
+        return false;
+    }
+
+    std::printf("[%s] received InventoryRequest rid=%u\n",
+                info.node_id.c_str(), req.request_id);
+
+    std::string body =
+        common::EncodeInventoryReplyBody(info, state->node_status);
+
+    common::MsgHeader resp{};
+    resp.magic = common::kMagic;
+    resp.version = common::kVersion;
+    resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InventoryReply);
+    resp.request_id = req.request_id;
+    resp.body_len = static_cast<std::uint32_t>(body.size());
+
+    bool ok = common::SendMessage(fd, resp, body);
+    if (ok) {
+        std::printf("[%s] sent InventoryReply rid=%u body_len=%u\n",
+                    info.node_id.c_str(), resp.request_id, resp.body_len);
+    }
+    return ok;
+}
+
+bool HandleHeartbeatRequest(
+    int fd,
+    const common::NodeInfo& info,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    if (!req_body.empty()) {
+        std::fprintf(stderr, "HeartbeatRequest body must be empty\n");
+        return false;
+    }
+
+    std::printf("[%s] received HeartbeatRequest rid=%u\n",
+                info.node_id.c_str(), req.request_id);
+
+    bool ok = SendEmptyAck(fd, common::MsgType::HeartbeatReply, req.request_id);
+    if (ok) {
+        std::printf("[%s] sent HeartbeatReply rid=%u\n",
+                    info.node_id.c_str(), req.request_id);
+    }
+    return ok;
+}
+
+bool HandlePlacementPlan(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    std::vector<common::PlacementAssignment> assignments;
+    if (!common::DecodePlacementPlanBody(req_body, &assignments)) {
+        std::fprintf(stderr, "[%s] failed to decode PlacementPlan\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    for (const auto& a : assignments) {
+        if (a.local_gpu_id < 0 ||
+            a.local_gpu_id >= static_cast<std::int32_t>(info.gpus.size())) {
+            std::fprintf(stderr,
+                         "[%s] invalid local_gpu_id=%d for expert=%d\n",
+                         info.node_id.c_str(), a.local_gpu_id, a.expert_id);
+            return false;
+        }
+    }
+
+    std::printf("[%s] received PlacementPlan rid=%u assignments=%zu\n",
+                info.node_id.c_str(), req.request_id, assignments.size());
+
+    state->expert_table.clear();
+    for (const auto& a : assignments) {
+        ExpertResidency r;
+        r.expert_id = a.expert_id;
+        r.local_gpu_id = a.local_gpu_id;
+        r.ready = false;
+        state->expert_table[a.expert_id] = r;
+    }
+
+    PrintExpertTable(info, *state);
+
+    bool ok = SendEmptyAck(fd, common::MsgType::PlacementAck, req.request_id);
+    if (ok) {
+        std::printf("[%s] sent PlacementAck rid=%u\n",
+                    info.node_id.c_str(), req.request_id);
+    }
+    return ok;
+}
+
+bool HandleLoadWeightsBegin(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    common::LoadWeightsBeginMsg msg;
+    if (!common::DecodeLoadWeightsBeginBody(req_body, &msg)) {
+        std::fprintf(stderr, "[%s] failed to decode LoadWeightsBegin\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    auto it = state->expert_table.find(msg.expert_id);
+    if (it == state->expert_table.end()) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsBegin for unknown expert=%d\n",
+                     info.node_id.c_str(), msg.expert_id);
+        return false;
+    }
+
+    if (it->second.local_gpu_id != msg.local_gpu_id) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsBegin gpu mismatch for expert=%d: "
+                     "got local_gpu_id=%d expected=%d\n",
+                     info.node_id.c_str(),
+                     msg.expert_id,
+                     msg.local_gpu_id,
+                     it->second.local_gpu_id);
+        return false;
+    }
+
+    std::printf("[%s] received LoadWeightsBegin rid=%u "
+                "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu\n",
+                info.node_id.c_str(),
+                req.request_id,
+                msg.expert_id,
+                msg.local_gpu_id,
+                TensorKindName(msg.tensor_kind),
+                static_cast<unsigned long long>(msg.total_bytes));
+
+    bool ok = SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
+    if (ok) {
+        std::printf("[%s] sent LoadWeightsAck rid=%u\n",
+                    info.node_id.c_str(), req.request_id);
+    }
+    return ok;
+}
+
+bool DispatchRequest(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    auto msg_type = static_cast<common::MsgType>(req.msg_type);
+
+    switch (msg_type) {
+        case common::MsgType::InventoryRequest:
+            return HandleInventoryRequest(fd, info, state, req, req_body);
+        case common::MsgType::HeartbeatRequest:
+            return HandleHeartbeatRequest(fd, info, req, req_body);
+        case common::MsgType::PlacementPlan:
+            return HandlePlacementPlan(fd, info, state, req, req_body);
+        case common::MsgType::LoadWeightsBegin:
+            return HandleLoadWeightsBegin(fd, info, state, req, req_body);
+        default:
+            std::fprintf(stderr, "[%s] unsupported msg_type: %u\n",
+                         info.node_id.c_str(), req.msg_type);
+            return false;
+    }
+}
+
+bool HandleOneRequest(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state) {
     std::uint8_t hdr_buf[16];
     if (!common::RecvAll(fd, hdr_buf, sizeof(hdr_buf))) {
         return false;
@@ -127,62 +363,15 @@ bool HandleOneRequest(int fd, const common::NodeInfo& info) {
         }
     }
 
-    auto msg_type = static_cast<common::MsgType>(req.msg_type);
-
-    if (msg_type == common::MsgType::InventoryRequest) {
-        if (!req_body.empty()) {
-            std::fprintf(stderr, "InventoryRequest body must be empty\n");
-            return false;
-        }
-
-        std::printf("received InventoryRequest rid=%u\n", req.request_id);
-
-        std::string body = common::EncodeInventoryReplyBody(info);
-
-        common::MsgHeader resp{};
-        resp.magic = common::kMagic;
-        resp.version = common::kVersion;
-        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InventoryReply);
-        resp.request_id = req.request_id;
-        resp.body_len = static_cast<std::uint32_t>(body.size());
-
-        bool ok = common::SendMessage(fd, resp, body);
-        if (ok) {
-            std::printf("sent InventoryReply rid=%u body_len=%u\n",
-                        resp.request_id, resp.body_len);
-        }
-        return ok;
-    }
-
-    if (msg_type == common::MsgType::HeartbeatRequest) {
-        if (!req_body.empty()) {
-            std::fprintf(stderr, "HeartbeatRequest body must be empty\n");
-            return false;
-        }
-
-        std::printf("received HeartbeatRequest rid=%u\n", req.request_id);
-
-        common::MsgHeader resp{};
-        resp.magic = common::kMagic;
-        resp.version = common::kVersion;
-        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::HeartbeatReply);
-        resp.request_id = req.request_id;
-        resp.body_len = 0;
-
-        bool ok = common::SendMessage(fd, resp, std::string());
-        if (ok) {
-            std::printf("sent HeartbeatReply rid=%u\n", resp.request_id);
-        }
-        return ok;
-    }
-
-    std::fprintf(stderr, "unsupported msg_type: %u\n", req.msg_type);
-    return false;
+    return DispatchRequest(fd, info, state, req, req_body);
 }
 
-bool HandleClientLoop(int fd, const common::NodeInfo& info) {
+bool HandleClientLoop(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state) {
     while (true) {
-        if (!HandleOneRequest(fd, info)) {
+        if (!HandleOneRequest(fd, info, state)) {
             return false;
         }
     }
@@ -203,13 +392,17 @@ int main(int argc, char** argv) {
 
     common::NodeInfo info = BuildRealInventory(control_port, worker_port_base);
 
+    ControlState state;
+    state.node_status = common::NodeStatus::Registered;
+
     int listen_fd = ListenTcp(control_port);
     if (listen_fd < 0) {
         std::fprintf(stderr, "failed to listen on port %d\n", control_port);
         return 1;
     }
 
-    std::printf("control stub listening on port %d\n", control_port);
+    std::printf("[%s] control stub listening on port %d\n",
+                info.node_id.c_str(), control_port);
 
     while (true) {
         int fd = ::accept(listen_fd, nullptr, nullptr);
@@ -217,10 +410,11 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        std::printf("client connected\n");
-        bool ok = HandleClientLoop(fd, info);
+        std::printf("[%s] client connected\n", info.node_id.c_str());
+        bool ok = HandleClientLoop(fd, info, &state);
         if (!ok) {
-            std::printf("client disconnected or handler failed\n");
+            std::printf("[%s] client disconnected or handler failed\n",
+                        info.node_id.c_str());
         }
         ::close(fd);
     }
