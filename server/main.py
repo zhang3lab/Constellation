@@ -1,19 +1,23 @@
-import sys
-
 from server.config import load_nodes_config
 from server.coordinator import Coordinator
 
 
 def main():
-    config_path = "server/nodes.json"
-    if len(sys.argv) >= 2:
-        config_path = sys.argv[1]
-
-    nodes = load_nodes_config(config_path)
+    nodes = load_nodes_config("server/nodes.json")
 
     coord = Coordinator(nodes)
     coord.discover_nodes()
     coord.print_summary()
+
+    num_experts = 8
+    expert_mem_bytes = 2 * 1024**3  # 2 GiB
+
+    coord.build_placement(
+        num_experts=num_experts,
+        expert_mem_bytes=expert_mem_bytes,
+        memory_utilization=0.9,
+    )
+    coord.print_placement()
 
 
 if __name__ == "__main__":
