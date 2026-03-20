@@ -43,6 +43,17 @@ bool ReadU64(const std::string& buf, std::size_t* offset, std::uint64_t* out) {
     return true;
 }
 
+bool ReadTensorKind(const std::string& buf, std::size_t* offset, TensorKind* out) {
+    std::int32_t raw = -1;
+    if (!ReadI32(buf, offset, &raw)) return false;
+    if (raw < static_cast<std::int32_t>(TensorKind::WUp) ||
+        raw > static_cast<std::int32_t>(TensorKind::WDown)) {
+        return false;
+    }
+    *out = static_cast<TensorKind>(raw);
+    return true;
+}
+
 }  // namespace
 
 std::string EncodeLoadWeightsBeginBody(const LoadWeightsBeginMsg& msg) {
