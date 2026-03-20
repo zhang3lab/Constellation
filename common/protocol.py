@@ -350,5 +350,3 @@ def decode_load_weights_end(body: bytes):
         "local_gpu_id": local_gpu_id,
         "tensor_kind": tensor_kind,
     }
-
-

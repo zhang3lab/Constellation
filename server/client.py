@@ -7,6 +7,8 @@ from common.protocol import (
     MsgType,
     HEADER_SIZE,
     encode_load_weights_begin,
+    encode_load_weights_chunk,
+    encode_load_weights_end,
     encode_placement_plan,
     decode_inventory_reply,
     pack_header,
