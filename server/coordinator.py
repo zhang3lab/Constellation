@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
 from server.client import NodeClient
-from server.placement import build_first_fit_placement
+from server.placement import build_balanced_placement
 
 
 class Coordinator:
@@ -91,7 +91,7 @@ class Coordinator:
         expert_mem_bytes: int,
         memory_utilization: float = 0.9,
     ) -> None:
-        self.placements = build_first_fit_placement(
+        self.placements = build_balanced_placement(
             gpu_inventory=self.gpu_inventory,
             num_experts=num_experts,
             expert_mem_bytes=expert_mem_bytes,
