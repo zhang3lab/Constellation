@@ -23,10 +23,17 @@
 
 namespace {
 
+struct HostTensor {
+    common::TensorKind tensor_kind = common::TensorKind::WUp;
+    std::string bytes;
+    std::uint64_t total_bytes = 0;
+};
+
 struct ExpertResidency {
     int expert_id = -1;
     int local_gpu_id = -1;
     bool ready = false;
+    std::unordered_map<int, HostTensor> host_tensors;
 };
 
 struct ActiveLoad {
@@ -426,6 +433,45 @@ bool HandleLoadWeightsChunk(
     return ok;
 }
 
+void PrintExpertTensorSummary(
+    const common::NodeInfo& info,
+    const ControlState& state) {
+    std::vector<int> expert_ids;
+    expert_ids.reserve(state.expert_table.size());
+
+    for (const auto& kv : state.expert_table) {
+        expert_ids.push_back(kv.first);
+    }
+    std::sort(expert_ids.begin(), expert_ids.end());
+
+    std::printf("[%s] host tensor summary\n", info.node_id.c_str());
+
+    for (int expert_id : expert_ids) {
+        const auto& r = state.expert_table.at(expert_id);
+        std::printf("[%s]   expert=%d gpu=%d ready=%d tensors=%zu\n",
+                    info.node_id.c_str(),
+                    r.expert_id,
+                    r.local_gpu_id,
+                    static_cast<int>(r.ready),
+                    r.host_tensors.size());
+
+        std::vector<int> tensor_keys;
+        tensor_keys.reserve(r.host_tensors.size());
+        for (const auto& kv : r.host_tensors) {
+            tensor_keys.push_back(kv.first);
+        }
+        std::sort(tensor_keys.begin(), tensor_keys.end());
+
+        for (int tensor_key : tensor_keys) {
+            const auto& ht = r.host_tensors.at(tensor_key);
+            std::printf("[%s]     tensor_kind=%s bytes=%llu\n",
+                        info.node_id.c_str(),
+                        TensorKindName(ht.tensor_kind),
+                        static_cast<unsigned long long>(ht.total_bytes));
+        }
+    }
+}
+
 bool HandleLoadWeightsEnd(
     int fd,
     const common::NodeInfo& info,
@@ -499,6 +545,14 @@ bool HandleLoadWeightsEnd(
         return false;
     }
 
+    int tensor_key = static_cast<int>(msg.tensor_kind);
+
+    HostTensor ht;
+    ht.tensor_kind = msg.tensor_kind;
+    ht.total_bytes = state->active_load.total_bytes;
+    ht.bytes = std::move(state->active_load.buffer);
+
+    it->second.host_tensors[tensor_key] = std::move(ht);
     it->second.ready = true;
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
@@ -511,6 +565,8 @@ bool HandleLoadWeightsEnd(
                 TensorKindName(msg.tensor_kind),
                 static_cast<unsigned long long>(state->active_load.total_bytes),
                 state->active_load.buffer.size());
+
+    PrintExpertTensorSummary(info, *state);
 
     state->active_load = ActiveLoad{};
 
