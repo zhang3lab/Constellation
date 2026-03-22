@@ -242,16 +242,6 @@ bool HasCompleteExpertTriplet(const ExpertResidency& r) {
            r.device_tensors.count(down) > 0;
 }
 
-bool HasCompleteDeviceTriplet(const ExpertResidency& r) {
-    const int up = static_cast<int>(common::TensorKind::WUp);
-    const int gate = static_cast<int>(common::TensorKind::WGate);
-    const int down = static_cast<int>(common::TensorKind::WDown);
-
-    return r.device_tensors.count(up) > 0 &&
-           r.device_tensors.count(gate) > 0 &&
-           r.device_tensors.count(down) > 0;
-}
-
 void FreeDevicePackedMatrixOwner(expert_node::DevicePackedMatrixOwner* m) {
     if (m == nullptr) return;
     if (m->weights != nullptr) {

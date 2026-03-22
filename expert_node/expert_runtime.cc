@@ -18,13 +18,6 @@ const LoadedExpert* ExpertRuntime::find_loaded_expert(int expert_id) const {
     return &it->second;
 }
 
-const DeviceExpertWeights* ExpertRuntime::find_device_weights(int expert_id) const {
-    auto it = loaded_experts_.find(expert_id);
-    if (it == loaded_experts_.end()) return nullptr;
-    if (!it->second.ready) return nullptr;
-    return &it->second.weights;
-}
-
 bool ExpertRuntime::is_expert_ready(int expert_id) const {
     auto it = loaded_experts_.find(expert_id);
     return it != loaded_experts_.end() && it->second.ready;
@@ -57,15 +50,15 @@ bool ExpertRuntime::execute_expert_stub_with_activation(
                 activation_ptr,
                 static_cast<unsigned long long>(activation_bytes));
 
-    std::printf("[runtime]   up=%p (%llu bytes)\n",
-                expert->weights.w_up_ptr,
-                static_cast<unsigned long long>(expert->weights.w_up_bytes));
-    std::printf("[runtime]   gate=%p (%llu bytes)\n",
-                expert->weights.w_gate_ptr,
-                static_cast<unsigned long long>(expert->weights.w_gate_bytes));
-    std::printf("[runtime]   down=%p (%llu bytes)\n",
-                expert->weights.w_down_ptr,
-                static_cast<unsigned long long>(expert->weights.w_down_bytes));
+    std::printf("[runtime]   up_w=%p up_s=%p\n",
+                expert->mlp.w_up.weights,
+                expert->mlp.w_up.scales);
+    std::printf("[runtime]   gate_w=%p gate_s=%p\n",
+                expert->mlp.w_gate.weights,
+                expert->mlp.w_gate.scales);
+    std::printf("[runtime]   down_w=%p down_s=%p\n",
+                expert->mlp.w_down.weights,
+                expert->mlp.w_down.scales);
 
     return true;
 }
@@ -85,7 +78,7 @@ void ExpertRuntime::debug_print() const {
     std::printf("[runtime] loaded experts = %zu\n", loaded_experts_.size());
     for (int expert_id : ids) {
         const auto& e = loaded_experts_.at(expert_id);
-	std::printf("[runtime]   expert=%d gpu=%d ready=%d up_w=%p gate_w=%p down_w=%p\n",
+        std::printf("[runtime]   expert=%d gpu=%d ready=%d up_w=%p gate_w=%p down_w=%p\n",
                     e.expert_id,
                     e.local_gpu_id,
                     static_cast<int>(e.ready),
