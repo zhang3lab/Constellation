@@ -9,6 +9,7 @@
     "chunk_size": 1048576
   },
   "test_load": {
+    "layer_id": 3,
     "expert_id": 0,
     "tensor_kind": "w_up"
   }

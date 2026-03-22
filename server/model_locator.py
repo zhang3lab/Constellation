@@ -3,20 +3,18 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 
-def deepseek_tensor_name(expert_id: int, tensor_kind: str) -> str:
-    # DeepSeek Expert: w1=up, w2=down, w3=gate
-    kind_to_weight = {
-        "w_up": "w1",
-        "w_down": "w2",
-        "w_gate": "w3",
+def deepseek_tensor_name(layer_id: int, expert_id: int, tensor_kind: str) -> str:
+    kind_to_proj = {
+        "w_up": "up_proj",
+        "w_gate": "gate_proj",
+        "w_down": "down_proj",
     }
     try:
-        weight_name = kind_to_weight[tensor_kind]
+        proj_name = kind_to_proj[tensor_kind]
     except KeyError as exc:
         raise ValueError(f"unsupported tensor_kind: {tensor_kind}") from exc
 
-    # Common Hugging Face naming for DeepSeek-style MoE experts.
-    return f"model.layers.0.mlp.experts.{expert_id}.{weight_name}.weight"
+    return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{proj_name}.weight"
 
 
 def load_safetensors_index(model_root: str) -> Dict[str, str]:
@@ -32,10 +30,15 @@ def load_safetensors_index(model_root: str) -> Dict[str, str]:
 
 def resolve_deepseek_tensor_file(
     model_root: str,
+    layer_id: int,
     expert_id: int,
     tensor_kind: str,
 ) -> Tuple[str, str]:
-    tensor_name = deepseek_tensor_name(expert_id, tensor_kind)
+    tensor_name = deepseek_tensor_name(
+        layer_id=layer_id,
+        expert_id=expert_id,
+        tensor_kind=tensor_kind,
+    )
     weight_map = load_safetensors_index(model_root)
 
     shard_relpath = weight_map.get(tensor_name)

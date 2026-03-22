@@ -19,11 +19,12 @@ def main():
 
     coord.send_placement_plan()
 
-    model = cfg["model"]
     test_load = cfg["test_load"]
+    model = cfg["model"]
 
     tensor_name, shard_path = resolve_deepseek_tensor_file(
         model_root=model["root"],
+        layer_id=int(test_load["layer_id"]),
         expert_id=int(test_load["expert_id"]),
         tensor_kind=str(test_load["tensor_kind"]),
     )

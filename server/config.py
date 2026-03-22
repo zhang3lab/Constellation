@@ -42,6 +42,8 @@ def load_config(path: str) -> Dict[str, Any]:
     if not isinstance(test_load, dict):
         raise ValueError("config must contain an object field 'test_load'")
 
+    if not isinstance(test_load.get("layer_id"), int):
+        raise ValueError("test_load.layer_id must be an integer")
     if not isinstance(test_load.get("expert_id"), int):
         raise ValueError("test_load.expert_id must be an integer")
     if not isinstance(test_load.get("tensor_kind"), str) or not test_load["tensor_kind"]:
