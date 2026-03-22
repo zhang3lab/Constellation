@@ -204,6 +204,31 @@ bool pack_row_major_fp8_from_half(
     return pack_impl_from_float(tmp.data(), rows, cols, k_chunk, fp8_format, out);
 }
 
+bool pack_row_major_fp8_from_fp8_bytes(
+    const uint8_t* src,
+    int rows,
+    int cols,
+    int k_chunk,
+    Fp8Format src_format,
+    Fp8Format packed_format,
+    PackedRowMajorMatrixHost* out) {
+    if (!src || !out) return false;
+    if (rows <= 0 || cols <= 0 || k_chunk <= 0) return false;
+
+    std::vector<float> tmp((size_t)rows * cols);
+    for (size_t i = 0; i < tmp.size(); ++i) {
+        tmp[i] = decode_fp8_host(src[i], src_format);
+    }
+
+    return pack_impl_from_float(
+        tmp.data(),
+        rows,
+        cols,
+        k_chunk,
+        packed_format,
+        out);
+}
+
 void free_packed_row_major_matrix_host(PackedRowMajorMatrixHost* p) {
     if (!p) return;
 

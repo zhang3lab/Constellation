@@ -133,6 +133,15 @@ bool pack_row_major_fp8_from_float(
     Fp8Format fp8_format,
     PackedRowMajorMatrixHost* out);
 
+bool pack_row_major_fp8_from_fp8_bytes(
+    const uint8_t* src,
+    int rows,
+    int cols,
+    int k_chunk,
+    Fp8Format src_format,
+    Fp8Format packed_format,
+    PackedRowMajorMatrixHost* out);
+
 void free_packed_row_major_matrix_host(PackedRowMajorMatrixHost* p);
 
 // -----------------------------------------------------------------------------

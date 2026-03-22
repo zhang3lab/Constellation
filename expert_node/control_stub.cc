@@ -22,8 +22,27 @@
 #include "common/types.h"
 #include "common/weight_codec.h"
 #include "expert_node/expert_runtime.h"
+#include "expert_node/kernel/expert.h"
 
 namespace {
+
+__global__ void cast_half_to_float_kernel_local(const __half* in, float* out, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) out[idx] = __half2float(in[idx]);
+}
+
+bool launch_cast_half_to_float_local(
+    const __half* d_in,
+    float* d_out,
+    int n,
+    cudaStream_t stream) {
+    if (!d_in || !d_out || n < 0) return false;
+    if (n == 0) return true;
+    const int threads = 256;
+    const int blocks = ceil_div_int(n, threads);
+    cast_half_to_float_kernel_local<<<blocks, threads, 0, stream>>>(d_in, d_out, n);
+    return cudaGetLastError() == cudaSuccess;
+}
 
 struct DeviceTensor {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
@@ -292,6 +311,134 @@ bool UploadTensorToDevice(
     return true;
 }
 
+bool UploadPackedRowMajorMatrixHostToDevice(
+    const PackedRowMajorMatrixHost& src,
+    expert_node::DevicePackedMatrixOwner* out) {
+    if (out == nullptr) return false;
+    if (!src.weights || !src.scales) return false;
+
+    const size_t w_bytes = packed_weights_bytes(src.rows, src.cols);
+    const size_t s_bytes = packed_scales_bytes(src.rows, src.cols, src.k_chunk);
+
+    uint8_t* d_weights = nullptr;
+    float* d_scales = nullptr;
+
+    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&d_weights), w_bytes);
+    if (err != cudaSuccess) return false;
+
+    err = cudaMalloc(reinterpret_cast<void**>(&d_scales), s_bytes);
+    if (err != cudaSuccess) {
+        cudaFree(d_weights);
+        return false;
+    }
+
+    err = cudaMemcpy(d_weights, src.weights, w_bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        cudaFree(d_weights);
+        cudaFree(d_scales);
+        return false;
+    }
+
+    err = cudaMemcpy(d_scales, src.scales, s_bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        cudaFree(d_weights);
+        cudaFree(d_scales);
+        return false;
+    }
+
+    out->weights = d_weights;
+    out->scales = d_scales;
+    out->view.rows = src.rows;
+    out->view.cols = src.cols;
+    out->view.k_chunk = src.k_chunk;
+    out->view.num_k_chunks = src.num_k_chunks;
+    out->view.fp8_format = src.fp8_format;
+    out->view.weights = d_weights;
+    out->view.scales = d_scales;
+    return true;
+}
+
+bool BuildPackedHostMatrixFromHostTensor(
+    const HostTensor& ht,
+    int rows,
+    int cols,
+    PackedRowMajorMatrixHost* out) {
+    if (out == nullptr) return false;
+    if (ht.bytes.size() != static_cast<size_t>(rows) * cols) return false;
+
+    return pack_row_major_fp8_from_fp8_bytes(
+        reinterpret_cast<const uint8_t*>(ht.bytes.data()),
+        rows,
+        cols,
+        DefaultConfig::k_chunk,
+        Fp8Format::E4M3,
+        DefaultConfig::fp8_format,
+        out);
+}
+
+bool BuildLoadedExpertFromResidency(
+    const ExpertResidency& r,
+    expert_node::LoadedExpert* out) {
+    if (out == nullptr) return false;
+    if (!r.ready) return false;
+
+    const auto& up_ht =
+        r.host_tensors.at(static_cast<int>(common::TensorKind::WUp));
+    const auto& gate_ht =
+        r.host_tensors.at(static_cast<int>(common::TensorKind::WGate));
+    const auto& down_ht =
+        r.host_tensors.at(static_cast<int>(common::TensorKind::WDown));
+
+    PackedRowMajorMatrixHost up_host{};
+    PackedRowMajorMatrixHost gate_host{};
+    PackedRowMajorMatrixHost down_host{};
+
+    if (!BuildPackedHostMatrixFromHostTensor(up_ht, 2048, 7168, &up_host)) return false;
+    if (!BuildPackedHostMatrixFromHostTensor(gate_ht, 2048, 7168, &gate_host)) {
+        free_packed_row_major_matrix_host(&up_host);
+        return false;
+    }
+    if (!BuildPackedHostMatrixFromHostTensor(down_ht, 7168, 2048, &down_host)) {
+        free_packed_row_major_matrix_host(&up_host);
+        free_packed_row_major_matrix_host(&gate_host);
+        return false;
+    }
+
+    expert_node::LoadedExpert tmp;
+    tmp.expert_id = r.expert_id;
+    tmp.local_gpu_id = r.local_gpu_id;
+
+    cudaError_t err = cudaSetDevice(r.local_gpu_id);
+    if (err != cudaSuccess) {
+        free_packed_row_major_matrix_host(&up_host);
+        free_packed_row_major_matrix_host(&gate_host);
+        free_packed_row_major_matrix_host(&down_host);
+        return false;
+    }
+
+    bool ok =
+        UploadPackedRowMajorMatrixHostToDevice(up_host, &tmp.packed.w_up) &&
+        UploadPackedRowMajorMatrixHostToDevice(gate_host, &tmp.packed.w_gate) &&
+        UploadPackedRowMajorMatrixHostToDevice(down_host, &tmp.packed.w_down);
+
+    free_packed_row_major_matrix_host(&up_host);
+    free_packed_row_major_matrix_host(&gate_host);
+    free_packed_row_major_matrix_host(&down_host);
+
+    if (!ok) {
+        FreeDevicePackedMlpOwner(&tmp.packed);
+        return false;
+    }
+
+    tmp.mlp.w_up = tmp.packed.w_up.view;
+    tmp.mlp.w_gate = tmp.packed.w_gate.view;
+    tmp.mlp.w_down = tmp.packed.w_down.view;
+    tmp.ready = true;
+
+    *out = tmp;
+    return true;
+}
+
 void FreeDeviceTensor(DeviceTensor* t) {
     if (t == nullptr) return;
     if (t->device_ptr != nullptr) {
@@ -299,6 +446,26 @@ void FreeDeviceTensor(DeviceTensor* t) {
         t->device_ptr = nullptr;
     }
     t->total_bytes = 0;
+}
+
+void FreeDevicePackedMatrixOwner(expert_node::DevicePackedMatrixOwner* m) {
+    if (m == nullptr) return;
+    if (m->weights != nullptr) {
+        cudaFree(m->weights);
+        m->weights = nullptr;
+    }
+    if (m->scales != nullptr) {
+        cudaFree(m->scales);
+        m->scales = nullptr;
+    }
+    m->view = PackedRowMajorMatrix{};
+}
+
+void FreeDevicePackedMlpOwner(expert_node::DevicePackedMlpOwner* mlp) {
+    if (mlp == nullptr) return;
+    FreeDevicePackedMatrixOwner(&mlp->w_up);
+    FreeDevicePackedMatrixOwner(&mlp->w_gate);
+    FreeDevicePackedMatrixOwner(&mlp->w_down);
 }
 
 bool HandleInventoryRequest(
@@ -752,16 +919,20 @@ bool HandleLoadWeightsEnd(
 
     if (it->second.ready) {
         expert_node::LoadedExpert le;
-        le.expert_id = it->second.expert_id;
-        le.local_gpu_id = it->second.local_gpu_id;
-        le.ready = true;
-        le.weights = it->second.device_weights;
-
+        if (!BuildLoadedExpertFromResidency(it->second, &le)) {
+            std::fprintf(stderr,
+                         "[%s] BuildLoadedExpertFromResidency failed for expert=%d\n",
+                         info.node_id.c_str(),
+                         it->second.expert_id);
+            return false;
+        }
+     
         if (!state->runtime.register_loaded_expert(le)) {
             std::fprintf(stderr,
                          "[%s] runtime.register_loaded_expert failed for expert=%d\n",
                          info.node_id.c_str(),
                          le.expert_id);
+            FreeDevicePackedMlpOwner(&le.packed);
             return false;
         }
     }
@@ -803,13 +974,16 @@ bool HandleInferRequest(
         return false;
     }
 
-    const expert_node::LoadedExpert* expert =
-        state->runtime.find_loaded_expert(msg.expert_id);
-    if (expert == nullptr) {
+    auto send_infer_response = [&](int status_code,
+                                   int batch_size,
+                                   int hidden_dim,
+                                   const std::string& output) -> bool {
         common::InferResponseMsg resp_msg;
-        resp_msg.status_code = 1;
-        resp_msg.batch_size = msg.batch_size;
-        resp_msg.hidden_dim = msg.hidden_dim;
+        resp_msg.status_code = status_code;
+        resp_msg.batch_size = batch_size;
+        resp_msg.hidden_dim = hidden_dim;
+        resp_msg.output = output;
+
         std::string resp_body = common::EncodeInferResponseBody(resp_msg);
 
         common::MsgHeader resp{};
@@ -818,109 +992,17 @@ bool HandleInferRequest(
         resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
         resp.request_id = req.request_id;
         resp.body_len = static_cast<std::uint32_t>(resp_body.size());
-        return common::SendMessage(fd, resp, resp_body);
-    }
 
-    std::uint64_t expected_nbytes =
-        static_cast<std::uint64_t>(msg.batch_size) *
-        static_cast<std::uint64_t>(msg.hidden_dim) *
-        sizeof(float);
-
-    if (msg.activation.size() != expected_nbytes) {
-        common::InferResponseMsg resp_msg;
-        resp_msg.status_code = 3;
-        resp_msg.batch_size = msg.batch_size;
-        resp_msg.hidden_dim = msg.hidden_dim;
-        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
-
-        common::MsgHeader resp{};
-        resp.magic = common::kMagic;
-        resp.version = common::kVersion;
-        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
-        resp.request_id = req.request_id;
-        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
-        return common::SendMessage(fd, resp, resp_body);
-    }
-
-    cudaError_t err = cudaSetDevice(expert->local_gpu_id);
-    if (err != cudaSuccess) {
-        common::InferResponseMsg resp_msg;
-        resp_msg.status_code = 4;
-        resp_msg.batch_size = msg.batch_size;
-        resp_msg.hidden_dim = msg.hidden_dim;
-        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
-
-        common::MsgHeader resp{};
-        resp.magic = common::kMagic;
-        resp.version = common::kVersion;
-        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
-        resp.request_id = req.request_id;
-        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
-        return common::SendMessage(fd, resp, resp_body);
-    }
-
-    void* activation_ptr = nullptr;
-    err = cudaMalloc(&activation_ptr, static_cast<std::size_t>(expected_nbytes));
-    if (err != cudaSuccess) {
-        common::InferResponseMsg resp_msg;
-        resp_msg.status_code = 4;
-        resp_msg.batch_size = msg.batch_size;
-        resp_msg.hidden_dim = msg.hidden_dim;
-        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
-
-        common::MsgHeader resp{};
-        resp.magic = common::kMagic;
-        resp.version = common::kVersion;
-        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
-        resp.request_id = req.request_id;
-        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
-        return common::SendMessage(fd, resp, resp_body);
-    }
-
-    err = cudaMemcpy(
-        activation_ptr,
-        msg.activation.data(),
-        static_cast<std::size_t>(expected_nbytes),
-        cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        cudaFree(activation_ptr);
-
-        common::InferResponseMsg resp_msg;
-        resp_msg.status_code = 4;
-        resp_msg.batch_size = msg.batch_size;
-        resp_msg.hidden_dim = msg.hidden_dim;
-        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
-
-        common::MsgHeader resp{};
-        resp.magic = common::kMagic;
-        resp.version = common::kVersion;
-        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
-        resp.request_id = req.request_id;
-        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
-        return common::SendMessage(fd, resp, resp_body);
-    }
-
-    bool ok = state->runtime.execute_expert_stub_with_activation(
-        msg.expert_id,
-        activation_ptr,
-        expected_nbytes);
-
-    cudaFree(activation_ptr);
-
-    common::InferResponseMsg resp_msg;
-    resp_msg.status_code = ok ? 0 : 4;
-    resp_msg.batch_size = msg.batch_size;
-    resp_msg.hidden_dim = msg.hidden_dim;
-    resp_msg.output.assign(static_cast<std::size_t>(expected_nbytes), '\0');
-
-    std::string resp_body = common::EncodeInferResponseBody(resp_msg);
-
-    common::MsgHeader resp{};
-    resp.magic = common::kMagic;
-    resp.version = common::kVersion;
-    resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
-    resp.request_id = req.request_id;
-    resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+        bool ok = common::SendMessage(fd, resp, resp_body);
+        if (ok) {
+            std::printf("[%s] sent InferResponse rid=%u status=%d output_bytes=%zu\n",
+                        info.node_id.c_str(),
+                        req.request_id,
+                        status_code,
+                        output.size());
+        }
+        return ok;
+    };
 
     std::printf("[%s] received InferRequest rid=%u expert=%d batch=%d hidden=%d activation_bytes=%zu\n",
                 info.node_id.c_str(),
@@ -930,15 +1012,193 @@ bool HandleInferRequest(
                 msg.hidden_dim,
                 msg.activation.size());
 
-    bool send_ok = common::SendMessage(fd, resp, resp_body);
-    if (send_ok) {
-        std::printf("[%s] sent InferResponse rid=%u status=%d output_bytes=%zu\n",
-                    info.node_id.c_str(),
-                    req.request_id,
-                    resp_msg.status_code,
-                    resp_msg.output.size());
+    const expert_node::LoadedExpert* expert =
+        state->runtime.find_loaded_expert(msg.expert_id);
+    if (expert == nullptr) {
+        return send_infer_response(1, msg.batch_size, msg.hidden_dim, std::string());
     }
-    return send_ok;
+    if (!expert->ready) {
+        return send_infer_response(2, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    if (msg.batch_size <= 0 || msg.hidden_dim <= 0) {
+        return send_infer_response(3, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    const std::uint64_t expected_nbytes =
+        static_cast<std::uint64_t>(msg.batch_size) *
+        static_cast<std::uint64_t>(msg.hidden_dim) *
+        sizeof(float);
+
+    if (msg.activation.size() != expected_nbytes) {
+        std::fprintf(stderr,
+                     "[%s] InferRequest activation size mismatch: got=%zu expected=%llu\n",
+                     info.node_id.c_str(),
+                     msg.activation.size(),
+                     static_cast<unsigned long long>(expected_nbytes));
+        return send_infer_response(3, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    cudaError_t err = cudaSetDevice(expert->local_gpu_id);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaSetDevice(%d) failed: %s\n",
+                     info.node_id.c_str(),
+                     expert->local_gpu_id,
+                     cudaGetErrorString(err));
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    const size_t act_elems =
+        static_cast<size_t>(msg.batch_size) * static_cast<size_t>(msg.hidden_dim);
+    const size_t act_f_bytes = act_elems * sizeof(float);
+    const size_t act_h_bytes = act_elems * sizeof(__half);
+
+    MlpShape shape;
+    shape.num_tokens = msg.batch_size;
+    shape.hidden_dim = DefaultConfig::hidden_dim;
+    shape.inter_dim = DefaultConfig::inter_dim;
+    shape.k_chunk = DefaultConfig::k_chunk;
+    shape.rows_per_cta = DefaultConfig::rows_per_cta;
+    shape.fp8_format = DefaultConfig::fp8_format;
+
+    if (msg.hidden_dim != shape.hidden_dim) {
+        std::fprintf(stderr,
+                     "[%s] InferRequest hidden_dim mismatch: got=%d expected=%d\n",
+                     info.node_id.c_str(),
+                     msg.hidden_dim,
+                     shape.hidden_dim);
+        return send_infer_response(3, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    const size_t workspace_bytes = workspace_num_bytes(shape);
+
+    float* d_input_f = nullptr;
+    __half* d_input_h = nullptr;
+    __half* d_output_h = nullptr;
+    float* d_output_f = nullptr;
+    float* d_workspace = nullptr;
+
+    auto cleanup = [&]() {
+        if (d_input_f) cudaFree(d_input_f);
+        if (d_input_h) cudaFree(d_input_h);
+        if (d_output_h) cudaFree(d_output_h);
+        if (d_output_f) cudaFree(d_output_f);
+        if (d_workspace) cudaFree(d_workspace);
+        d_input_f = nullptr;
+        d_input_h = nullptr;
+        d_output_h = nullptr;
+        d_output_f = nullptr;
+        d_workspace = nullptr;
+    };
+
+    err = cudaMalloc(reinterpret_cast<void**>(&d_input_f), act_f_bytes);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMalloc d_input_f failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    err = cudaMalloc(reinterpret_cast<void**>(&d_input_h), act_h_bytes);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMalloc d_input_h failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    err = cudaMalloc(reinterpret_cast<void**>(&d_output_h), act_h_bytes);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMalloc d_output_h failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    err = cudaMalloc(reinterpret_cast<void**>(&d_output_f), act_f_bytes);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMalloc d_output_f failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    err = cudaMalloc(reinterpret_cast<void**>(&d_workspace), workspace_bytes);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMalloc d_workspace failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    err = cudaMemcpy(d_input_f,
+                     msg.activation.data(),
+                     act_f_bytes,
+                     cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMemcpy H2D input failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    if (!launch_cast_float_to_half(d_input_f, d_input_h, static_cast<int>(act_elems), 0)) {
+        std::fprintf(stderr, "[%s] launch_cast_float_to_half failed\n",
+                     info.node_id.c_str());
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    bool ok = launch_mlp(
+        expert->mlp,
+        d_input_h,
+        d_output_h,
+        d_workspace,
+        shape,
+        0);
+
+    if (!ok) {
+        std::fprintf(stderr, "[%s] launch_mlp failed for expert=%d\n",
+                     info.node_id.c_str(), msg.expert_id);
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    if (!launch_cast_half_to_float_local(
+            d_output_h,
+            d_output_f,
+            static_cast<int>(act_elems),
+            0)) {
+        std::fprintf(stderr, "[%s] launch_cast_half_to_float_local failed\n",
+                     info.node_id.c_str());
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaDeviceSynchronize failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    std::string output;
+    output.resize(act_f_bytes);
+
+    err = cudaMemcpy(output.data(),
+                     d_output_f,
+                     act_f_bytes,
+                     cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "[%s] cudaMemcpy D2H output failed: %s\n",
+                     info.node_id.c_str(), cudaGetErrorString(err));
+        cleanup();
+        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
+    }
+
+    cleanup();
+    return send_infer_response(0, msg.batch_size, msg.hidden_dim, output);
 }
 
 bool DispatchRequest(
