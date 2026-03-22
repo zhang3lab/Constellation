@@ -250,6 +250,8 @@ bool launch_mlp(const DeviceMlpView& mlp,
 // Vector ops
 // -----------------------------------------------------------------------------
 
+namespace expert {
+
 bool launch_silu_mul(const float* d_up,
                      const float* d_gate,
                      float* d_out,
@@ -262,3 +264,5 @@ bool launch_cast_float_to_half(const float* d_in,
                                int num_tokens,
                                int dim,
                                cudaStream_t stream);
+
+}; // namespace expert

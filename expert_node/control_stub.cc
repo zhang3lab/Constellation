@@ -1064,7 +1064,7 @@ bool HandleInferRequest(
         return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
     }
 
-    if (!launch_cast_float_to_half(
+    if (!expert::launch_cast_float_to_half(
             d_input_f,
             d_input_h,
             msg.batch_size,
