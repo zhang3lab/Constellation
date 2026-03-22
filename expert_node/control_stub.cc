@@ -20,6 +20,7 @@
 #include "common/socket_utils.h"
 #include "common/types.h"
 #include "common/weight_codec.h"
+#include "expert_node/expert_runtime.h"
 
 namespace {
 
@@ -27,16 +28,6 @@ struct DeviceTensor {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
     void* device_ptr = nullptr;
     std::uint64_t total_bytes = 0;
-};
-
-struct DeviceExpertWeights {
-    void* w_up_ptr = nullptr;
-    void* w_gate_ptr = nullptr;
-    void* w_down_ptr = nullptr;
-
-    std::uint64_t w_up_bytes = 0;
-    std::uint64_t w_gate_bytes = 0;
-    std::uint64_t w_down_bytes = 0;
 };
 
 struct HostTensor {
@@ -51,7 +42,7 @@ struct ExpertResidency {
     bool ready = false;
     std::unordered_map<int, HostTensor> host_tensors;
     std::unordered_map<int, DeviceTensor> device_tensors;
-    DeviceExpertWeights device_weights;
+    expert_node::DeviceExpertWeights device_weights;
 };
 
 struct ActiveLoad {
@@ -67,6 +58,7 @@ struct ControlState {
     common::NodeStatus node_status = common::NodeStatus::Booting;
     std::unordered_map<int, ExpertResidency> expert_table;
     ActiveLoad active_load;
+    expert_node::ExpertRuntime runtime;
 };
 
 int ListenTcp(int port) {
@@ -178,6 +170,29 @@ void PrintExpertTable(const common::NodeInfo& info, const ControlState& state) {
                     r.expert_id,
                     r.local_gpu_id,
                     static_cast<int>(r.ready));
+    }
+}
+
+void PrintRuntimeSummary(const common::NodeInfo& info, const ControlState& state) {
+    std::printf("[%s] runtime loaded experts = %zu\n",
+                info.node_id.c_str(),
+                state.runtime.size());
+
+    for (const auto& kv : state.expert_table) {
+        int expert_id = kv.first;
+        const auto* loaded = state.runtime.find_loaded_expert(expert_id);
+        if (loaded == nullptr) {
+            continue;
+        }
+
+        std::printf("[%s]   loaded expert=%d gpu=%d ready=%d up=%p gate=%p down=%p\n",
+                    info.node_id.c_str(),
+                    loaded->expert_id,
+                    loaded->local_gpu_id,
+                    static_cast<int>(loaded->ready),
+                    loaded->weights.w_up_ptr,
+                    loaded->weights.w_gate_ptr,
+                    loaded->weights.w_down_ptr);
     }
 }
 
@@ -734,6 +749,22 @@ bool HandleLoadWeightsEnd(
 
     it->second.ready = device_complete;
 
+    if (it->second.ready) {
+        expert_node::LoadedExpert le;
+        le.expert_id = it->second.expert_id;
+        le.local_gpu_id = it->second.local_gpu_id;
+        le.ready = true;
+        le.weights = it->second.device_weights;
+     
+        if (!state->runtime.register_loaded_expert(le)) {
+            std::fprintf(stderr,
+                         "[%s] runtime.register_loaded_expert failed for expert=%d\n",
+                         info.node_id.c_str(),
+                         le.expert_id);
+            return false;
+        }
+    }
+
     std::printf("[%s] received LoadWeightsEnd rid=%u "
                 "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu buffer_size=%zu -> ready=%d\n",
                 info.node_id.c_str(),
@@ -746,6 +777,7 @@ bool HandleLoadWeightsEnd(
                 static_cast<int>(it->second.ready));
 
     PrintExpertTensorSummary(info, *state);
+    PrintRuntimeSummary(info, *state);
 
     state->active_load = ActiveLoad{};
 
