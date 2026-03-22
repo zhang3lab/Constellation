@@ -208,7 +208,7 @@ inline uint8_t fp32_to_fp8(float x, float scale, Fp8Format fmt) {
 
     // Simple symmetric byte encoding around zero.
     // 0x80 corresponds roughly to zero after decode below.
-    int qi = static_cast<int>(printf(q));
+    int qi = static_cast<int>(lrintf(q));
     qi = qi + 128;
     if (qi < 0) qi = 0;
     if (qi > 255) qi = 255;
