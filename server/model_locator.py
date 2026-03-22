@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Dict, Tuple
 
+from safetensors import safe_open
+
 
 def deepseek_tensor_name(layer_id: int, expert_id: int, tensor_kind: str) -> str:
     kind_to_proj = {
@@ -47,3 +49,36 @@ def resolve_deepseek_tensor_file(
 
     shard_path = str(Path(model_root) / shard_relpath)
     return tensor_name, shard_path
+
+def load_tensor_bytes_from_safetensors(
+    shard_path: str,
+    tensor_name: str,
+) -> Tuple[bytes, Tuple[int, ...], str]:
+    with safe_open(shard_path, framework="np") as f:
+        arr = f.get_tensor(tensor_name)
+
+    tensor_bytes = arr.tobytes(order="C")
+    shape = tuple(int(x) for x in arr.shape)
+    dtype = str(arr.dtype)
+    return tensor_bytes, shape, dtype
+
+
+def resolve_and_load_deepseek_tensor(
+    model_root: str,
+    layer_id: int,
+    expert_id: int,
+    tensor_kind: str,
+) -> Tuple[str, str, bytes, Tuple[int, ...], str]:
+    tensor_name, shard_path = resolve_deepseek_tensor_file(
+        model_root=model_root,
+        layer_id=layer_id,
+        expert_id=expert_id,
+        tensor_kind=tensor_kind,
+    )
+
+    tensor_bytes, shape, dtype = load_tensor_bytes_from_safetensors(
+        shard_path=shard_path,
+        tensor_name=tensor_name,
+    )
+
+    return tensor_name, shard_path, tensor_bytes, shape, dtype

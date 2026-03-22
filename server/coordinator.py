@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, List
 
 from common.protocol import TensorKind
@@ -215,4 +216,60 @@ class Coordinator:
             f"sent full load sequence to {p['node_instance_id']} "
             f"expert={p['expert_id']} local_gpu_id={p['local_gpu_id']} "
             f"tensor_kind={begin_msg['tensor_kind'].name} total_bytes={total_bytes}"
+        )
+
+    def send_one_tensor_bytes(
+        self,
+        expert_id: int,
+        tensor_kind: TensorKind,
+        tensor_bytes: bytes,
+        chunk_size: int,
+    ) -> None:
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+     
+        target = None
+        for p in self.placements:
+            if p["expert_id"] == expert_id:
+                target = p
+                break
+     
+        if target is None:
+            raise RuntimeError(f"expert {expert_id} not found in placements")
+     
+        begin_msg = {
+            "expert_id": expert_id,
+            "local_gpu_id": target["local_gpu_id"],
+            "tensor_kind": tensor_kind,
+            "total_bytes": len(tensor_bytes),
+        }
+     
+        client = NodeClient(target["host"], target["control_port"])
+        with client:
+            client.send_load_weights_begin(begin_msg)
+     
+            offset = 0
+            while offset < len(tensor_bytes):
+                chunk = tensor_bytes[offset : offset + chunk_size]
+                chunk_msg = {
+                    "expert_id": expert_id,
+                    "local_gpu_id": target["local_gpu_id"],
+                    "tensor_kind": tensor_kind,
+                    "chunk_offset": offset,
+                    "chunk_data": chunk,
+                }
+                client.send_load_weights_chunk(chunk_msg)
+                offset += len(chunk)
+     
+            end_msg = {
+                "expert_id": expert_id,
+                "local_gpu_id": target["local_gpu_id"],
+                "tensor_kind": tensor_kind,
+            }
+            client.send_load_weights_end(end_msg)
+     
+        print(
+            f"sent tensor bytes to {target['node_instance_id']} "
+            f"expert={expert_id} local_gpu_id={target['local_gpu_id']} "
+            f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)}"
         )
