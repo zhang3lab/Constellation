@@ -62,7 +62,6 @@ struct ExpertResidency {
     bool ready = false;
     std::unordered_map<int, HostTensor> host_tensors;
     std::unordered_map<int, DeviceTensor> device_tensors;
-    expert_node::DeviceExpertWeights device_weights;
 };
 
 struct ActiveLoad {
@@ -205,14 +204,15 @@ void PrintRuntimeSummary(const common::NodeInfo& info, const ControlState& state
             continue;
         }
 
-        std::printf("[%s]   loaded expert=%d gpu=%d ready=%d up=%p gate=%p down=%p\n",
+        std::printf("[%s]   loaded expert=%d gpu=%d ready=%d "
+                    "up_w=%p gate_w=%p down_w=%p\n",
                     info.node_id.c_str(),
                     loaded->expert_id,
                     loaded->local_gpu_id,
                     static_cast<int>(loaded->ready),
-                    loaded->weights.w_up_ptr,
-                    loaded->weights.w_gate_ptr,
-                    loaded->weights.w_down_ptr);
+                    loaded->mlp.w_up.weights,
+                    loaded->mlp.w_gate.weights,
+                    loaded->mlp.w_down.weights);
     }
 }
 
@@ -252,23 +252,24 @@ bool HasCompleteDeviceTriplet(const ExpertResidency& r) {
            r.device_tensors.count(down) > 0;
 }
 
-bool BuildDeviceExpertWeights(ExpertResidency* r) {
-    if (r == nullptr) return false;
-    if (!HasCompleteDeviceTriplet(*r)) return false;
+void FreeDevicePackedMatrixOwner(expert_node::DevicePackedMatrixOwner* m) {
+    if (m == nullptr) return;
+    if (m->weights != nullptr) {
+        cudaFree(m->weights);
+        m->weights = nullptr;
+    }
+    if (m->scales != nullptr) {
+        cudaFree(m->scales);
+        m->scales = nullptr;
+    }
+    m->view = PackedRowMajorMatrix{};
+}
 
-    const auto& up = r->device_tensors.at(static_cast<int>(common::TensorKind::WUp));
-    const auto& gate = r->device_tensors.at(static_cast<int>(common::TensorKind::WGate));
-    const auto& down = r->device_tensors.at(static_cast<int>(common::TensorKind::WDown));
-
-    r->device_weights.w_up_ptr = up.device_ptr;
-    r->device_weights.w_gate_ptr = gate.device_ptr;
-    r->device_weights.w_down_ptr = down.device_ptr;
-
-    r->device_weights.w_up_bytes = up.total_bytes;
-    r->device_weights.w_gate_bytes = gate.total_bytes;
-    r->device_weights.w_down_bytes = down.total_bytes;
-
-    return true;
+void FreeDevicePackedMlpOwner(expert_node::DevicePackedMlpOwner* mlp) {
+    if (mlp == nullptr) return;
+    FreeDevicePackedMatrixOwner(&mlp->w_up);
+    FreeDevicePackedMatrixOwner(&mlp->w_gate);
+    FreeDevicePackedMatrixOwner(&mlp->w_down);
 }
 
 bool UploadTensorToDevice(
@@ -446,26 +447,6 @@ void FreeDeviceTensor(DeviceTensor* t) {
         t->device_ptr = nullptr;
     }
     t->total_bytes = 0;
-}
-
-void FreeDevicePackedMatrixOwner(expert_node::DevicePackedMatrixOwner* m) {
-    if (m == nullptr) return;
-    if (m->weights != nullptr) {
-        cudaFree(m->weights);
-        m->weights = nullptr;
-    }
-    if (m->scales != nullptr) {
-        cudaFree(m->scales);
-        m->scales = nullptr;
-    }
-    m->view = PackedRowMajorMatrix{};
-}
-
-void FreeDevicePackedMlpOwner(expert_node::DevicePackedMlpOwner* mlp) {
-    if (mlp == nullptr) return;
-    FreeDevicePackedMatrixOwner(&mlp->w_up);
-    FreeDevicePackedMatrixOwner(&mlp->w_gate);
-    FreeDevicePackedMatrixOwner(&mlp->w_down);
 }
 
 bool HandleInventoryRequest(
@@ -784,17 +765,6 @@ void PrintExpertTensorSummary(
                         static_cast<unsigned long long>(dt.total_bytes),
                         dt.device_ptr);
         }
-
-        std::printf("[%s]     device_weights up=%p gate=%p down=%p\n",
-                    info.node_id.c_str(),
-                    r.device_weights.w_up_ptr,
-                    r.device_weights.w_gate_ptr,
-                    r.device_weights.w_down_ptr);
-        std::printf("[%s]     device_weight_bytes up=%llu gate=%llu down=%llu\n",
-                    info.node_id.c_str(),
-                    static_cast<unsigned long long>(r.device_weights.w_up_bytes),
-                    static_cast<unsigned long long>(r.device_weights.w_gate_bytes),
-                    static_cast<unsigned long long>(r.device_weights.w_down_bytes));
     }
 }
 
@@ -905,15 +875,6 @@ bool HandleLoadWeightsEnd(
     it->second.device_tensors[tensor_key] = std::move(dt);
 
     bool complete = HasCompleteExpertTriplet(it->second);
-    if (complete) {
-        if (!BuildDeviceExpertWeights(&it->second)) {
-            std::fprintf(stderr,
-                         "[%s] BuildDeviceExpertWeights failed for expert=%d\n",
-                         info.node_id.c_str(),
-                         it->second.expert_id);
-            return false;
-        }
-    }
 
     it->second.ready = complete;
 

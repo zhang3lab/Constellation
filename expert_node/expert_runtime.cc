@@ -85,13 +85,13 @@ void ExpertRuntime::debug_print() const {
     std::printf("[runtime] loaded experts = %zu\n", loaded_experts_.size());
     for (int expert_id : ids) {
         const auto& e = loaded_experts_.at(expert_id);
-        std::printf("[runtime]   expert=%d gpu=%d ready=%d up=%p gate=%p down=%p\n",
+	std::printf("[runtime]   expert=%d gpu=%d ready=%d up_w=%p gate_w=%p down_w=%p\n",
                     e.expert_id,
                     e.local_gpu_id,
                     static_cast<int>(e.ready),
-                    e.weights.w_up_ptr,
-                    e.weights.w_gate_ptr,
-                    e.weights.w_down_ptr);
+                    e.mlp.w_up.weights,
+                    e.mlp.w_gate.weights,
+                    e.mlp.w_down.weights);
     }
 }
 
