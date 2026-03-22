@@ -35,6 +35,7 @@ struct ActiveLoad {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
     std::uint64_t total_bytes = 0;
     std::uint64_t received_bytes = 0;
+    std::string buffer;
 };
 
 struct ControlState {
@@ -311,6 +312,8 @@ bool HandleLoadWeightsBegin(
     state->active_load.tensor_kind = msg.tensor_kind;
     state->active_load.total_bytes = msg.total_bytes;
     state->active_load.received_bytes = 0;
+    state->active_load.buffer.clear();
+    state->active_load.buffer.reserve(static_cast<std::size_t>(msg.total_bytes));
 
     std::printf("[%s] received LoadWeightsBegin rid=%u "
                 "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu\n",
@@ -398,8 +401,9 @@ bool HandleLoadWeightsChunk(
         return false;
     }
 
-    state->active_load.received_bytes +=
-        static_cast<std::uint64_t>(msg.chunk_data.size());
+    state->active_load.buffer.append(msg.chunk_data);
+    state->active_load.received_bytes =
+        static_cast<std::uint64_t>(state->active_load.buffer.size());
 
     std::printf("[%s] received LoadWeightsChunk rid=%u "
                 "expert=%d local_gpu_id=%d tensor_kind=%s chunk_offset=%llu chunk_size=%zu "
@@ -485,16 +489,28 @@ bool HandleLoadWeightsEnd(
         return false;
     }
 
+    if (state->active_load.buffer.size() !=
+        static_cast<std::size_t>(state->active_load.total_bytes)) {
+        std::fprintf(stderr,
+                     "[%s] LoadWeightsEnd buffer size mismatch: buffer=%zu expected=%llu\n",
+                     info.node_id.c_str(),
+                     state->active_load.buffer.size(),
+                     static_cast<unsigned long long>(state->active_load.total_bytes));
+        return false;
+    }
+
     it->second.ready = true;
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
-                "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu -> ready=1\n",
+                "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu "
+                "buffer_size=%zu -> ready=1\n",
                 info.node_id.c_str(),
                 req.request_id,
                 msg.expert_id,
                 msg.local_gpu_id,
                 TensorKindName(msg.tensor_kind),
-                static_cast<unsigned long long>(state->active_load.total_bytes));
+                static_cast<unsigned long long>(state->active_load.total_bytes),
+                state->active_load.buffer.size());
 
     state->active_load = ActiveLoad{};
 
