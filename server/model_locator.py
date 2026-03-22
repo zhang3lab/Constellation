@@ -1,4 +1,5 @@
 import json
+import torch
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -50,16 +51,21 @@ def resolve_deepseek_tensor_file(
     shard_path = str(Path(model_root) / shard_relpath)
     return tensor_name, shard_path
 
+
 def load_tensor_bytes_from_safetensors(
     shard_path: str,
     tensor_name: str,
-) -> Tuple[bytes, Tuple[int, ...], str]:
-    with safe_open(shard_path, framework="np") as f:
-        arr = f.get_tensor(tensor_name)
+):
+    import torch
+    from safetensors import safe_open
 
-    tensor_bytes = arr.tobytes(order="C")
-    shape = tuple(int(x) for x in arr.shape)
-    dtype = str(arr.dtype)
+    with safe_open(shard_path, framework="pt", device="cpu") as f:
+        t = f.get_tensor(tensor_name)
+
+    t = t.contiguous()
+    tensor_bytes = t.view(torch.uint8).cpu().numpy().tobytes()
+    shape = tuple(int(x) for x in t.shape)
+    dtype = str(t.dtype)
     return tensor_bytes, shape, dtype
 
 
