@@ -259,5 +259,6 @@ bool launch_silu_mul(const float* d_up,
 
 bool launch_cast_float_to_half(const float* d_in,
                                __half* d_out,
-                               int n,
+                               int num_tokens,
+                               int dim,
                                cudaStream_t stream);

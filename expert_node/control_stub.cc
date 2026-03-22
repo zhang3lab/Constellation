@@ -26,24 +26,6 @@
 
 namespace {
 
-__global__ void cast_half_to_float_kernel_local(const __half* in, float* out, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) out[idx] = __half2float(in[idx]);
-}
-
-bool launch_cast_half_to_float_local(
-    const __half* d_in,
-    float* d_out,
-    int n,
-    cudaStream_t stream) {
-    if (!d_in || !d_out || n < 0) return false;
-    if (n == 0) return true;
-    const int threads = 256;
-    const int blocks = ceil_div_int(n, threads);
-    cast_half_to_float_kernel_local<<<blocks, threads, 0, stream>>>(d_in, d_out, n);
-    return cudaGetLastError() == cudaSuccess;
-}
-
 struct DeviceTensor {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
     void* device_ptr = nullptr;
@@ -1026,19 +1008,16 @@ bool HandleInferRequest(
     float* d_input_f = nullptr;
     __half* d_input_h = nullptr;
     __half* d_output_h = nullptr;
-    float* d_output_f = nullptr;
     float* d_workspace = nullptr;
 
     auto cleanup = [&]() {
         if (d_input_f) cudaFree(d_input_f);
         if (d_input_h) cudaFree(d_input_h);
         if (d_output_h) cudaFree(d_output_h);
-        if (d_output_f) cudaFree(d_output_f);
         if (d_workspace) cudaFree(d_workspace);
         d_input_f = nullptr;
         d_input_h = nullptr;
         d_output_h = nullptr;
-        d_output_f = nullptr;
         d_workspace = nullptr;
     };
 
@@ -1066,14 +1045,6 @@ bool HandleInferRequest(
         return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
     }
 
-    err = cudaMalloc(reinterpret_cast<void**>(&d_output_f), act_f_bytes);
-    if (err != cudaSuccess) {
-        std::fprintf(stderr, "[%s] cudaMalloc d_output_f failed: %s\n",
-                     info.node_id.c_str(), cudaGetErrorString(err));
-        cleanup();
-        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
-    }
-
     err = cudaMalloc(reinterpret_cast<void**>(&d_workspace), workspace_bytes);
     if (err != cudaSuccess) {
         std::fprintf(stderr, "[%s] cudaMalloc d_workspace failed: %s\n",
@@ -1093,7 +1064,12 @@ bool HandleInferRequest(
         return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
     }
 
-    if (!launch_cast_float_to_half(d_input_f, d_input_h, static_cast<int>(act_elems), 0)) {
+    if (!launch_cast_float_to_half(
+            d_input_f,
+            d_input_h,
+            msg.batch_size,
+            msg.hidden_dim,
+            0)) {
         std::fprintf(stderr, "[%s] launch_cast_float_to_half failed\n",
                      info.node_id.c_str());
         cleanup();
@@ -1115,17 +1091,6 @@ bool HandleInferRequest(
         return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
     }
 
-    if (!launch_cast_half_to_float_local(
-            d_output_h,
-            d_output_f,
-            static_cast<int>(act_elems),
-            0)) {
-        std::fprintf(stderr, "[%s] launch_cast_half_to_float_local failed\n",
-                     info.node_id.c_str());
-        cleanup();
-        return send_infer_response(4, msg.batch_size, msg.hidden_dim, std::string());
-    }
-
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         std::fprintf(stderr, "[%s] cudaDeviceSynchronize failed: %s\n",
@@ -1135,11 +1100,11 @@ bool HandleInferRequest(
     }
 
     std::string output;
-    output.resize(act_f_bytes);
+    output.resize(act_h_bytes);
 
     err = cudaMemcpy(output.data(),
-                     d_output_f,
-                     act_f_bytes,
+                     d_output_h,
+                     act_h_bytes,
                      cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         std::fprintf(stderr, "[%s] cudaMemcpy D2H output failed: %s\n",
