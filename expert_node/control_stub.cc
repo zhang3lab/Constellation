@@ -29,6 +29,16 @@ struct DeviceTensor {
     std::uint64_t total_bytes = 0;
 };
 
+struct DeviceExpertWeights {
+    void* w_up_ptr = nullptr;
+    void* w_gate_ptr = nullptr;
+    void* w_down_ptr = nullptr;
+
+    std::uint64_t w_up_bytes = 0;
+    std::uint64_t w_gate_bytes = 0;
+    std::uint64_t w_down_bytes = 0;
+};
+
 struct HostTensor {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
     std::string bytes;
@@ -41,6 +51,7 @@ struct ExpertResidency {
     bool ready = false;
     std::unordered_map<int, HostTensor> host_tensors;
     std::unordered_map<int, DeviceTensor> device_tensors;
+    DeviceExpertWeights device_weights;
 };
 
 struct ActiveLoad {
@@ -194,6 +205,35 @@ bool HasCompleteExpertTriplet(const ExpertResidency& r) {
            r.device_tensors.count(up) > 0 &&
            r.device_tensors.count(gate) > 0 &&
            r.device_tensors.count(down) > 0;
+}
+
+bool HasCompleteDeviceTriplet(const ExpertResidency& r) {
+    const int up = static_cast<int>(common::TensorKind::WUp);
+    const int gate = static_cast<int>(common::TensorKind::WGate);
+    const int down = static_cast<int>(common::TensorKind::WDown);
+
+    return r.device_tensors.count(up) > 0 &&
+           r.device_tensors.count(gate) > 0 &&
+           r.device_tensors.count(down) > 0;
+}
+
+bool BuildDeviceExpertWeights(ExpertResidency* r) {
+    if (r == nullptr) return false;
+    if (!HasCompleteDeviceTriplet(*r)) return false;
+
+    const auto& up = r->device_tensors.at(static_cast<int>(common::TensorKind::WUp));
+    const auto& gate = r->device_tensors.at(static_cast<int>(common::TensorKind::WGate));
+    const auto& down = r->device_tensors.at(static_cast<int>(common::TensorKind::WDown));
+
+    r->device_weights.w_up_ptr = up.device_ptr;
+    r->device_weights.w_gate_ptr = gate.device_ptr;
+    r->device_weights.w_down_ptr = down.device_ptr;
+
+    r->device_weights.w_up_bytes = up.total_bytes;
+    r->device_weights.w_gate_bytes = gate.total_bytes;
+    r->device_weights.w_down_bytes = down.total_bytes;
+
+    return true;
 }
 
 bool UploadTensorToDevice(
@@ -561,6 +601,17 @@ void PrintExpertTensorSummary(
                         static_cast<unsigned long long>(dt.total_bytes),
                         dt.device_ptr);
         }
+
+        std::printf("[%s]     device_weights up=%p gate=%p down=%p\n",
+                    info.node_id.c_str(),
+                    r.device_weights.w_up_ptr,
+                    r.device_weights.w_gate_ptr,
+                    r.device_weights.w_down_ptr);
+        std::printf("[%s]     device_weight_bytes up=%llu gate=%llu down=%llu\n",
+                    info.node_id.c_str(),
+                    static_cast<unsigned long long>(r.device_weights.w_up_bytes),
+                    static_cast<unsigned long long>(r.device_weights.w_gate_bytes),
+                    static_cast<unsigned long long>(r.device_weights.w_down_bytes));
     }
 }
 
@@ -670,7 +721,18 @@ bool HandleLoadWeightsEnd(
     }
     it->second.device_tensors[tensor_key] = std::move(dt);
 
-    it->second.ready = HasCompleteExpertTriplet(it->second);
+    bool device_complete = HasCompleteExpertTriplet(it->second);
+    if (device_complete) {
+        if (!BuildDeviceExpertWeights(&it->second)) {
+            std::fprintf(stderr,
+                         "[%s] BuildDeviceExpertWeights failed for expert=%d\n",
+                         info.node_id.c_str(),
+                         it->second.expert_id);
+            return false;
+        }
+    }
+
+    it->second.ready = device_complete;
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
                 "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu buffer_size=%zu -> ready=%d\n",
