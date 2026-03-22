@@ -1,18 +1,6 @@
-from common.protocol import TensorKind
 from server.config import load_config
 from server.coordinator import Coordinator
-
-
-def parse_tensor_kind(name: str) -> TensorKind:
-    table = {
-        "w_up": TensorKind.WUp,
-        "w_gate": TensorKind.WGate,
-        "w_down": TensorKind.WDown,
-    }
-    try:
-        return table[name]
-    except KeyError as exc:
-        raise ValueError(f"unknown tensor_kind: {name}") from exc
+from server.model_locator import resolve_deepseek_tensor_file
 
 
 def main():
@@ -31,15 +19,17 @@ def main():
 
     coord.send_placement_plan()
 
-    test_load = cfg["test_load"]
     model = cfg["model"]
+    test_load = cfg["test_load"]
 
-    coord.send_one_tensor_file(
+    tensor_name, shard_path = resolve_deepseek_tensor_file(
+        model_root=model["root"],
         expert_id=int(test_load["expert_id"]),
-        tensor_kind=parse_tensor_kind(test_load["tensor_kind"]),
-        path=model["root"],   # 这里后面会改成“根目录 + index 查 tensor”
-        chunk_size=int(model["chunk_size"]),
+        tensor_kind=str(test_load["tensor_kind"]),
     )
+
+    print(f"resolved tensor_name={tensor_name}")
+    print(f"resolved shard_path={shard_path}")
 
 
 if __name__ == "__main__":
