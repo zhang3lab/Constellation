@@ -1,5 +1,6 @@
 import struct
 from common.protocol import TensorKind
+from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
 from server.model_locator import resolve_and_load_deepseek_tensor
