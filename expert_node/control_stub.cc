@@ -736,8 +736,8 @@ bool HandleLoadWeightsEnd(
     }
     it->second.device_tensors[tensor_key] = std::move(dt);
 
-    bool device_complete = HasCompleteExpertTriplet(it->second);
-    if (device_complete) {
+    bool complete = HasCompleteExpertTriplet(it->second);
+    if (complete) {
         if (!BuildDeviceExpertWeights(&it->second)) {
             std::fprintf(stderr,
                          "[%s] BuildDeviceExpertWeights failed for expert=%d\n",
@@ -747,7 +747,7 @@ bool HandleLoadWeightsEnd(
         }
     }
 
-    it->second.ready = device_complete;
+    it->second.ready = complete;
 
     if (it->second.ready) {
         expert_node::LoadedExpert le;
@@ -755,10 +755,18 @@ bool HandleLoadWeightsEnd(
         le.local_gpu_id = it->second.local_gpu_id;
         le.ready = true;
         le.weights = it->second.device_weights;
-     
+
         if (!state->runtime.register_loaded_expert(le)) {
             std::fprintf(stderr,
                          "[%s] runtime.register_loaded_expert failed for expert=%d\n",
+                         info.node_id.c_str(),
+                         le.expert_id);
+            return false;
+        }
+
+        if (!state->runtime.execute_expert_stub(le.expert_id)) {
+            std::fprintf(stderr,
+                         "[%s] runtime.execute_expert_stub failed for expert=%d\n",
                          info.node_id.c_str(),
                          le.expert_id);
             return false;
