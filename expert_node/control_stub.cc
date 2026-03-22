@@ -176,6 +176,12 @@ bool SendEmptyAck(
     return common::SendMessage(fd, resp, std::string());
 }
 
+bool HasCompleteExpertTriplet(const ExpertResidency& r) {
+    return r.host_tensors.count(static_cast<int>(common::TensorKind::WUp)) > 0 &&
+           r.host_tensors.count(static_cast<int>(common::TensorKind::WGate)) > 0 &&
+           r.host_tensors.count(static_cast<int>(common::TensorKind::WDown)) > 0;
+}
+
 bool HandleInventoryRequest(
     int fd,
     const common::NodeInfo& info,
@@ -545,6 +551,7 @@ bool HandleLoadWeightsEnd(
         return false;
     }
 
+    std::size_t final_buffer_size = state->active_load.buffer.size();
     int tensor_key = static_cast<int>(msg.tensor_kind);
 
     HostTensor ht;
@@ -553,18 +560,18 @@ bool HandleLoadWeightsEnd(
     ht.bytes = std::move(state->active_load.buffer);
 
     it->second.host_tensors[tensor_key] = std::move(ht);
-    it->second.ready = true;
+    it->second.ready = HasCompleteExpertTriplet(it->second);
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
-                "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu "
-                "buffer_size=%zu -> ready=1\n",
+                "expert=%d local_gpu_id=%d tensor_kind=%s total_bytes=%llu buffer_size=%zu -> ready=%d\n",
                 info.node_id.c_str(),
                 req.request_id,
                 msg.expert_id,
                 msg.local_gpu_id,
                 TensorKindName(msg.tensor_kind),
                 static_cast<unsigned long long>(state->active_load.total_bytes),
-                state->active_load.buffer.size());
+                final_buffer_size,
+                static_cast<int>(it->second.ready));
 
     PrintExpertTensorSummary(info, *state);
 

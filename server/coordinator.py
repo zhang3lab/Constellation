@@ -273,3 +273,32 @@ class Coordinator:
             f"expert={expert_id} local_gpu_id={target['local_gpu_id']} "
             f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)}"
         )
+
+    def send_one_expert_triplet(
+        self,
+        expert_id: int,
+        tensor_loader,
+        chunk_size: int,
+    ) -> None:
+        order = [
+            ("w_up", TensorKind.WUp),
+            ("w_gate", TensorKind.WGate),
+            ("w_down", TensorKind.WDown),
+        ]
+     
+        for tensor_kind_name, tensor_kind_enum in order:
+            tensor_name, shard_path, tensor_bytes, shape, dtype = tensor_loader(
+                expert_id,
+                tensor_kind_name,
+            )
+     
+            print(f"resolved tensor_name={tensor_name}")
+            print(f"resolved shard_path={shard_path}")
+            print(f"resolved shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}")
+     
+            self.send_one_tensor_bytes(
+                expert_id=expert_id,
+                tensor_kind=tensor_kind_enum,
+                tensor_bytes=tensor_bytes,
+                chunk_size=chunk_size,
+            )
