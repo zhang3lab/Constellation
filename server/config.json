@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    { "host": "192.168.1.10", "control_port": 5000 },
+    { "host": "192.168.1.11", "control_port": 5000 }
+  ],
+  "model": {
+    "family": "deepseek_v3",
+    "root": "/model/ModelScope/deepseek-ai/DeepSeek-V3.1",
+    "chunk_size": 1048576
+  },
+  "test_load": {
+    "expert_id": 0,
+    "tensor_kind": "w_up"
+  }
+}

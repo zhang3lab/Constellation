@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
-def load_nodes_config(path: str) -> List[Dict[str, Any]]:
+def load_config(path: str) -> Dict[str, Any]:
     p = Path(path)
     with p.open("r", encoding="utf-8") as f:
         obj = json.load(f)
@@ -15,7 +15,6 @@ def load_nodes_config(path: str) -> List[Dict[str, Any]]:
     if not isinstance(nodes, list):
         raise ValueError("config must contain a list field 'nodes'")
 
-    out: List[Dict[str, Any]] = []
     for i, node in enumerate(nodes):
         if not isinstance(node, dict):
             raise ValueError(f"nodes[{i}] must be an object")
@@ -28,9 +27,24 @@ def load_nodes_config(path: str) -> List[Dict[str, Any]]:
         if not isinstance(control_port, int):
             raise ValueError(f"nodes[{i}].control_port must be an integer")
 
-        out.append({
-            "host": host,
-            "control_port": control_port,
-        })
+    model = obj.get("model")
+    if not isinstance(model, dict):
+        raise ValueError("config must contain an object field 'model'")
 
-    return out
+    if not isinstance(model.get("family"), str) or not model["family"]:
+        raise ValueError("model.family must be a non-empty string")
+    if not isinstance(model.get("root"), str) or not model["root"]:
+        raise ValueError("model.root must be a non-empty string")
+    if not isinstance(model.get("chunk_size"), int):
+        raise ValueError("model.chunk_size must be an integer")
+
+    test_load = obj.get("test_load")
+    if not isinstance(test_load, dict):
+        raise ValueError("config must contain an object field 'test_load'")
+
+    if not isinstance(test_load.get("expert_id"), int):
+        raise ValueError("test_load.expert_id must be an integer")
+    if not isinstance(test_load.get("tensor_kind"), str) or not test_load["tensor_kind"]:
+        raise ValueError("test_load.tensor_kind must be a non-empty string")
+
+    return obj
