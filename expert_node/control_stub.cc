@@ -764,14 +764,6 @@ bool HandleLoadWeightsEnd(
                          le.expert_id);
             return false;
         }
-
-        if (!state->runtime.execute_expert_stub(le.expert_id)) {
-            std::fprintf(stderr,
-                         "[%s] runtime.execute_expert_stub failed for expert=%d\n",
-                         info.node_id.c_str(),
-                         le.expert_id);
-            return false;
-        }
     }
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
