@@ -23,6 +23,12 @@
 
 namespace {
 
+struct DeviceTensor {
+    common::TensorKind tensor_kind = common::TensorKind::WUp;
+    void* device_ptr = nullptr;
+    std::uint64_t total_bytes = 0;
+};
+
 struct HostTensor {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
     std::string bytes;
@@ -34,6 +40,7 @@ struct ExpertResidency {
     int local_gpu_id = -1;
     bool ready = false;
     std::unordered_map<int, HostTensor> host_tensors;
+    std::unordered_map<int, DeviceTensor> device_tensors;
 };
 
 struct ActiveLoad {
@@ -177,9 +184,65 @@ bool SendEmptyAck(
 }
 
 bool HasCompleteExpertTriplet(const ExpertResidency& r) {
-    return r.host_tensors.count(static_cast<int>(common::TensorKind::WUp)) > 0 &&
-           r.host_tensors.count(static_cast<int>(common::TensorKind::WGate)) > 0 &&
-           r.host_tensors.count(static_cast<int>(common::TensorKind::WDown)) > 0;
+    const int up = static_cast<int>(common::TensorKind::WUp);
+    const int gate = static_cast<int>(common::TensorKind::WGate);
+    const int down = static_cast<int>(common::TensorKind::WDown);
+
+    return r.host_tensors.count(up) > 0 &&
+           r.host_tensors.count(gate) > 0 &&
+           r.host_tensors.count(down) > 0 &&
+           r.device_tensors.count(up) > 0 &&
+           r.device_tensors.count(gate) > 0 &&
+           r.device_tensors.count(down) > 0;
+}
+
+bool UploadTensorToDevice(
+    int local_gpu_id,
+    const HostTensor& host_tensor,
+    DeviceTensor* out) {
+    if (out == nullptr) return false;
+
+    cudaError_t err = cudaSetDevice(local_gpu_id);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "cudaSetDevice(%d) failed: %s\n",
+                     local_gpu_id, cudaGetErrorString(err));
+        return false;
+    }
+
+    void* ptr = nullptr;
+    err = cudaMalloc(&ptr, static_cast<std::size_t>(host_tensor.total_bytes));
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "cudaMalloc(%llu) failed: %s\n",
+                     static_cast<unsigned long long>(host_tensor.total_bytes),
+                     cudaGetErrorString(err));
+        return false;
+    }
+
+    err = cudaMemcpy(
+        ptr,
+        host_tensor.bytes.data(),
+        static_cast<std::size_t>(host_tensor.total_bytes),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "cudaMemcpy H2D failed: %s\n",
+                     cudaGetErrorString(err));
+        cudaFree(ptr);
+        return false;
+    }
+
+    out->tensor_kind = host_tensor.tensor_kind;
+    out->device_ptr = ptr;
+    out->total_bytes = host_tensor.total_bytes;
+    return true;
+}
+
+void FreeDeviceTensor(DeviceTensor* t) {
+    if (t == nullptr) return;
+    if (t->device_ptr != nullptr) {
+        cudaFree(t->device_ptr);
+        t->device_ptr = nullptr;
+    }
+    t->total_bytes = 0;
 }
 
 bool HandleInventoryRequest(
@@ -261,6 +324,12 @@ bool HandlePlacementPlan(
     std::printf("[%s] received PlacementPlan rid=%u assignments=%zu\n",
                 info.node_id.c_str(), req.request_id, assignments.size());
 
+    for (auto& kv : state->expert_table) {
+        auto& r = kv.second;
+        for (auto& dv : r.device_tensors) {
+            FreeDeviceTensor(&dv.second);
+        }
+    }
     state->expert_table.clear();
     for (const auto& a : assignments) {
         ExpertResidency r;
@@ -454,12 +523,13 @@ void PrintExpertTensorSummary(
 
     for (int expert_id : expert_ids) {
         const auto& r = state.expert_table.at(expert_id);
-        std::printf("[%s]   expert=%d gpu=%d ready=%d tensors=%zu\n",
+	std::printf("[%s]   expert=%d gpu=%d ready=%d host_tensors=%zu device_tensors=%zu\n",
                     info.node_id.c_str(),
                     r.expert_id,
                     r.local_gpu_id,
                     static_cast<int>(r.ready),
-                    r.host_tensors.size());
+                    r.host_tensors.size(),
+                    r.device_tensors.size());
 
         std::vector<int> tensor_keys;
         tensor_keys.reserve(r.host_tensors.size());
@@ -474,6 +544,22 @@ void PrintExpertTensorSummary(
                         info.node_id.c_str(),
                         TensorKindName(ht.tensor_kind),
                         static_cast<unsigned long long>(ht.total_bytes));
+        }
+
+	std::vector<int> device_keys;
+        device_keys.reserve(r.device_tensors.size());
+        for (const auto& kv : r.device_tensors) {
+            device_keys.push_back(kv.first);
+        }
+        std::sort(device_keys.begin(), device_keys.end());
+
+        for (int tensor_key : device_keys) {
+            const auto& dt = r.device_tensors.at(tensor_key);
+            std::printf("[%s]     device_tensor kind=%s bytes=%llu ptr=%p\n",
+                        info.node_id.c_str(),
+                        TensorKindName(dt.tensor_kind),
+                        static_cast<unsigned long long>(dt.total_bytes),
+                        dt.device_ptr);
         }
     }
 }
@@ -560,6 +646,30 @@ bool HandleLoadWeightsEnd(
     ht.bytes = std::move(state->active_load.buffer);
 
     it->second.host_tensors[tensor_key] = std::move(ht);
+
+    auto host_it = it->second.host_tensors.find(tensor_key);
+    if (host_it == it->second.host_tensors.end()) {
+        std::fprintf(stderr, "[%s] internal error: host tensor missing after store\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    auto dev_it = it->second.device_tensors.find(tensor_key);
+    if (dev_it != it->second.device_tensors.end()) {
+        FreeDeviceTensor(&dev_it->second);
+    }
+
+    DeviceTensor dt;
+    if (!UploadTensorToDevice(it->second.local_gpu_id, host_it->second, &dt)) {
+        std::fprintf(stderr,
+                     "[%s] UploadTensorToDevice failed for expert=%d tensor_kind=%s\n",
+                     info.node_id.c_str(),
+                     it->second.expert_id,
+                     TensorKindName(msg.tensor_kind));
+        return false;
+    }
+    it->second.device_tensors[tensor_key] = std::move(dt);
+
     it->second.ready = HasCompleteExpertTriplet(it->second);
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
