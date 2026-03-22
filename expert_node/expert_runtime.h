@@ -29,7 +29,10 @@ public:
     const LoadedExpert* find_loaded_expert(int expert_id) const;
     const DeviceExpertWeights* find_device_weights(int expert_id) const;
     bool is_expert_ready(int expert_id) const;
-    bool execute_expert_stub(int expert_id) const;
+    bool execute_expert_stub_with_activation(
+        int expert_id,
+        const void* activation_ptr,
+        std::uint64_t activation_bytes) const;
     std::size_t size() const;
     void debug_print() const;
 

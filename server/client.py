@@ -6,10 +6,12 @@ from common.protocol import (
     VERSION,
     MsgType,
     HEADER_SIZE,
+    encode_infer_request,
     encode_load_weights_begin,
     encode_load_weights_chunk,
     encode_load_weights_end,
     encode_placement_plan,
+    decode_infer_response,
     decode_inventory_reply,
     pack_header,
     unpack_header,
@@ -182,3 +184,13 @@ class NodeClient:
             body=body,
             request_id=request_id,
         )
+
+    def send_infer_request(self, msg, request_id=None):
+        body = encode_infer_request(msg)
+        resp_body = self.request(
+            req_type=MsgType.InferRequest,
+            resp_type=MsgType.InferResponse,
+            body=body,
+            request_id=request_id,
+        )
+        return decode_infer_response(resp_body)

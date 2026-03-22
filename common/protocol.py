@@ -350,3 +350,80 @@ def decode_load_weights_end(body: bytes):
         "local_gpu_id": local_gpu_id,
         "tensor_kind": tensor_kind,
     }
+
+def encode_infer_request(msg):
+    activation = msg["activation"]
+    if not isinstance(activation, (bytes, bytearray)):
+        raise ValueError("activation must be bytes-like")
+
+    body = bytearray()
+    body += pack_i32(int(msg["expert_id"]))
+    body += pack_i32(int(msg["batch_size"]))
+    body += pack_i32(int(msg["hidden_dim"]))
+    body += pack_u32(len(activation))
+    body += activation
+    return bytes(body)
+
+
+def decode_infer_request(body: bytes):
+    offset = 0
+    expert_id, offset = unpack_i32(body, offset)
+    batch_size, offset = unpack_i32(body, offset)
+    hidden_dim, offset = unpack_i32(body, offset)
+    output_nbytes, offset = unpack_u32(body, offset)
+
+    if offset + output_nbytes > len(body):
+        raise ProtocolError("buffer too short while reading activation")
+    activation = body[offset : offset + output_nbytes]
+    offset += output_nbytes
+
+    if offset != len(body):
+        raise ProtocolError(
+            f"infer_request has trailing bytes: parsed {offset}, total {len(body)}"
+        )
+
+    return {
+        "expert_id": expert_id,
+        "batch_size": batch_size,
+        "hidden_dim": hidden_dim,
+        "activation": activation,
+    }
+
+
+def encode_infer_response(msg):
+    output = msg["output"]
+    if not isinstance(output, (bytes, bytearray)):
+        raise ValueError("output must be bytes-like")
+
+    body = bytearray()
+    body += pack_i32(int(msg["status_code"]))
+    body += pack_i32(int(msg["batch_size"]))
+    body += pack_i32(int(msg["hidden_dim"]))
+    body += pack_u32(len(output))
+    body += output
+    return bytes(body)
+
+
+def decode_infer_response(body: bytes):
+    offset = 0
+    status_code, offset = unpack_i32(body, offset)
+    batch_size, offset = unpack_i32(body, offset)
+    hidden_dim, offset = unpack_i32(body, offset)
+    output_nbytes, offset = unpack_u32(body, offset)
+
+    if offset + output_nbytes > len(body):
+        raise ProtocolError("buffer too short while reading output")
+    output = body[offset : offset + output_nbytes]
+    offset += output_nbytes
+
+    if offset != len(body):
+        raise ProtocolError(
+            f"infer_response has trailing bytes: parsed {offset}, total {len(body)}"
+        )
+
+    return {
+        "status_code": status_code,
+        "batch_size": batch_size,
+        "hidden_dim": hidden_dim,
+        "output": output,
+    }

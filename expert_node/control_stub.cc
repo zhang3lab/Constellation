@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 
 #include "common/header_codec.h"
+#include "common/infer_codec.h"
 #include "common/inventory_codec.h"
 #include "common/placement_codec.h"
 #include "common/protocol.h"
@@ -797,6 +798,157 @@ bool HandleLoadWeightsEnd(
     return ok;
 }
 
+bool HandleInferRequest(
+    int fd,
+    const common::NodeInfo& info,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    common::InferRequestMsg msg;
+    if (!common::DecodeInferRequestBody(req_body, &msg)) {
+        std::fprintf(stderr, "[%s] failed to decode InferRequest\n",
+                     info.node_id.c_str());
+        return false;
+    }
+
+    const expert_node::LoadedExpert* expert =
+        state->runtime.find_loaded_expert(msg.expert_id);
+    if (expert == nullptr) {
+        common::InferResponseMsg resp_msg;
+        resp_msg.status_code = 1;
+        resp_msg.batch_size = msg.batch_size;
+        resp_msg.hidden_dim = msg.hidden_dim;
+        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
+
+        common::MsgHeader resp{};
+        resp.magic = common::kMagic;
+        resp.version = common::kVersion;
+        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
+        resp.request_id = req.request_id;
+        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+        return common::SendMessage(fd, resp, resp_body);
+    }
+
+    std::uint64_t expected_nbytes =
+        static_cast<std::uint64_t>(msg.batch_size) *
+        static_cast<std::uint64_t>(msg.hidden_dim) *
+        sizeof(float);
+
+    if (msg.activation.size() != expected_nbytes) {
+        common::InferResponseMsg resp_msg;
+        resp_msg.status_code = 3;
+        resp_msg.batch_size = msg.batch_size;
+        resp_msg.hidden_dim = msg.hidden_dim;
+        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
+
+        common::MsgHeader resp{};
+        resp.magic = common::kMagic;
+        resp.version = common::kVersion;
+        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
+        resp.request_id = req.request_id;
+        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+        return common::SendMessage(fd, resp, resp_body);
+    }
+
+    cudaError_t err = cudaSetDevice(expert->local_gpu_id);
+    if (err != cudaSuccess) {
+        common::InferResponseMsg resp_msg;
+        resp_msg.status_code = 4;
+        resp_msg.batch_size = msg.batch_size;
+        resp_msg.hidden_dim = msg.hidden_dim;
+        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
+
+        common::MsgHeader resp{};
+        resp.magic = common::kMagic;
+        resp.version = common::kVersion;
+        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
+        resp.request_id = req.request_id;
+        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+        return common::SendMessage(fd, resp, resp_body);
+    }
+
+    void* activation_ptr = nullptr;
+    err = cudaMalloc(&activation_ptr, static_cast<std::size_t>(expected_nbytes));
+    if (err != cudaSuccess) {
+        common::InferResponseMsg resp_msg;
+        resp_msg.status_code = 4;
+        resp_msg.batch_size = msg.batch_size;
+        resp_msg.hidden_dim = msg.hidden_dim;
+        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
+
+        common::MsgHeader resp{};
+        resp.magic = common::kMagic;
+        resp.version = common::kVersion;
+        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
+        resp.request_id = req.request_id;
+        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+        return common::SendMessage(fd, resp, resp_body);
+    }
+
+    err = cudaMemcpy(
+        activation_ptr,
+        msg.activation.data(),
+        static_cast<std::size_t>(expected_nbytes),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        cudaFree(activation_ptr);
+
+        common::InferResponseMsg resp_msg;
+        resp_msg.status_code = 4;
+        resp_msg.batch_size = msg.batch_size;
+        resp_msg.hidden_dim = msg.hidden_dim;
+        std::string resp_body = common::EncodeInferResponseBody(resp_msg);
+
+        common::MsgHeader resp{};
+        resp.magic = common::kMagic;
+        resp.version = common::kVersion;
+        resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
+        resp.request_id = req.request_id;
+        resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+        return common::SendMessage(fd, resp, resp_body);
+    }
+
+    bool ok = state->runtime.execute_expert_stub_with_activation(
+        msg.expert_id,
+        activation_ptr,
+        expected_nbytes);
+
+    cudaFree(activation_ptr);
+
+    common::InferResponseMsg resp_msg;
+    resp_msg.status_code = ok ? 0 : 4;
+    resp_msg.batch_size = msg.batch_size;
+    resp_msg.hidden_dim = msg.hidden_dim;
+    resp_msg.output.assign(static_cast<std::size_t>(expected_nbytes), '\0');
+
+    std::string resp_body = common::EncodeInferResponseBody(resp_msg);
+
+    common::MsgHeader resp{};
+    resp.magic = common::kMagic;
+    resp.version = common::kVersion;
+    resp.msg_type = static_cast<std::uint16_t>(common::MsgType::InferResponse);
+    resp.request_id = req.request_id;
+    resp.body_len = static_cast<std::uint32_t>(resp_body.size());
+
+    std::printf("[%s] received InferRequest rid=%u expert=%d batch=%d hidden=%d activation_bytes=%zu\n",
+                info.node_id.c_str(),
+                req.request_id,
+                msg.expert_id,
+                msg.batch_size,
+                msg.hidden_dim,
+                msg.activation.size());
+
+    bool send_ok = common::SendMessage(fd, resp, resp_body);
+    if (send_ok) {
+        std::printf("[%s] sent InferResponse rid=%u status=%d output_bytes=%zu\n",
+                    info.node_id.c_str(),
+                    req.request_id,
+                    resp_msg.status_code,
+                    resp_msg.output.size());
+    }
+    return send_ok;
+}
+
 bool DispatchRequest(
     int fd,
     const common::NodeInfo& info,
@@ -818,6 +970,8 @@ bool DispatchRequest(
             return HandleLoadWeightsChunk(fd, info, state, req, req_body);
         case common::MsgType::LoadWeightsEnd:
             return HandleLoadWeightsEnd(fd, info, state, req, req_body);
+        case common::MsgType::InferRequest:
+            return HandleInferRequest(fd, info, state, req, req_body);
         default:
             std::fprintf(stderr, "[%s] unsupported msg_type: %u\n",
                          info.node_id.c_str(), req.msg_type);

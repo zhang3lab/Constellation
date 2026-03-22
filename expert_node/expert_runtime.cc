@@ -30,7 +30,10 @@ bool ExpertRuntime::is_expert_ready(int expert_id) const {
     return it != loaded_experts_.end() && it->second.ready;
 }
 
-bool ExpertRuntime::execute_expert_stub(int expert_id) const {
+bool ExpertRuntime::execute_expert_stub_with_activation(
+    int expert_id,
+    const void* activation_ptr,
+    std::uint64_t activation_bytes) const {
     const LoadedExpert* expert = find_loaded_expert(expert_id);
     if (expert == nullptr) {
         std::fprintf(stderr, "[runtime] expert %d not found\n", expert_id);
@@ -42,31 +45,27 @@ bool ExpertRuntime::execute_expert_stub(int expert_id) const {
         return false;
     }
 
-    const DeviceExpertWeights* w = find_device_weights(expert_id);
-    if (w == nullptr) {
-        std::fprintf(stderr, "[runtime] device weights missing for expert %d\n", expert_id);
+    if (activation_ptr == nullptr || activation_bytes == 0) {
+        std::fprintf(stderr, "[runtime] invalid activation for expert %d\n", expert_id);
         return false;
     }
 
-    if (w->w_up_ptr == nullptr || w->w_gate_ptr == nullptr || w->w_down_ptr == nullptr) {
-        std::fprintf(stderr, "[runtime] incomplete device weights for expert %d\n", expert_id);
-        return false;
-    }
-
-    std::printf("[runtime] execute stub expert=%d gpu=%d ready=%d\n",
+    std::printf("[runtime] execute stub expert=%d gpu=%d ready=%d activation=%p bytes=%llu\n",
                 expert->expert_id,
                 expert->local_gpu_id,
-                static_cast<int>(expert->ready));
+                static_cast<int>(expert->ready),
+                activation_ptr,
+                static_cast<unsigned long long>(activation_bytes));
 
     std::printf("[runtime]   up=%p (%llu bytes)\n",
-                w->w_up_ptr,
-                static_cast<unsigned long long>(w->w_up_bytes));
+                expert->weights.w_up_ptr,
+                static_cast<unsigned long long>(expert->weights.w_up_bytes));
     std::printf("[runtime]   gate=%p (%llu bytes)\n",
-                w->w_gate_ptr,
-                static_cast<unsigned long long>(w->w_gate_bytes));
+                expert->weights.w_gate_ptr,
+                static_cast<unsigned long long>(expert->weights.w_gate_bytes));
     std::printf("[runtime]   down=%p (%llu bytes)\n",
-                w->w_down_ptr,
-                static_cast<unsigned long long>(w->w_down_bytes));
+                expert->weights.w_down_ptr,
+                static_cast<unsigned long long>(expert->weights.w_down_bytes));
 
     return true;
 }
