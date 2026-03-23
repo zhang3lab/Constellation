@@ -8,7 +8,7 @@
 #include <random>
 #include <vector>
 
-#include "expert.h"
+#include "expert_node/kernel/expert.h"
 
 static void check_cuda(cudaError_t err, const char* msg) {
     if (err != cudaSuccess) {

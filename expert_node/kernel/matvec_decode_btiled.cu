@@ -2,7 +2,7 @@
 //
 // Small-batch decode-specialized row-major FP8 matvec.
 
-#include "expert.h"
+#include "expert_node/kernel/expert.h"
 
 
 #include <cstdio>

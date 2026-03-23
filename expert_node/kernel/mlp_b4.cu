@@ -14,7 +14,7 @@
 // Workspace layout in expert.h:
 //   [up(float)][gate(float)][fused(float)][out_f(float)]
 
-#include "expert.h"
+#include "expert_node/kernel/expert.h"
 
 
 #include <cstdio>

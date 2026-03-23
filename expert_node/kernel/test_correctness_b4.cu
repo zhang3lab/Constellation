@@ -12,7 +12,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
-#include "expert.h"
+#include "expert_node/kernel/expert.h"
 
 // External entry points from your CUDA files.
 bool initialize(cudaStream_t stream);
