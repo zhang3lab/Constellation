@@ -62,6 +62,43 @@ def _load_weight_triplet(model_root: str, layer_id: int, expert_id: int):
     return w_up, w_gate, w_down
 
 
+def _stats(name, t):
+    if isinstance(t, torch.Tensor):
+        a = t.detach().cpu().float()
+        finite = torch.isfinite(a)
+        finite_count = int(finite.sum().item())
+        total = a.numel()
+        print(f"[correctness] {name}: shape={tuple(a.shape)} finite={finite_count}/{total}")
+        if finite_count > 0:
+            af = a[finite]
+            print(
+                f"[correctness] {name}: "
+                f"min={af.min().item():.6e} "
+                f"max={af.max().item():.6e} "
+                f"mean={af.mean().item():.6e} "
+                f"std={af.std().item():.6e}"
+            )
+        else:
+            print(f"[correctness] {name}: all non-finite")
+    else:
+        a = np.asarray(t, dtype=np.float32)
+        finite = np.isfinite(a)
+        finite_count = int(finite.sum())
+        total = a.size
+        print(f"[correctness] {name}: shape={a.shape} finite={finite_count}/{total}")
+        if finite_count > 0:
+            af = a[finite]
+            print(
+                f"[correctness] {name}: "
+                f"min={af.min():.6e} "
+                f"max={af.max():.6e} "
+                f"mean={af.mean():.6e} "
+                f"std={af.std():.6e}"
+            )
+        else:
+            print(f"[correctness] {name}: all non-finite")
+
+
 def run_single_expert_correctness_test(coord, cfg):
     model = cfg["model"]
     test_load = cfg["test_load"]
@@ -115,17 +152,24 @@ def run_single_expert_correctness_test(coord, cfg):
     print(f"[correctness] W_gate shape = {tuple(W_gate.shape)}")
     print(f"[correctness] W_down shape = {tuple(W_down.shape)}")
 
-    # kernel 语义：
-    # up   = W_up @ x
-    # gate = W_gate @ x
-    # y    = W_down @ (up * silu(gate))
+    _stats("x", x_t)
+    _stats("W_up", W_up)
+    _stats("W_gate", W_gate)
+    _stats("W_down", W_down)
+
     up = W_up @ x_t
     gate = W_gate @ x_t
     fused = up * F.silu(gate)
     y_ref = W_down @ fused
 
-    # server 最终输出是 fp16，所以 reference 先做 roundtrip 再比较
-    y_ref_cmp = y_ref.to(torch.float16).to(torch.float32).cpu().numpy()
+    _stats("up", up)
+    _stats("gate", gate)
+    _stats("fused", fused)
+    _stats("y_ref_fp32", y_ref)
+
+    y_ref_cmp = y_ref.to(torch.float16).to(torch.float32)
+    _stats("y_ref_fp16_roundtrip", y_ref_cmp)
+    _stats("y_srv", y_srv)
 
     print("[correctness] x[:8]      =", x[:8])
     print("[correctness] y_ref[:8]  =", y_ref_cmp[:8])
