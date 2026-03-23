@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include "expert.h"
+#include "expert_node/kernel/expert.h"
 
 namespace expert_node {
 
