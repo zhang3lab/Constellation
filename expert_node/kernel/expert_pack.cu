@@ -70,7 +70,7 @@ static float decode_fp8_e5m2_host(uint8_t x) {
 }
 
 static float decode_fp8_host(uint8_t x, Fp8Format fmt) {
-    return (fmt == Fp8Format::E5M2) ? decode_fp8_e5m2_host(x)
+    return (fmt == Fp8Format::IEEE_E5M2) ? decode_fp8_e5m2_host(x)
                                     : decode_fp8_e4m3_host(x);
 }
 
@@ -237,7 +237,7 @@ void free_packed_row_major_matrix_host(PackedRowMajorMatrixHost* p) {
 
     p->rows = 0;
     p->cols = 0;
-    p->fp8_format = Fp8Format::E4M3;
+    p->fp8_format = Fp8Format::IEEE_E4M3;
     p->k_chunk = 0;
     p->num_k_chunks = 0;
     p->weights = nullptr;

@@ -33,17 +33,35 @@
 // -----------------------------------------------------------------------------
 
 enum class Fp8Format : int {
-    E4M3 = 0,
-    E5M2 = 1,
+    IEEE_E4M3 = 0,
+    IEEE_E5M2 = 1,
+    TORCH_E4M3FN = 2,
 };
 
 inline int fp8_format_to_int(Fp8Format fmt) {
     return static_cast<int>(fmt);
 }
 
-// Returns the max finite magnitude used for simple symmetric per-chunk scaling.
 inline float fp8_max_finite(Fp8Format fmt) {
-    return (fmt == Fp8Format::E4M3) ? 448.0f : 57344.0f;
+    switch (fmt) {
+        case Fp8Format::IEEE_E4M3:
+            return 448.0f;
+        case Fp8Format::IEEE_E5M2:
+            return 57344.0f;
+        case Fp8Format::TORCH_E4M3FN:
+            return 448.0f;
+        default:
+            return 448.0f;
+    }
+}
+
+inline const char* fp8_format_name(Fp8Format fmt) {
+    switch (fmt) {
+        case Fp8Format::IEEE_E4M3:    return "IEEE_E4M3";
+        case Fp8Format::IEEE_E5M2:    return "IEEE_E5M2";
+        case Fp8Format::TORCH_E4M3FN: return "TORCH_E4M3FN";
+        default:                      return "UNKNOWN";
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -64,7 +82,7 @@ struct MlpShape {
     int inter_dim = 0;     // expert intermediate size
     int k_chunk = 0;       // reduction chunk processed per iteration
     int rows_per_cta = 0;  // logical output rows handled by one CTA
-    Fp8Format fp8_format = Fp8Format::E4M3;
+    Fp8Format fp8_format = Fp8Format::IEEE_E4M3;
 };
 
 // -----------------------------------------------------------------------------
@@ -76,7 +94,7 @@ struct DefaultConfig {
     static constexpr int inter_dim = 2048;
     static constexpr int k_chunk = 1024;
     static constexpr int rows_per_cta = 8;
-    static constexpr Fp8Format fp8_format = Fp8Format::E4M3;
+    static constexpr Fp8Format fp8_format = Fp8Format::IEEE_E4M3;
 };
 
 struct SmallTestConfig {
@@ -84,7 +102,7 @@ struct SmallTestConfig {
     static constexpr int inter_dim = 131;
     static constexpr int k_chunk = 256;
     static constexpr int rows_per_cta = 4;
-    static constexpr Fp8Format fp8_format = Fp8Format::E4M3;
+    static constexpr Fp8Format fp8_format = Fp8Format::IEEE_E4M3;
 };
 
 // -----------------------------------------------------------------------------
@@ -106,7 +124,7 @@ struct PackedRowMajorMatrix {
     int cols = 0;
     int k_chunk = 0;
     int num_k_chunks = 0;
-    Fp8Format fp8_format = Fp8Format::E4M3;
+    Fp8Format fp8_format = Fp8Format::IEEE_E4M3;
 
     const uint8_t* weights = nullptr; // [rows * cols]
     const float* scales = nullptr;    // [rows * num_k_chunks]
@@ -115,7 +133,7 @@ struct PackedRowMajorMatrix {
 struct PackedRowMajorMatrixHost {
     int rows = 0;
     int cols = 0;
-    Fp8Format fp8_format = Fp8Format::E4M3;
+    Fp8Format fp8_format = Fp8Format::IEEE_E4M3;
     int k_chunk = 0;
     int num_k_chunks = 0;
 
@@ -194,31 +212,6 @@ inline size_t workspace_num_bytes(const MlpShape& shape) {
 // Packed uint8 weights are one byte each.
 inline size_t packed_num_bytes(int rows, int cols) {
     return (size_t)rows * cols * sizeof(uint8_t);
-}
-
-// -----------------------------------------------------------------------------
-// FP8 helpers used by packers / tests
-// -----------------------------------------------------------------------------
-
-inline uint8_t fp32_to_fp8(float x, float scale, Fp8Format fmt) {
-    const float maxv = fp8_max_finite(fmt);
-    const float s = (scale == 0.0f) ? 1.0f : scale;
-    float q = x / s;
-    if (q > maxv) q = maxv;
-    if (q < -maxv) q = -maxv;
-
-    // Simple symmetric byte encoding around zero.
-    // 0x80 corresponds roughly to zero after decode below.
-    int qi = static_cast<int>(lrintf(q));
-    qi = qi + 128;
-    if (qi < 0) qi = 0;
-    if (qi > 255) qi = 255;
-    return static_cast<uint8_t>(qi);
-}
-
-inline float fp8_to_fp32(uint8_t q, float scale, Fp8Format /*fmt*/) {
-    const int qi = static_cast<int>(q) - 128;
-    return static_cast<float>(qi) * scale;
 }
 
 // -----------------------------------------------------------------------------

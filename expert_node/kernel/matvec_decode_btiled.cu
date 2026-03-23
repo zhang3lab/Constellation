@@ -41,7 +41,7 @@ float* g_lut_e5m2_dev = nullptr;
 bool g_luts_uploaded = false;
 
 inline bool valid_fp8_format(Fp8Format fmt) {
-    return fmt == Fp8Format::E4M3 || fmt == Fp8Format::E5M2;
+    return fmt == Fp8Format::IEEE_E4M3 || fmt == Fp8Format::IEEE_E5M2;
 }
 
 float decode_fp8_e4m3_host(uint8_t x) {
@@ -140,7 +140,7 @@ __global__ void matvec_decode_btiled_kernel(
     const int batch_base = blockIdx.y * BATCH_TILE;
     const bool row_valid = (row < M);
 
-    const float* lut_src = (fp8_format == Fp8Format::E5M2) ? lut_e5m2 : lut_e4m3;
+    const float* lut_src = (fp8_format == Fp8Format::IEEE_E5M2) ? lut_e5m2 : lut_e4m3;
     for (int i = tid; i < 256; i += ROWS_PER_CTA * WARP_SIZE) {
         lut_sh[i] = lut_src[i];
     }

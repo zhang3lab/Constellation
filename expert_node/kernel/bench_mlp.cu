@@ -41,14 +41,6 @@ static std::vector<__half> float_to_half_host(const std::vector<float>& x) {
     return y;
 }
 
-static const char* fp8_format_name(Fp8Format fmt) {
-    switch (fmt) {
-        case Fp8Format::E4M3: return "E4M3";
-        case Fp8Format::E5M2: return "E5M2";
-        default: return "UNKNOWN";
-    }
-}
-
 static PackedRowMajorMatrix make_packed_matrix_device(
     int rows, int cols, int k_chunk, Fp8Format fmt)
 {
@@ -235,7 +227,7 @@ int main() {
 
     for (int k_chunk : k_chunks) {
         for (int b : scan_batches) {
-            run_one_case(b, 7168, 2048, k_chunk, Fp8Format::E4M3, warmup, iters);
+            run_one_case(b, 7168, 2048, k_chunk, Fp8Format::IEEE_E4M3, warmup, iters);
         }
     }
 
@@ -243,20 +235,20 @@ int main() {
     const std::vector<int> small_batches = {1, 2, 4, 8, 16, 32};
 
     for (int b : small_batches) {
-        run_one_case(b, 269, 131, 256, Fp8Format::E4M3, warmup, iters);
+        run_one_case(b, 269, 131, 256, Fp8Format::IEEE_E4M3, warmup, iters);
     }
     for (int b : small_batches) {
-        run_one_case(b, 269, 131, 256, Fp8Format::E5M2, warmup, iters);
+        run_one_case(b, 269, 131, 256, Fp8Format::IEEE_E5M2, warmup, iters);
     }
 
     // 3) Large-shape baseline for comparison
     const std::vector<int> large_batches = {1, 2, 4, 8, 16, 32};
 
     for (int b : large_batches) {
-        run_one_case(b, 7168, 2048, 1024, Fp8Format::E4M3, warmup, iters);
+        run_one_case(b, 7168, 2048, 1024, Fp8Format::IEEE_E4M3, warmup, iters);
     }
     for (int b : large_batches) {
-        run_one_case(b, 7168, 2048, 1024, Fp8Format::E5M2, warmup, iters);
+        run_one_case(b, 7168, 2048, 1024, Fp8Format::IEEE_E5M2, warmup, iters);
     }
 
     return 0;

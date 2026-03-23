@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <limits>
 
@@ -68,14 +69,49 @@ struct HostPackedMatrix {
     int cols = 0;
     int k_chunk = 0;
     int num_k_chunks = 0;
-    Fp8Format fmt = Fp8Format::E4M3;
+    Fp8Format fmt = Fp8Format::IEEE_E4M3;
     std::vector<uint8_t> weights;
     std::vector<float> scales;
 };
 
+static uint8_t quantize_ieee_e4m3_ref(float x_scaled) {
+    float best_err = std::numeric_limits<float>::infinity();
+    uint8_t best_q = 0;
+    for (int q = 0; q < 256; ++q) {
+        const float v = decode_fp8_e4m3_host(static_cast<uint8_t>(q));
+        if (!std::isfinite(v)) continue;
+        const float err = std::fabs(v - x_scaled);
+        if (err < best_err) {
+            best_err = err;
+            best_q = static_cast<uint8_t>(q);
+        }
+    }
+    return best_q;
+}
+
+static uint8_t quantize_ieee_e5m2_ref(float x_scaled) {
+    float best_err = std::numeric_limits<float>::infinity();
+    uint8_t best_q = 0;
+    for (int q = 0; q < 256; ++q) {
+        const float v = decode_fp8_e5m2_host(static_cast<uint8_t>(q));
+        if (!std::isfinite(v)) continue;
+        const float err = std::fabs(v - x_scaled);
+        if (err < best_err) {
+            best_err = err;
+            best_q = static_cast<uint8_t>(q);
+        }
+    }
+    return best_q;
+}
+
 static HostPackedMatrix pack_fp8_rowmajor_ref(const std::vector<float>& w,
                                               int rows, int cols, int k_chunk,
                                               Fp8Format fmt) {
+    if (fmt == Fp8Format::TORCH_E4M3FN) {
+        std::fprintf(stderr, "pack_fp8_rowmajor_ref does not support TORCH_E4M3FN\n");
+        std::exit(1);
+    }
+
     HostPackedMatrix out;
     out.rows = rows;
     out.cols = cols;
@@ -89,16 +125,35 @@ static HostPackedMatrix pack_fp8_rowmajor_ref(const std::vector<float>& w,
         for (int chunk = 0; chunk < out.num_k_chunks; ++chunk) {
             const int k0 = chunk * k_chunk;
             const int k1 = std::min(cols, k0 + k_chunk);
+
             float amax = 0.f;
             for (int c = k0; c < k1; ++c) {
                 amax = std::max(amax, std::fabs(w[(size_t)r * cols + c]));
             }
-            const float scale = (amax == 0.0f) ? 1.0f : (amax / fp8_max_finite(fmt));
+
+            const float scale =
+                (amax == 0.0f) ? 1.0f : (amax / fp8_max_finite(fmt));
             out.scales[(size_t)r * out.num_k_chunks + chunk] = scale;
 
             for (int c = k0; c < k1; ++c) {
                 const float x = w[(size_t)r * cols + c];
-                out.weights[(size_t)r * cols + c] = fp32_to_fp8(x, scale, fmt);
+                const float x_scaled = x / scale;
+
+                uint8_t q = 0;
+                switch (fmt) {
+                    case Fp8Format::IEEE_E4M3:
+                        q = quantize_ieee_e4m3_ref(x_scaled);
+                        break;
+                    case Fp8Format::IEEE_E5M2:
+                        q = quantize_ieee_e5m2_ref(x_scaled);
+                        break;
+                    case Fp8Format::TORCH_E4M3FN:
+                        // already rejected above
+                        std::fprintf(stderr, "unexpected TORCH_E4M3FN in pack_fp8_rowmajor_ref\n");
+                        std::exit(1);
+                }
+
+                out.weights[(size_t)r * cols + c] = q;
             }
         }
     }
@@ -190,7 +245,7 @@ static std::vector<float> rand_uniform(size_t n, float lo, float hi, uint32_t se
 
 static bool run_case(int B, int hidden, int inter, int k_chunk, Fp8Format fmt) {
     std::printf("\n=== correctness batch=%d hidden=%d inter=%d k_chunk=%d fmt=%s ===\n",
-                B, hidden, inter, k_chunk, (fmt == Fp8Format::E4M3 ? "E4M3" : "E5M2"));
+                B, hidden, inter, k_chunk, fp8_format_name(fmt));
 
     MlpShape shape{};
     shape.num_tokens = B;
@@ -333,16 +388,16 @@ int main() {
     // Use supported k_chunk values only.
     // Small odd shapes still exercise tails; packed k_chunk stays legal.
     bool ok = true;
-    ok &= run_case(1, 269, 131, 256, Fp8Format::E4M3);
-    ok &= run_case(2, 269, 131, 256, Fp8Format::E4M3);
-    ok &= run_case(4, 269, 131, 256, Fp8Format::E4M3);
+    ok &= run_case(1, 269, 131, 256, Fp8Format::IEEE_E4M3);
+    ok &= run_case(2, 269, 131, 256, Fp8Format::IEEE_E4M3);
+    ok &= run_case(4, 269, 131, 256, Fp8Format::IEEE_E4M3);
 
-    ok &= run_case(1, 269, 131, 256, Fp8Format::E5M2);
-    ok &= run_case(2, 269, 131, 256, Fp8Format::E5M2);
-    ok &= run_case(4, 269, 131, 256, Fp8Format::E5M2);
+    ok &= run_case(1, 269, 131, 256, Fp8Format::IEEE_E5M2);
+    ok &= run_case(2, 269, 131, 256, Fp8Format::IEEE_E5M2);
+    ok &= run_case(4, 269, 131, 256, Fp8Format::IEEE_E5M2);
 
     // One real-shape sanity point with the current tuned path.
-    ok &= run_case(4, 7168, 2048, 1024, Fp8Format::E4M3);
+    ok &= run_case(4, 7168, 2048, 1024, Fp8Format::IEEE_E4M3);
 
     if (!ok) {
         std::fprintf(stderr, "\nTEST FAILED\n");
