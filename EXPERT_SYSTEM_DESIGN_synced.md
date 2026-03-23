@@ -247,19 +247,23 @@ For DeepSeek-V3.1, the server currently:
 The expert node currently:
 - receives chunked tensor bytes
 - assembles them into a host-side buffer
-- uploads each tensor to the target GPU with `cudaMalloc + cudaMemcpy`
-- stores both host and device copies in residency state
-- marks an expert ready only after `w_up`, `w_gate`, and `w_down` are all present on host and device
-- registers the resulting expert in the runtime
+- preserves the original `torch.float8_e4m3fn` weight bytes from the model shards
+- builds resident packed matrices whose `weights` buffer is the raw model byte stream, whose `scales` are currently all `1.0f`, and whose `fp8_format` is explicitly marked as `TORCH_E4M3FN`
+- uploads the resident weight representation to the target GPU
+- marks an expert ready only after `w_up`, `w_gate`, and `w_down` are all present and a consolidated `LoadedExpert` has been registered in runtime
 
-### Later packing step
-The document still intends to move toward local packing and kernel-specific layout conversion on the node side.
+### Current format bridge
+The current working path no longer repacks DeepSeek expert weights into the older IEEE-like test FP8 format.
 
-That step is **not** yet the current loading path. The current working path is:
-- server resolves and reads real tensor bytes
-- node receives and stores them
-- node uploads raw tensor bytes to device memory
-- runtime exposes the loaded expert through a stable device-weight view
+Instead, the working production path is:
+- server resolves and reads real `torch.float8_e4m3fn` tensor bytes
+- node receives and stores the raw bytes
+- node constructs resident matrices tagged as `TORCH_E4M3FN`
+- node sets per-chunk scales to `1.0f`
+- CUDA decode uses a dedicated `TORCH_E4M3FN` LUT path in `matvec_decode_btiled.cu`
+- runtime inference consumes that resident format directly
+
+The older `IEEE_E4M3` and `IEEE_E5M2` paths are still kept for synthetic tests and kernel self-checks.
 
 ---
 
@@ -297,16 +301,17 @@ As of the current implementation, the following path is already working end to e
 3. server computes a concrete placement for experts
 4. server sends `PlacementPlan` and nodes materialize expert residency tables
 5. server resolves DeepSeek expert tensors from `model.safetensors.index.json`
-6. server reads real FP8 tensors from `.safetensors` shards
+6. server reads real `torch.float8_e4m3fn` tensors from `.safetensors` shards
 7. server streams tensor bytes using `LoadWeightsBegin / Chunk / End`
-8. node assembles host buffers and uploads them to the assigned GPU
-9. node stores host tensors, device tensors, and a consolidated `DeviceExpertWeights` view
-10. node marks an expert ready only after `w_up`, `w_gate`, and `w_down` are all resident
-11. node registers the expert in `ExpertRuntime`
-12. server sends an `InferRequest` carrying a fake activation payload
-13. node uploads activation bytes, looks up the loaded expert in runtime, executes a runtime stub, and returns a fake `InferResponse`
+8. node assembles host buffers and constructs resident matrices tagged as `TORCH_E4M3FN`
+9. node uploads resident weights to the assigned GPU and registers the expert in `ExpertRuntime`
+10. server sends a real `InferRequest` carrying float32 activation bytes
+11. node converts activations to half, looks up the resident expert, and runs the real CUDA MLP path
+12. node returns a real `InferResponse` containing half-precision output bytes
+13. Python validation code decodes the output and compares it against a PyTorch reference built from the same expert weights
+14. repeated inference on the same expert and input is bitwise stable across multiple runs
 
-This means the current system already has a working control plane, loading path, runtime registry, and first execution protocol.
+This means the current system already has a working control plane, real loading path, runtime registry, real CUDA execution path, and correctness/stability validation for single-token expert inference.
 
 ---
 
@@ -332,7 +337,7 @@ This means the current system already has a working control plane, loading path,
 ### Expert instance states
 - `EMPTY`
 - `ASSIGNED`
-- `PACKING`
+- `MATERIALIZING`
 - `UPLOADING`
 - `READY`
 - `FAILED`
@@ -406,7 +411,7 @@ This is enough to get Python server and C++ expert nodes talking.
 - `InferRequest`
 - `InferResponse`
 
-The current implementation is still using the node control port for both loading and the first execution stub. A separate worker-port execution path remains a later cleanup / scale-out step.
+The current implementation is still using the node control port for both loading and the validated first execution path. A separate worker-port execution path remains a later cleanup / scale-out step.
 
 ---
 
@@ -480,16 +485,28 @@ Current success condition already achieved:
 - node assembles host bytes and uploads them to the assigned GPU
 
 ### Step 5: single-expert inference
-Implemented as an execution stub.
+Implemented with the real CUDA expert path.
 
 Current success condition already achieved:
 - server sends `InferRequest` with a real activation payload
-- node uploads activation bytes to the correct GPU
-- runtime looks up the loaded expert and runs a stub execution path
-- node returns `InferResponse` with a fake output payload of the correct shape
+- node uploads activation bytes to the correct GPU and converts them to half
+- runtime looks up the loaded expert and runs the real CUDA MLP path
+- node returns a real `InferResponse` containing half output bytes
+- Python-side validation compares the response against a PyTorch reference built from the same DeepSeek expert weights
 
-### Step 6: near-term next step
-Replace the execution stub with a real CUDA expert call while preserving the same runtime lookup path and wire protocol.
+### Step 6: validation status
+Current validation already achieved:
+- multiple experts have been loaded from real DeepSeek-V3.1 shards and matched against PyTorch reference outputs
+- the server-side single-token path is numerically close to reference (`cos` essentially 1, `max_abs` around `1e-3` after fp16 output rounding)
+- repeated inference on the same expert and input is bitwise stable across multiple runs
+
+### Step 7: near-term next step
+Keep the validated server-side single-token path stable, and move batching and higher-level scheduling work to the expert-side execution path.
+
+A useful practical baseline now exists for regression testing:
+- multi-expert single-token correctness against PyTorch reference
+- repeated-call bitwise stability on representative experts
+- cross-node placement where different experts can reside on different GPU types
 
 ---
 
@@ -509,7 +526,7 @@ Even the first version should log clearly.
 - GPU worker startup
 - incoming placement
 - weight chunk receive progress
-- pack/upload completion
+- resident-materialization / upload completion
 - expert ready
 - inference request start/end
 - error details
@@ -520,7 +537,7 @@ Readable logs will save a lot of time.
 
 ## CUDA Notes Integration
 
-The current CUDA path already works and should be treated as a stable subsystem for now.
+The current CUDA path already works for validated single-token expert inference and should be treated as a stable subsystem for now.
 
 Important constraints already known:
 - use the new `expert.h`
@@ -556,7 +573,7 @@ The system only needs to be “clean enough” and “working enough” to suppo
 
 ## One-Sentence Summary
 
-The system consists of a Python control-plane server and C++/CUDA expert nodes. The server discovers all node inventories, computes memory-aware global expert placement, resolves real DeepSeek expert tensors from sharded safetensors, streams them to the assigned nodes, the nodes assemble and upload those tensors to the correct GPUs, register ready experts in a runtime table, and then accept `InferRequest` messages carrying activation payloads that are executed through a runtime stub and returned as `InferResponse`.
+The system consists of a Python control-plane server and C++/CUDA expert nodes. The server discovers all node inventories, computes memory-aware global expert placement, resolves real DeepSeek expert tensors from sharded safetensors, streams raw `torch.float8_e4m3fn` expert bytes to the assigned nodes, the nodes materialize resident `TORCH_E4M3FN` weight views on the correct GPUs, register ready experts in a runtime table, and then accept `InferRequest` messages carrying activation payloads that are executed through the validated CUDA expert path and returned as `InferResponse`.
 
 ---
 
@@ -564,6 +581,7 @@ The system consists of a Python control-plane server and C++/CUDA expert nodes. 
 
 The next practical steps are:
 
-1. replace `execute_expert_stub_with_activation(...)` with a real CUDA expert invocation
-2. keep `InferRequest / InferResponse` unchanged while swapping the fake output for a real output buffer
-3. move from single-expert testing to multiple loaded experts and real routing decisions
+1. keep the validated server-side single-token path as a regression-tested baseline
+2. move batching into the expert-side execution path rather than the Python server
+3. connect higher-level routing / scheduling logic to multiple already-loaded experts
+4. only revisit resident weight format work if a later performance pass shows the direct `TORCH_E4M3FN` path is insufficient
