@@ -337,16 +337,46 @@ bool BuildPackedHostMatrixFromHostTensor(
     int cols,
     PackedRowMajorMatrixHost* out) {
     if (out == nullptr) return false;
-    if (ht.bytes.size() != static_cast<size_t>(rows) * cols) return false;
+    if (rows <= 0 || cols <= 0) return false;
 
-    return pack_row_major_fp8_from_fp8_bytes(
-        reinterpret_cast<const uint8_t*>(ht.bytes.data()),
-        rows,
-        cols,
-        DefaultConfig::k_chunk,
-        Fp8Format::E4M3,
-        DefaultConfig::fp8_format,
-        out);
+    const size_t weight_bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols);
+    if (ht.bytes.size() != weight_bytes) {
+        std::fprintf(stderr,
+                     "[loader] host tensor size mismatch: got=%zu expected=%zu\n",
+                     ht.bytes.size(),
+                     weight_bytes);
+        return false;
+    }
+
+    out->rows = rows;
+    out->cols = cols;
+    out->fp8_format = DefaultConfig::fp8_format;
+    out->k_chunk = DefaultConfig::k_chunk;
+    out->num_k_chunks = ceil_div_int(cols, out->k_chunk);
+    out->weights = nullptr;
+    out->scales = nullptr;
+
+    const size_t w_bytes = packed_weights_bytes(rows, cols);
+    const size_t s_elems =
+        static_cast<size_t>(rows) * static_cast<size_t>(out->num_k_chunks);
+    const size_t s_bytes = s_elems * sizeof(float);
+
+    out->weights = static_cast<uint8_t*>(std::malloc(w_bytes));
+    out->scales = static_cast<float*>(std::malloc(s_bytes));
+    if (!out->weights || !out->scales) {
+        if (out->weights) std::free(out->weights);
+        if (out->scales) std::free(out->scales);
+        out->weights = nullptr;
+        out->scales = nullptr;
+        return false;
+    }
+
+    std::memcpy(out->weights, ht.bytes.data(), w_bytes);
+    for (size_t i = 0; i < s_elems; ++i) {
+        out->scales[i] = 1.0f;
+    }
+
+    return true;
 }
 
 bool BuildLoadedExpertFromResidency(
