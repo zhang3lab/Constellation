@@ -30,6 +30,47 @@ def _compare(name, ref, got):
     )
 
 
+def _compare_two_outputs(name, a, b):
+    a = np.asarray(a, dtype=np.float32).reshape(-1)
+    b = np.asarray(b, dtype=np.float32).reshape(-1)
+
+    diff = np.abs(a - b)
+    max_abs = float(diff.max())
+    mean_abs = float(diff.mean())
+    exact = bool(np.array_equal(a, b))
+    cos = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
+
+    print(
+        f"[stability] {name}: "
+        f"exact={exact} "
+        f"max_abs={max_abs:.6e} "
+        f"mean_abs={mean_abs:.6e} "
+        f"cos={cos:.8f}"
+    )
+
+
+def _infer_once(client, expert_id: int, x: np.ndarray, hidden_dim: int):
+    resp = client.send_infer_request(
+        {
+            "expert_id": expert_id,
+            "batch_size": 1,
+            "hidden_dim": hidden_dim,
+            "activation": x.tobytes(),
+        }
+    )
+
+    if resp["status_code"] != 0:
+        raise RuntimeError(
+            f"infer failed: status={resp['status_code']} "
+            f"output_bytes={len(resp['output'])}"
+        )
+
+    y = np.frombuffer(resp["output"], dtype=np.float16).astype(np.float32)
+    if y.size != hidden_dim:
+        raise RuntimeError(f"unexpected output size: got {y.size}, expected {hidden_dim}")
+    return y
+
+
 def _stats(name, t):
     if isinstance(t, torch.Tensor):
         a = t.detach().cpu().float()
@@ -198,3 +239,45 @@ def run_multi_expert_correctness_test(coord, cfg, expert_ids):
         print("\n" + "=" * 80)
         print(f"[correctness] testing expert_id={expert_id}")
         run_one_expert_correctness_test(coord, cfg, expert_id)
+
+
+def run_one_expert_stability_test(coord, cfg, expert_id: int, repeats: int = 10):
+    model = cfg["model"]
+    test_load = cfg["test_load"]
+
+    layer_id = int(test_load["layer_id"])
+    model_root = str(model["root"])
+    chunk_size = int(model["chunk_size"])
+
+    def tensor_loader(eid: int, tensor_kind_name: str):
+        return resolve_and_load_deepseek_tensor(
+            model_root=model_root,
+            layer_id=layer_id,
+            expert_id=eid,
+            tensor_kind=tensor_kind_name,
+        )
+
+    coord.send_one_expert_triplet(
+        expert_id=expert_id,
+        tensor_loader=tensor_loader,
+        chunk_size=chunk_size,
+    )
+
+    hidden_dim = 7168
+    x = _make_safe_test_input(hidden_dim)
+    target = _find_target_placement(coord, expert_id)
+
+    outputs = []
+    client = NodeClient(target["host"], target["control_port"])
+    with client:
+        for i in range(repeats):
+            y = _infer_once(client, expert_id, x, hidden_dim)
+            outputs.append(y)
+            print(
+                f"[stability] expert={expert_id} iter={i} "
+                f"min={y.min():.6e} max={y.max():.6e} mean={y.mean():.6e}"
+            )
+
+    ref = outputs[0]
+    for i in range(1, repeats):
+        _compare_two_outputs(f"expert={expert_id} run0_vs_run{i}", ref, outputs[i])

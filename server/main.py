@@ -46,6 +46,7 @@ def main():
     )
 
     run_multi_expert_correctness_test(coord, cfg, expert_ids=[0, 1, 2])
+    run_one_expert_stability_test(coord, cfg, expert_id=0, repeats=10)
 
 
 if __name__ == "__main__":
