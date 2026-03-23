@@ -42,6 +42,12 @@ inline int fp8_format_to_int(Fp8Format fmt) {
     return static_cast<int>(fmt);
 }
 
+inline bool valid_fp8_format(Fp8Format fmt) {
+    return fmt == Fp8Format::IEEE_E4M3 ||
+           fmt == Fp8Format::IEEE_E5M2 ||
+           fmt == Fp8Format::TORCH_E4M3FN;
+}
+
 inline float fp8_max_finite(Fp8Format fmt) {
     switch (fmt) {
         case Fp8Format::IEEE_E4M3:

@@ -42,12 +42,6 @@ float* g_lut_ieee_e5m2_dev = nullptr;
 float* g_lut_torch_e4m3fn_dev = nullptr;
 bool g_luts_uploaded = false;
 
-inline bool valid_fp8_format(Fp8Format fmt) {
-    return fmt == Fp8Format::IEEE_E4M3 ||
-           fmt == Fp8Format::IEEE_E5M2 ||
-           fmt == Fp8Format::TORCH_E4M3FN;
-}
-
 float decode_fp8_e4m3_host(uint8_t x) {
     const int sign = (x >> 7) & 0x1;
     const int exp  = (x >> 3) & 0xF;
