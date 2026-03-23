@@ -4,7 +4,7 @@ from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
 from server.model_locator import resolve_and_load_deepseek_tensor
-from server.test_single_expert_correctness import run_multi_expert_correctness_test
+from server.test_single_expert_correctness import run_multi_expert_correctness_test, run_one_expert_stability_test
 
 
 def main():
