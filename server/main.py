@@ -4,6 +4,7 @@ from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
 from server.model_locator import resolve_and_load_deepseek_tensor
+from server.test_single_expert_correctness import run_single_expert_correctness_test
 
 
 def main():
@@ -44,38 +45,7 @@ def main():
         chunk_size=chunk_size,
     )
 
-    batch_size = 4
-    hidden_dim = 7168
-    activation = struct.pack(
-        "<" + "f" * (batch_size * hidden_dim),
-        *([0.0] * (batch_size * hidden_dim)),
-    )
-
-    target = None
-    for p in coord.placements:
-        if p["expert_id"] == expert_id:
-            target = p
-            break
-
-    if target is None:
-        raise RuntimeError(f"expert {expert_id} not found in placements")
-
-    client = NodeClient(target["host"], target["control_port"])
-    with client:
-        resp = client.send_infer_request(
-            {
-                "expert_id": expert_id,
-                "batch_size": batch_size,
-                "hidden_dim": hidden_dim,
-                "activation": activation,
-            }
-        )
-
-    print(
-        f"infer response: status={resp['status_code']} "
-        f"batch={resp['batch_size']} hidden={resp['hidden_dim']} "
-        f"output_bytes={len(resp['output'])}"
-    )
+    run_single_expert_correctness_test(coord, cfg)
 
 
 if __name__ == "__main__":
