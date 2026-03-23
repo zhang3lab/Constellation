@@ -1032,7 +1032,7 @@ bool HandleInferRequest(
     shape.inter_dim = DefaultConfig::inter_dim;
     shape.k_chunk = DefaultConfig::k_chunk;
     shape.rows_per_cta = DefaultConfig::rows_per_cta;
-    shape.fp8_format = DefaultConfig::fp8_format;
+    shape.fp8_format = expert->mlp.w_up.fp8_format;
 
     if (msg.hidden_dim != shape.hidden_dim) {
         std::fprintf(stderr,
