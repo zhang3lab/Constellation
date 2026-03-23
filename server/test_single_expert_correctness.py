@@ -3,7 +3,10 @@ import torch
 import torch.nn.functional as F
 
 from server.client import NodeClient
-from server.model_locator import resolve_deepseek_tensor_file
+from server.model_locator import (
+    resolve_deepseek_tensor_file,
+    resolve_and_load_deepseek_tensor,
+)
 from safetensors import safe_open
 
 
@@ -110,15 +113,12 @@ def run_one_expert_correctness_test(coord, cfg, expert_id: int):
     chunk_size = int(model["chunk_size"])
 
     def tensor_loader(eid: int, tensor_kind_name: str):
-        tensor_name, shard_path = resolve_deepseek_tensor_file(
+        return resolve_and_load_deepseek_tensor(
             model_root=model_root,
             layer_id=layer_id,
             expert_id=eid,
             tensor_kind=tensor_kind_name,
         )
-        with safe_open(shard_path, framework="pt", device="cpu") as f:
-            t = f.get_tensor(tensor_name)
-        return tensor_name, shard_path, t.numpy().tobytes(), tuple(t.shape), str(t.dtype)
 
     coord.send_one_expert_triplet(
         expert_id=expert_id,
