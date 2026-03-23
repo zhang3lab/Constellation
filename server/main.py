@@ -4,7 +4,7 @@ from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
 from server.model_locator import resolve_and_load_deepseek_tensor
-from server.test_single_expert_correctness import run_single_expert_correctness_test
+from server.test_single_expert_correctness import run_multi_expert_correctness_test
 
 
 def main():
@@ -45,7 +45,7 @@ def main():
         chunk_size=chunk_size,
     )
 
-    run_single_expert_correctness_test(coord, cfg)
+    run_multi_expert_correctness_test(coord, cfg, expert_ids=[0, 1, 2])
 
 
 if __name__ == "__main__":
