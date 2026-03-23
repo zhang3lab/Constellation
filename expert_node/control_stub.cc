@@ -339,7 +339,8 @@ bool BuildPackedHostMatrixFromHostTensor(
     if (out == nullptr) return false;
     if (rows <= 0 || cols <= 0) return false;
 
-    const size_t weight_bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols);
+    const size_t weight_bytes =
+        static_cast<size_t>(rows) * static_cast<size_t>(cols);
     if (ht.bytes.size() != weight_bytes) {
         std::fprintf(stderr,
                      "[loader] host tensor size mismatch: got=%zu expected=%zu\n",
@@ -350,7 +351,7 @@ bool BuildPackedHostMatrixFromHostTensor(
 
     out->rows = rows;
     out->cols = cols;
-    out->fp8_format = DefaultConfig::fp8_format;
+    out->fp8_format = Fp8Format::TORCH_E4M3FN;
     out->k_chunk = DefaultConfig::k_chunk;
     out->num_k_chunks = ceil_div_int(cols, out->k_chunk);
     out->weights = nullptr;
@@ -375,6 +376,15 @@ bool BuildPackedHostMatrixFromHostTensor(
     for (size_t i = 0; i < s_elems; ++i) {
         out->scales[i] = 1.0f;
     }
+
+    std::printf("[loader] packed rows=%d cols=%d k_chunk=%d num_k_chunks=%d fmt=%d\n",
+                out->rows, out->cols, out->k_chunk, out->num_k_chunks,
+                fp8_format_to_int(out->fp8_format));
+    std::printf("[loader] first weight bytes = %u %u %u %u\n",
+                static_cast<unsigned>(out->weights[0]),
+                static_cast<unsigned>(out->weights[1]),
+                static_cast<unsigned>(out->weights[2]),
+                static_cast<unsigned>(out->weights[3]));
 
     return true;
 }
