@@ -97,7 +97,7 @@ bool validate_matrix(
                      name, W.num_k_chunks, W.cols, W.k_chunk);
         return false;
     }
-    if (W.fp8_format != Fp8Format::IEEE_E4M3 && W.fp8_format != Fp8Format::IEEE_E5M2) {
+    if (!valid_fp8_format(W.fp8_format)) {
         std::fprintf(stderr,
                      "%s has invalid fp8_format=%d\n",
                      name,
