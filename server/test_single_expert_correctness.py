@@ -7,6 +7,15 @@ from server.client import NodeClient
 from server.model_locator import resolve_deepseek_tensor_file
 
 
+def _make_safe_test_input(hidden_dim: int):
+    x = np.zeros(hidden_dim, dtype=np.float32)
+    x[0] = 1e-4
+    x[7] = -2e-4
+    x[19] = 5e-5
+    x[123] = -1e-4
+    return x
+
+
 def _compare(name, ref, got):
     ref = np.asarray(ref, dtype=np.float32).reshape(-1)
     got = np.asarray(got, dtype=np.float32).reshape(-1)
@@ -111,7 +120,7 @@ def run_single_expert_correctness_test(coord, cfg):
     hidden_dim = 7168
 
     rng = np.random.default_rng(0)
-    x = (rng.standard_normal(hidden_dim).astype(np.float32) * 0.1)
+    x = _make_safe_test_input(hidden_dim)
 
     target = _find_target_placement(coord, expert_id)
 
