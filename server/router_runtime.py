@@ -110,6 +110,7 @@ def route_token_real(
     topk_method: str,
     n_routed_experts: int,
     hidden_size: int,
+    resident_expert_ids=None,
 ):
     if scoring_func != "sigmoid":
         raise RuntimeError(f"unsupported scoring_func={scoring_func}")
@@ -157,6 +158,19 @@ def route_token_real(
 
     scores_for_choice = scores + e_score_correction_bias
 
+    if resident_expert_ids is not None:
+        resident_mask = torch.zeros(num_experts, dtype=torch.bool)
+        for eid in resident_expert_ids:
+            eid = int(eid)
+            if 0 <= eid < num_experts:
+                resident_mask[eid] = True
+
+        if int(resident_mask.sum().item()) == 0:
+            raise RuntimeError("resident_expert_ids produced an empty resident mask")
+
+    scores_for_choice = scores_for_choice.masked_fill(~resident_mask, float("-inf"))
+    scores = scores.masked_fill(~resident_mask, 0.0)
+
     grouped = scores_for_choice.view(n_group, experts_per_group)
     top2_per_group = torch.topk(grouped, k=2, dim=-1).values
     group_scores = top2_per_group.sum(dim=-1)
@@ -198,6 +212,7 @@ def route_token_real(
 def run_one_token_moe_real_router(session, hidden: np.ndarray, layer_id: int):
     router_cfg = get_router_config(session)
     gate_weight, e_score_correction_bias = get_router_tensors(session, layer_id)
+    resident_expert_ids = sorted({int(p["expert_id"]) for p in session.coord.placements})
 
     routes, aux = route_token_real(
         hidden,
@@ -212,6 +227,7 @@ def run_one_token_moe_real_router(session, hidden: np.ndarray, layer_id: int):
         topk_method=str(router_cfg["topk_method"]),
         n_routed_experts=int(router_cfg["n_routed_experts"]),
         hidden_size=int(router_cfg["hidden_size"]),
+        resident_expert_ids=resident_expert_ids,
     )
 
     combined, weighted_outputs = run_topk_moe_layer(session, hidden, routes)
