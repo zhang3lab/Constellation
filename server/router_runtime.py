@@ -115,10 +115,6 @@ def route_token_real(
         raise RuntimeError(f"unsupported scoring_func={scoring_func}")
     if topk_method != "noaux_tc":
         raise RuntimeError(f"unsupported topk_method={topk_method}")
-    if topk_group <= 0 or topk_group > n_group:
-        raise RuntimeError(f"invalid topk_group={topk_group} for n_group={n_group}")
-    if top_k <= 0 or top_k > num_experts:
-        raise RuntimeError(f"invalid top_k={top_k} for num_experts={num_experts}")
 
     h = torch.from_numpy(hidden.astype(np.float32))
 
@@ -130,6 +126,10 @@ def route_token_real(
         )
 
     num_experts, gate_hidden = gate_weight.shape
+    if topk_group <= 0 or topk_group > n_group:
+        raise RuntimeError(f"invalid topk_group={topk_group} for n_group={n_group}")
+    if top_k <= 0 or top_k > num_experts:
+        raise RuntimeError(f"invalid top_k={top_k} for num_experts={num_experts}")
     if num_experts != n_routed_experts:
         raise RuntimeError(
             f"gate_weight shape {tuple(gate_weight.shape)} inconsistent with n_routed_experts={n_routed_experts}"
