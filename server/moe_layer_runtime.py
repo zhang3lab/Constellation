@@ -114,6 +114,49 @@ def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tens
     return t
 
 
+def validate_routes(routes):
+    if not routes:
+        raise RuntimeError("routes is empty")
+
+    seen = set()
+    for expert_id, weight in routes:
+        expert_id = int(expert_id)
+        weight = float(weight)
+
+        if expert_id in seen:
+            raise RuntimeError(f"duplicate expert_id in routes: {expert_id}")
+        seen.add(expert_id)
+
+        if weight < 0:
+            raise RuntimeError(f"negative route weight for expert {expert_id}: {weight}")
+
+
+def normalize_routes(routes):
+    validate_routes(routes)
+
+    total = float(sum(float(w) for _, w in routes))
+    if total == 0.0:
+        raise RuntimeError("route weights sum to zero")
+
+    return [(int(eid), float(w) / total) for eid, w in routes]
+
+
+def dispatch_topk_experts(session, hidden: np.ndarray, routes):
+    routes = normalize_routes(routes)
+
+    weighted_outputs = []
+    for expert_id, weight in routes:
+        y = infer_one_expert(session, expert_id, hidden)
+        weighted_outputs.append((expert_id, weight, y))
+    return weighted_outputs
+
+
+def run_topk_moe_layer(session, hidden: np.ndarray, routes):
+    weighted_outputs = dispatch_topk_experts(session, hidden, routes)
+    combined = combine_outputs(weighted_outputs)
+    return combined, weighted_outputs
+
+
 def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
     cfg = session.cfg
     model = cfg["model"]
@@ -138,10 +181,6 @@ def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
     return y_ref
 
 
-def route_token_top8_uniform():
-    return [(eid, 1.0 / 8.0) for eid in range(8)]
-
-
 def combine_outputs(weighted_outputs):
     if not weighted_outputs:
         raise RuntimeError("weighted_outputs is empty")
@@ -154,13 +193,8 @@ def combine_outputs(weighted_outputs):
     return combined
 
 
-def run_top8_runtime(session, routes, hidden: np.ndarray):
-    weighted_outputs = []
-    for expert_id, weight in routes:
-        y = infer_one_expert(session, expert_id, hidden)
-        weighted_outputs.append((expert_id, weight, y))
-    combined = combine_outputs(weighted_outputs)
-    return combined, weighted_outputs
+def route_token_top8_uniform():
+    return [(eid, 1.0 / 8.0) for eid in range(8)]
 
 
 def run_top8_reference(session, routes, hidden: np.ndarray):
@@ -179,7 +213,7 @@ def run_top8_reference_compare_test(session):
     routes = route_token_top8_uniform()
     print(f"[top8] routes={routes}")
 
-    combined_srv, outputs_srv = run_top8_runtime(session, routes, x)
+    combined_srv, outputs_srv = run_topk_moe_layer(session, x, routes)
     combined_ref, outputs_ref = run_top8_reference(session, routes, x)
 
     _stats("combined_srv", combined_srv)
