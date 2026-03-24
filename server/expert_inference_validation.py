@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from server.client import NodeClient
 from server.model_locator import (
     resolve_deepseek_tensor_file,
     resolve_and_load_deepseek_tensor,
@@ -111,6 +110,21 @@ def _find_target_placement(coord, expert_id: int):
     raise RuntimeError(f"expert {expert_id} not found in placements")
 
 
+def _infer_with_session_pool(session, expert_id: int, x: np.ndarray, hidden_dim: int):
+    target = _find_target_placement(session.coord, expert_id)
+    host = target["host"]
+    port = target["control_port"]
+
+    pool = session.client_pool
+
+    try:
+        client = pool.get(host, port)
+        return _infer_once(client, expert_id, x, hidden_dim)
+    except Exception:
+        pool.invalidate(host, port)
+        raise
+
+
 def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tensor_kind: str):
     tensor_name, shard_path = resolve_deepseek_tensor_file(
         model_root=model_root,
@@ -145,7 +159,9 @@ def _make_safe_test_input(hidden_dim: int):
     return x
 
 
-def run_one_expert_correctness_test(coord, cfg, expert_id: int):
+def run_one_expert_correctness_test(session, expert_id: int):
+    coord = session.coord
+    cfg = session.cfg
     model = cfg["model"]
     test_load = cfg["test_load"]
 
@@ -171,28 +187,13 @@ def run_one_expert_correctness_test(coord, cfg, expert_id: int):
     hidden_dim = 7168
     x = _make_safe_test_input(hidden_dim)
 
-    target = _find_target_placement(coord, expert_id)
-
-    client = NodeClient(target["host"], target["control_port"])
-    with client:
-        resp = client.send_infer_request(
-            {
-                "expert_id": expert_id,
-                "batch_size": batch_size,
-                "hidden_dim": hidden_dim,
-                "activation": x.tobytes(),
-            }
-        )
+    y_srv = _infer_with_session_pool(session, expert_id, x, hidden_dim)
 
     print(
         f"[correctness] infer response: "
-        f"status={resp['status_code']} "
-        f"batch={resp['batch_size']} "
-        f"hidden={resp['hidden_dim']} "
-        f"output_bytes={len(resp['output'])}"
+        f"status=0 batch={batch_size} hidden={hidden_dim} "
+        f"output_bytes={y_srv.size * 2}"
     )
-
-    y_srv = np.frombuffer(resp["output"], dtype=np.float16).astype(np.float32)
     if y_srv.size != hidden_dim:
         raise RuntimeError(f"unexpected output size: got {y_srv.size}, expected {hidden_dim}")
 
@@ -234,14 +235,16 @@ def run_one_expert_correctness_test(coord, cfg, expert_id: int):
 
     _compare("output", y_ref_cmp, y_srv)
 
-def run_multi_expert_correctness_test(coord, cfg, expert_ids):
+def run_multi_expert_correctness_test(session, expert_ids):
     for expert_id in expert_ids:
         print("\n" + "=" * 80)
         print(f"[correctness] testing expert_id={expert_id}")
-        run_one_expert_correctness_test(coord, cfg, expert_id)
+        run_one_expert_correctness_test(session, expert_id)
 
 
-def run_one_expert_stability_test(coord, cfg, expert_id: int, repeats: int = 10):
+def run_one_expert_stability_test(session, expert_id: int, repeats: int = 10):
+    coord = session.coord
+    cfg = session.cfg
     model = cfg["model"]
     test_load = cfg["test_load"]
 
@@ -265,18 +268,15 @@ def run_one_expert_stability_test(coord, cfg, expert_id: int, repeats: int = 10)
 
     hidden_dim = 7168
     x = _make_safe_test_input(hidden_dim)
-    target = _find_target_placement(coord, expert_id)
 
     outputs = []
-    client = NodeClient(target["host"], target["control_port"])
-    with client:
-        for i in range(repeats):
-            y = _infer_once(client, expert_id, x, hidden_dim)
-            outputs.append(y)
-            print(
-                f"[stability] expert={expert_id} iter={i} "
-                f"min={y.min():.6e} max={y.max():.6e} mean={y.mean():.6e}"
-            )
+    for i in range(repeats):
+        y = _infer_with_session_pool(session, expert_id, x, hidden_dim)
+        outputs.append(y)
+        print(
+            f"[stability] expert={expert_id} iter={i} "
+            f"min={y.min():.6e} max={y.max():.6e} mean={y.mean():.6e}"
+        )
 
     ref = outputs[0]
     for i in range(1, repeats):

@@ -4,7 +4,11 @@ from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
 from server.model_locator import resolve_and_load_deepseek_tensor
-from server.expert_inference_validation import run_multi_expert_correctness_test, run_one_expert_stability_test
+from server.inference_session import InferenceSession
+from server.expert_inference_validation import (
+    run_multi_expert_correctness_test,
+    run_one_expert_stability_test,
+)
 
 
 def main():
@@ -45,9 +49,10 @@ def main():
         chunk_size=chunk_size,
     )
 
-    run_multi_expert_correctness_test(coord, cfg, expert_ids=[0, 1, 2])
-    run_one_expert_stability_test(coord, cfg, expert_id=0, repeats=10)
-    run_one_expert_stability_test(coord, cfg, expert_id=1, repeats=10)
+    with InferenceSession(coord, cfg) as session:
+        run_multi_expert_correctness_test(session, expert_ids=[0, 1, 2])
+        run_one_expert_stability_test(session, expert_id=0, repeats=10)
+        run_one_expert_stability_test(session, expert_id=1, repeats=10)
 
 
 if __name__ == "__main__":
