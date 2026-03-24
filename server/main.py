@@ -3,6 +3,7 @@ from common.protocol import TensorKind
 from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
+from server.moe_layer_runtime import run_top8_reference_compare_test
 from server.model_locator import resolve_and_load_deepseek_tensor
 from server.inference_session import InferenceSession
 from server.expert_inference_validation import (
@@ -52,6 +53,7 @@ def main():
         run_multi_expert_correctness_test(session, expert_ids=[0, 1, 2])
         run_one_expert_stability_test(session, expert_id=0, repeats=10)
         run_one_expert_stability_test(session, expert_id=1, repeats=10)
+        run_top8_reference_compare_test(session)
 
 
 if __name__ == "__main__":
