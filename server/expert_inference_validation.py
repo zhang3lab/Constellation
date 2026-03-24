@@ -177,12 +177,6 @@ def run_one_expert_correctness_test(session, expert_id: int):
             tensor_kind=tensor_kind_name,
         )
 
-    coord.send_one_expert_triplet(
-        expert_id=expert_id,
-        tensor_loader=tensor_loader,
-        chunk_size=chunk_size,
-    )
-
     batch_size = 1
     hidden_dim = 7168
     x = _make_safe_test_input(hidden_dim)
@@ -259,12 +253,6 @@ def run_one_expert_stability_test(session, expert_id: int, repeats: int = 10):
             expert_id=eid,
             tensor_kind=tensor_kind_name,
         )
-
-    coord.send_one_expert_triplet(
-        expert_id=expert_id,
-        tensor_loader=tensor_loader,
-        chunk_size=chunk_size,
-    )
 
     hidden_dim = 7168
     x = _make_safe_test_input(hidden_dim)

@@ -302,3 +302,17 @@ class Coordinator:
                 tensor_bytes=tensor_bytes,
                 chunk_size=chunk_size,
             )
+
+    def preload_all_placed_experts(self, tensor_loader, chunk_size: int):
+        expert_ids = sorted({int(p["expert_id"]) for p in self.placements})
+        print(f"preloading all placed experts: {expert_ids}")
+     
+        for expert_id in expert_ids:
+            print(f"preloading expert={expert_id}")
+            self.send_one_expert_triplet(
+                expert_id=expert_id,
+                tensor_loader=tensor_loader,
+                chunk_size=chunk_size,
+            )
+     
+        return expert_ids

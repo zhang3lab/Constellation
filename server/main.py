@@ -43,8 +43,7 @@ def main():
             tensor_kind=tensor_kind_name,
         )
 
-    coord.send_one_expert_triplet(
-        expert_id=expert_id,
+    expert_ids = coord.preload_all_placed_experts(
         tensor_loader=tensor_loader,
         chunk_size=chunk_size,
     )
