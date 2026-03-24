@@ -3,13 +3,14 @@ from common.protocol import TensorKind
 from server.client import NodeClient
 from server.config import load_config
 from server.coordinator import Coordinator
-from server.moe_layer_runtime import run_top8_reference_compare_test
-from server.model_locator import resolve_and_load_deepseek_tensor
-from server.inference_session import InferenceSession
 from server.expert_inference_validation import (
     run_multi_expert_correctness_test,
     run_one_expert_stability_test,
 )
+from server.inference_session import InferenceSession
+from server.model_locator import resolve_and_load_deepseek_tensor
+from server.moe_layer_runtime import make_safe_input, run_top8_reference_compare_test
+from server.router_runtime import run_real_router_demo
 
 
 def main():
@@ -54,6 +55,11 @@ def main():
         run_one_expert_stability_test(session, expert_id=0, repeats=10)
         run_one_expert_stability_test(session, expert_id=1, repeats=10)
         run_top8_reference_compare_test(session)
+        run_real_router_demo(
+            session,
+            layer_id=int(cfg["test_load"]["layer_id"]),
+            repeats=10,
+        )
 
 
 if __name__ == "__main__":

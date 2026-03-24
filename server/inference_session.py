@@ -52,8 +52,13 @@ class InferenceSession:
         self.cfg = cfg
         self.client_pool = SessionClientPool()
 
+        # router-related caches
+        self.router_cfg = None
+        self.router_tensors_by_layer = {}
+
     def close(self) -> None:
         self.client_pool.close_all()
+        self.router_tensors_by_layer.clear()
 
     def __enter__(self) -> "InferenceSession":
         return self
