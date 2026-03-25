@@ -23,13 +23,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    cfg = AutoConfig.from_pretrained(model_root, trust_remote_code=True)
-    if hasattr(cfg, "quantization_config"):
-        delattr(cfg, "quantization_config")
 
     model_root = str(cfg["model"]["root"])
     layer_id = int(cfg["run"]["layer_id"])
 
+    cfg = AutoConfig.from_pretrained(model_root, trust_remote_code=True)
+    if hasattr(cfg, "quantization_config"):
+        delattr(cfg, "quantization_config")
     tokenizer = AutoTokenizer.from_pretrained(model_root, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_root,
