@@ -12,7 +12,7 @@ from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.inference_session import InferenceSession
-from server.moe_layer_runtime import run_moe_layer
+from server.moe_layer_runtime import run_moe_layer, run_one_expert_reference
 
 
 class StopBeforeMoE(Exception):
