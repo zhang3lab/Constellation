@@ -172,9 +172,12 @@ int main() {
 
     std::vector<float> x_float(hidden_dim);
     std::vector<__half> x_half(hidden_dim);
+    std::vector<float> x_cpu_quant(hidden_dim);
+
     for (int i = 0; i < hidden_dim; ++i) {
         x_float[i] = std::sin(0.0005f * static_cast<float>(i));
         x_half[i] = __float2half(x_float[i]);
+        x_cpu_quant[i] = __half2float(x_half[i]);
     }
 
     __half* d_x = nullptr;
@@ -246,7 +249,8 @@ int main() {
         return 1;
     }
 
-    std::vector<float> h_cpu = run_fused_up_gate_cpu_reference(bundle, x_float);
+    std::vector<float> h_cpu_full = run_fused_up_gate_cpu_reference(bundle, x_float);
+    std::vector<float> h_cpu_quant = run_fused_up_gate_cpu_reference(bundle, x_cpu_quant);
 
     float max_abs = 0.0f;
     float sum_abs = 0.0f;
@@ -254,29 +258,43 @@ int main() {
     float norm_cpu = 0.0f;
     float norm_gpu = 0.0f;
 
+    float max_abs_full = 0.0f;
+    float sum_abs_full = 0.0f;
+
     for (int i = 0; i < inter_dim; ++i) {
-        const float cpu_v = h_cpu[i];
+        const float cpu_full_v = h_cpu_full[i];
+        const float cpu_q_v = h_cpu_quant[i];
         const float gpu_v = h_gpu[i];
-        const float abs_err = std::fabs(cpu_v - gpu_v);
+
+        const float abs_err = std::fabs(cpu_q_v - gpu_v);
+        const float abs_err_full = std::fabs(cpu_full_v - gpu_v);
 
         if (abs_err > max_abs) max_abs = abs_err;
+        if (abs_err_full > max_abs_full) max_abs_full = abs_err_full;
+
         sum_abs += abs_err;
-        dot += cpu_v * gpu_v;
-        norm_cpu += cpu_v * cpu_v;
+        sum_abs_full += abs_err_full;
+
+        dot += cpu_q_v * gpu_v;
+        norm_cpu += cpu_q_v * cpu_q_v;
         norm_gpu += gpu_v * gpu_v;
     }
 
     const float mean_abs = sum_abs / static_cast<float>(inter_dim);
+    const float mean_abs_full = sum_abs_full / static_cast<float>(inter_dim);
     const float cos =
         (norm_cpu > 0.0f && norm_gpu > 0.0f)
             ? (dot / (std::sqrt(norm_cpu) * std::sqrt(norm_gpu)))
             : 0.0f;
 
-    std::printf("fused up/gate compare: max_abs=%g mean_abs=%g cos=%g\n",
-                max_abs, mean_abs, cos);
+    std::printf(
+        "fused up/gate compare: "
+        "q_max_abs=%g q_mean_abs=%g full_max_abs=%g full_mean_abs=%g cos=%g\n",
+        max_abs, mean_abs, max_abs_full, mean_abs_full, cos);
 
     for (int i = 0; i < 8; ++i) {
-        std::printf("cpu[%d]=%g gpu[%d]=%g\n", i, h_cpu[i], i, h_gpu[i]);
+        std::printf("cpu_full[%d]=%g cpu_q[%d]=%g gpu[%d]=%g\n",
+                    i, h_cpu_full[i], i, h_cpu_quant[i], i, h_gpu[i]);
     }
 
     cudaFree(d_x);
