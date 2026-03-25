@@ -280,6 +280,13 @@ def main():
     print(f"[capture] hidden shape={hidden_np.shape} dtype={hidden_np.dtype}")
     print(f"[capture] hidden[:8]={hidden_np[:8]}")
 
+    print(
+        f"[capture] hidden finite={np.isfinite(hidden_np).sum()}/{hidden_np.size} "
+        f"min={hidden_np.min():.6e} max={hidden_np.max():.6e} "
+        f"mean={hidden_np.mean():.6e} std={hidden_np.std():.6e}"
+    )
+    print("[capture] hidden[:8] =", hidden_np[:8])
+
     coord = Coordinator(server_cfg["nodes"])
     setup_control_plane(coord, server_cfg)
 
