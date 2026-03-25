@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
+from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.model_locator import resolve_deepseek_tensor_file
 from server.router_runtime import (
     get_router_config,
@@ -63,14 +64,33 @@ def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tens
         expert_id=expert_id,
         tensor_kind=tensor_kind,
     )
+
+    scale_name = tensor_name + "_scale_inv"
+
     with safe_open(shard_path, framework="pt", device="cpu") as f:
         t = f.get_tensor(tensor_name)
-    t = t.to(torch.float32).contiguous()
 
-    print(
-        f"[top8-ref] loaded {tensor_kind}: "
-        f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype}"
-    )
+        if t.dtype == torch.float8_e4m3fn:
+            keys = set(f.keys())
+            if scale_name not in keys:
+                raise RuntimeError(f"missing scale tensor for fp8 weight: {scale_name}")
+
+            scale_inv = f.get_tensor(scale_name).to(torch.float32).contiguous()
+            t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
+
+            print(
+                f"[top8-ref] loaded {tensor_kind}: "
+                f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype} "
+                f"(dequant from torch.float8_e4m3fn using {scale_name})"
+            )
+        else:
+            t = t.to(torch.float32).contiguous()
+
+            print(
+                f"[top8-ref] loaded {tensor_kind}: "
+                f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype}"
+            )
+
     return t
 
 
