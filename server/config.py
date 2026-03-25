@@ -37,16 +37,22 @@ def load_config(path: str) -> Dict[str, Any]:
         raise ValueError("model.root must be a non-empty string")
     if not isinstance(model.get("chunk_size"), int):
         raise ValueError("model.chunk_size must be an integer")
+    if not isinstance(model.get("expert_mem_bytes"), int):
+        raise ValueError("model.expert_mem_bytes must be an integer")
+    if not isinstance(model.get("memory_utilization"), (int, float)):
+        raise ValueError("model.memory_utilization must be a number")
 
-    test_load = obj.get("test_load")
-    if not isinstance(test_load, dict):
-        raise ValueError("config must contain an object field 'test_load'")
+    run_cfg = obj.get("run")
+    if not isinstance(run_cfg, dict):
+        raise ValueError("config must contain an object field 'run'")
 
-    if not isinstance(test_load.get("layer_id"), int):
-        raise ValueError("test_load.layer_id must be an integer")
-    if not isinstance(test_load.get("expert_id"), int):
-        raise ValueError("test_load.expert_id must be an integer")
-    if not isinstance(test_load.get("tensor_kind"), str) or not test_load["tensor_kind"]:
-        raise ValueError("test_load.tensor_kind must be a non-empty string")
+    if not isinstance(run_cfg.get("mode"), str) or not run_cfg["mode"]:
+        raise ValueError("run.mode must be a non-empty string")
+    if run_cfg["mode"] not in ("validation", "demo"):
+        raise ValueError("run.mode must be either 'validation' or 'demo'")
+    if not isinstance(run_cfg.get("layer_id"), int):
+        raise ValueError("run.layer_id must be an integer")
+    if not isinstance(run_cfg.get("num_experts"), int):
+        raise ValueError("run.num_experts must be an integer")
 
     return obj
