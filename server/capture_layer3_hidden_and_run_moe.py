@@ -23,17 +23,18 @@ def parse_args():
 
 def main():
     args = parse_args()
+    server_cfg = load_config(args.server_config)
 
-    model_root = str(cfg["model"]["root"])
-    layer_id = int(cfg["run"]["layer_id"])
+    model_root = str(server_cfg["model"]["root"])
+    layer_id = int(server_cfg["run"]["layer_id"])
 
-    cfg = AutoConfig.from_pretrained(model_root, trust_remote_code=True)
-    if hasattr(cfg, "quantization_config"):
-        delattr(cfg, "quantization_config")
+    model_cfg = AutoConfig.from_pretrained(model_root, trust_remote_code=True)
+    if hasattr(model_cfg, "quantization_config"):
+        delattr(model_cfg, "quantization_config")
     tokenizer = AutoTokenizer.from_pretrained(model_root, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_root,
-        config=cfg,
+        config=model_cfg,
         trust_remote_code=True,
         torch_dtype=torch.float16,
         device_map=None,
@@ -87,10 +88,10 @@ def main():
     print(f"[capture] hidden shape={hidden_np.shape} dtype={hidden_np.dtype}")
     print(f"[capture] hidden[:8]={hidden_np[:8]}")
 
-    coord = Coordinator(cfg["nodes"])
-    setup_control_plane(coord, cfg)
+    coord = Coordinator(server_cfg["nodes"])
+    setup_control_plane(coord, server_cfg)
 
-    with InferenceSession(coord, cfg) as session:
+    with InferenceSession(coord, server_cfg) as session:
         result = run_moe_layer(session, hidden_np, layer_id, return_aux=True)
 
         print("[moe] routes =", result["routes"])
