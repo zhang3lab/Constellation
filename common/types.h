@@ -37,6 +37,17 @@ enum class ExpertStatus : std::uint32_t {
     Failed = 5,
 };
 
+enum class GpuVendor : std::uint32_t {
+    Unknown = 0,
+    Nvidia = 1,
+    AMD = 2,
+    Intel = 3,
+};
+
+constexpr std::uint32_t kGpuCapFp16 = 1u << 0;
+constexpr std::uint32_t kGpuCapBf16 = 1u << 1;
+constexpr std::uint32_t kGpuCapFp8  = 1u << 2;
+
 struct GpuInfo {
     std::int32_t local_gpu_id = -1;
     std::string gpu_name;
