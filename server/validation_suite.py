@@ -156,3 +156,6 @@ def run_validation_suite(session):
     print("\n" + "=" * 80)
     print("[suite] real router demo + stability")
     run_real_router_demo(session, layer_id=layer_id, repeats=10)
+
+    print("\n" + "=" * 80)
+    print("ALL VALIDATION PASSED")

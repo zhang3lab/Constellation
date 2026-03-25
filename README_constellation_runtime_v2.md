@@ -14,8 +14,9 @@ Current milestone:
 - real DeepSeek router works
 - deterministic repeated-run stability verified
 - multi-GPU LUT/device bug fixed
+- runtime / router / validation layers cleaned up
 
-Validated on a small resident subset (`num_experts=8`) using real DeepSeek-V3.1 expert weights and real gate weights from layer 3.
+Validated on a small resident subset (`run.num_experts=8`) using real DeepSeek-V3.1 expert weights and real gate weights from layer 3.
 
 ---
 
@@ -53,15 +54,7 @@ The current implementation focuses on **single-token**, **no batching**, and **s
   - persistent client pool
   - cached router config/tensors
 
-### Expert dispatch / MoE runtime
-
-- `server/moe_layer_runtime.py`
-  - `infer_one_expert(...)`
-  - `dispatch_topk_experts(...)`
-  - `combine_outputs(...)`
-  - `run_topk_moe_layer(...)`
-
-### Real router
+### Router only
 
 - `server/router_runtime.py`
   - loads router config from model `config.json`
@@ -69,6 +62,16 @@ The current implementation focuses on **single-token**, **no batching**, and **s
   - loads `mlp.gate.e_score_correction_bias`
   - implements DeepSeek-style `sigmoid + noaux_tc` routing
   - supports resident-subset routing for small-scale experiments
+
+### MoE layer runtime
+
+- `server/moe_layer_runtime.py`
+  - `infer_one_expert(...)`
+  - `dispatch_topk_experts(...)`
+  - `combine_outputs(...)`
+  - `run_topk_moe_layer(...)`
+  - `run_moe_layer(...)`
+  - local reference helpers
 
 ### Validation
 
@@ -79,6 +82,9 @@ The current implementation focuses on **single-token**, **no batching**, and **s
 
 - `server/validation_suite.py`
   - full validation entrypoint
+  - top-8 reference compare
+  - real-router demo
+  - real-router stability
 
 - `server/test_utils.py`
   - common test helpers
@@ -89,6 +95,13 @@ The current implementation focuses on **single-token**, **no batching**, and **s
 
 - `server/model_locator.py`
   - resolves DeepSeek tensor names and shard locations
+
+### Entry point
+
+- `server/main.py`
+  - config loading
+  - control-plane setup
+  - validation/demo orchestration
 
 ---
 
@@ -149,7 +162,7 @@ This separation is important:
 
 - `run.mode`
   - `"validation"`: run full validation suite
-  - `"demo"`: run a single real-router demo
+  - `"demo"`: run a single MoE-layer demo through the formal runtime API
 - `run.layer_id`
   - target MoE layer used for loading and router lookup
 - `run.num_experts`
@@ -159,6 +172,53 @@ This separation is important:
   - estimated memory footprint per resident expert used for placement
 - `model.chunk_size`
   - weight transfer chunk size during preload
+
+---
+
+## Formal runtime API
+
+The main layer-level API is now:
+
+```python
+run_moe_layer(session, hidden, layer_id, return_aux=False)
+```
+
+This function lives in `server/moe_layer_runtime.py` and is the intended runtime boundary for upper layers.
+
+### Inputs
+
+- `session`
+  - active `InferenceSession`
+- `hidden`
+  - token hidden state as a 1-D float array
+- `layer_id`
+  - target MoE layer
+- `return_aux`
+  - whether to return router/debug details
+
+### Outputs
+
+At minimum:
+
+```python
+{
+    "output": ...,
+    "routes": ...
+}
+```
+
+With `return_aux=True`:
+
+```python
+{
+    "output": ...,
+    "routes": ...,
+    "weighted_outputs": ...,
+    "aux": ...
+}
+```
+
+This keeps upper layers independent from router internals and dispatch details.
 
 ---
 
@@ -186,7 +246,7 @@ Router settings are loaded from the model `config.json`:
 
 ### Current routing behavior
 
-Because development runs may preload only a subset of experts (for example `num_experts=8`), the router currently supports **resident-subset routing**:
+Because development runs may preload only a subset of experts (for example `run.num_experts=8`), the router currently supports **resident-subset routing**:
 
 - compute scores over all routed experts
 - mask out non-resident experts
@@ -225,6 +285,14 @@ Uses the real DeepSeek router:
 - combines outputs
 - repeats multiple runs
 - verifies exact deterministic stability
+
+### 5. Unified validation result
+
+`validation_suite.py` prints a final success marker when all checks pass:
+
+```text
+ALL VALIDATION PASSED
+```
 
 ---
 
@@ -313,7 +381,7 @@ This performs:
 }
 ```
 
-This runs a single real-router inference demo.
+This runs a single MoE-layer demo through `run_moe_layer(...)`.
 
 ---
 
@@ -327,13 +395,17 @@ This runs a single real-router inference demo.
 
 - `run_validation_suite(session)`
 
-### Real router inference
+### MoE layer execution
 
-- `run_one_token_moe_real_router(session, hidden, layer_id)`
+- `run_moe_layer(session, hidden, layer_id, return_aux=False)`
 
-### Generic top-k MoE execution
+### Generic top-k execution
 
 - `run_topk_moe_layer(session, hidden, routes)`
+
+### Router internals
+
+- `route_token_real(...)`
 
 ---
 
@@ -359,8 +431,8 @@ The current codebase is meant to be a solid base for:
 
 Recommended next steps:
 
-1. connect upper-layer hidden states to the MoE runtime
-2. add real-router reference compare against local PyTorch MoE combine
+1. connect upper-layer hidden states to `run_moe_layer(...)`
+2. add real-router reference compare against local PyTorch MoE combine under the current final structure
 3. scale resident expert count upward
 4. move from development-only resident-subset routing toward full routed-expert coverage
 5. add batching only after the single-token path remains stable
