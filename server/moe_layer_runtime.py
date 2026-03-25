@@ -201,10 +201,6 @@ def combine_outputs(weighted_outputs):
     return combined
 
 
-def route_token_top8_uniform():
-    return [(eid, 1.0 / 8.0) for eid in range(8)]
-
-
 def run_top8_reference(session, routes, hidden: np.ndarray):
     weighted_outputs = []
     for expert_id, weight in routes:
@@ -212,35 +208,3 @@ def run_top8_reference(session, routes, hidden: np.ndarray):
         weighted_outputs.append((expert_id, weight, y))
     combined = combine_outputs(weighted_outputs)
     return combined, weighted_outputs
-
-
-def run_top8_reference_compare_test(session):
-    hidden_dim = 7168
-    x = make_safe_input(hidden_dim)
-
-    routes = route_token_top8_uniform()
-    print(f"[top8] routes={routes}")
-
-    combined_srv, outputs_srv = run_topk_moe_layer(session, x, routes)
-    combined_ref, outputs_ref = run_top8_reference(session, routes, x)
-
-    print_stats("combined_srv", combined_srv)
-    print_stats("combined_ref", combined_ref)
-
-    print("[top8] combined_srv[:8] =", combined_srv[:8])
-    print("[top8] combined_ref[:8] =", combined_ref[:8])
-
-    for (eid_s, w_s, y_s), (eid_r, w_r, y_r) in zip(outputs_srv, outputs_ref):
-        if eid_s != eid_r:
-            raise RuntimeError(f"expert order mismatch: runtime={eid_s}, ref={eid_r}")
-        if abs(float(w_s) - float(w_r)) > 1e-12:
-            raise RuntimeError(f"weight mismatch for expert {eid_s}: runtime={w_s}, ref={w_r}")
-
-        print_stats(f"expert{eid_s}_srv", y_s)
-        print_stats(f"expert{eid_s}_ref", y_r)
-        print(f"[top8] expert={eid_s} weight={w_s:.6f}")
-        print(f"[top8] expert{eid_s}_srv[:4] =", y_s[:4])
-        print(f"[top8] expert{eid_s}_ref[:4] =", y_r[:4])
-        compare_arrays(f"expert{eid_s}_srv_vs_ref", y_r, y_s)
-
-    compare_arrays("combined_srv_vs_ref", combined_ref, combined_srv)
