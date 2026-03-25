@@ -1,5 +1,5 @@
 import argparse
-import importlib.util
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -34,6 +34,16 @@ def find_modeling_file(model_root: Path) -> Path:
     if not p.exists():
         raise RuntimeError(f"modeling_deepseek.py not found under {model_root}")
     return p
+
+
+def import_deepseek_modules(model_root: Path):
+    model_root_str = str(model_root)
+    if model_root_str not in sys.path:
+        sys.path.insert(0, model_root_str)
+
+    config_module = importlib.import_module("configuration_deepseek")
+    modeling_module = importlib.import_module("modeling_deepseek")
+    return config_module, modeling_module
 
 
 def import_deepseek_module(model_root: Path):
