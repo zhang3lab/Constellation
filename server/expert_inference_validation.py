@@ -88,9 +88,9 @@ def run_one_expert_correctness_test(session, expert_id: int):
     coord = session.coord
     cfg = session.cfg
     model = cfg["model"]
-    test_load = cfg["test_load"]
+    run_cfg = cfg["run"]
 
-    layer_id = int(test_load["layer_id"])
+    layer_id = int(run_cfg["layer_id"])
     model_root = str(model["root"])
     chunk_size = int(model["chunk_size"])
 
@@ -165,9 +165,9 @@ def run_one_expert_stability_test(session, expert_id: int, repeats: int = 10):
     coord = session.coord
     cfg = session.cfg
     model = cfg["model"]
-    test_load = cfg["test_load"]
+    run_cfg = cfg["run"]
 
-    layer_id = int(test_load["layer_id"])
+    layer_id = int(run_cfg["layer_id"])
     model_root = str(model["root"])
     chunk_size = int(model["chunk_size"])
 

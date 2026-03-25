@@ -116,10 +116,10 @@ def run_topk_moe_layer(session, hidden: np.ndarray, routes):
 def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
     cfg = session.cfg
     model = cfg["model"]
-    test_load = cfg["test_load"]
+    run_cfg = cfg["run"]
 
     model_root = str(model["root"])
-    layer_id = int(test_load["layer_id"])
+    layer_id = int(run_cfg["layer_id"])
 
     W_up = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_up")
     W_gate = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_gate")
