@@ -287,19 +287,19 @@ def main():
     )
     print("[capture] hidden[:8] =", hidden_np[:8])
 
-    y_ref = run_one_expert_reference(session, 4, hidden_np)
-    print(
-        "[ref] finite=", np.isfinite(y_ref).sum(), "/", y_ref.size,
-        "min=", np.nanmin(y_ref),
-        "max=", np.nanmax(y_ref),
-        "mean=", np.nanmean(y_ref),
-    )
-    print("[ref] y[:8] =", y_ref[:8])
-
     coord = Coordinator(server_cfg["nodes"])
     setup_control_plane(coord, server_cfg)
 
     with InferenceSession(coord, server_cfg) as session:
+        y_ref = run_one_expert_reference(session, 4, hidden_np)
+        print(
+            "[ref] finite=", np.isfinite(y_ref).sum(), "/", y_ref.size,
+            "min=", np.nanmin(y_ref),
+            "max=", np.nanmax(y_ref),
+            "mean=", np.nanmean(y_ref),
+        )
+        print("[ref] y[:8] =", y_ref[:8])
+
         result = run_moe_layer(session, hidden_np, layer_id, return_aux=True)
         print("[moe] routes =", result["routes"])
         print("[moe] output[:8] =", result["output"][:8])
