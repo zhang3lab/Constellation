@@ -3,7 +3,7 @@ from server.coordinator import Coordinator
 from server.inference_session import InferenceSession
 from server.model_locator import resolve_and_load_deepseek_tensor
 from server.moe_layer_runtime import run_moe_layer
-from server.router_runtime import load_router_config, run_one_token_moe_real_router
+from server.router_runtime import load_router_config
 from server.test_utils import make_safe_input
 from server.validation_suite import run_validation_suite
 
