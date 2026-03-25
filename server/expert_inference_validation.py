@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.model_locator import (
     resolve_deepseek_tensor_file,
     resolve_and_load_deepseek_tensor,
@@ -66,14 +67,33 @@ def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tens
         expert_id=expert_id,
         tensor_kind=tensor_kind,
     )
+
+    scale_name = tensor_name + "_scale_inv"
+
     with safe_open(shard_path, framework="pt", device="cpu") as f:
         t = f.get_tensor(tensor_name)
-    t = t.to(torch.float32).contiguous()
 
-    print(
-        f"[correctness] loaded {tensor_kind}: "
-        f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype}"
-    )
+        if t.dtype == torch.float8_e4m3fn:
+            keys = set(f.keys())
+            if scale_name not in keys:
+                raise RuntimeError(f"missing scale tensor for fp8 weight: {scale_name}")
+
+            scale_inv = f.get_tensor(scale_name).to(torch.float32).contiguous()
+            t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
+
+            print(
+                f"[correctness] loaded {tensor_kind}: "
+                f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype} "
+                f"(dequant from torch.float8_e4m3fn using {scale_name})"
+            )
+        else:
+            t = t.to(torch.float32).contiguous()
+
+            print(
+                f"[correctness] loaded {tensor_kind}: "
+                f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype}"
+            )
+
     return t
 
 
@@ -93,14 +113,6 @@ def run_one_expert_correctness_test(session, expert_id: int):
     layer_id = int(run_cfg["layer_id"])
     model_root = str(model["root"])
     chunk_size = int(model["chunk_size"])
-
-    def tensor_loader(eid: int, tensor_kind_name: str):
-        return resolve_and_load_deepseek_tensor(
-            model_root=model_root,
-            layer_id=layer_id,
-            expert_id=eid,
-            tensor_kind=tensor_kind_name,
-        )
 
     batch_size = 1
     hidden_dim = 7168
@@ -162,14 +174,12 @@ def run_multi_expert_correctness_test(session, expert_ids):
 
 
 def run_one_expert_stability_test(session, expert_id: int, repeats: int = 10):
-    coord = session.coord
     cfg = session.cfg
     model = cfg["model"]
     run_cfg = cfg["run"]
 
     layer_id = int(run_cfg["layer_id"])
     model_root = str(model["root"])
-    chunk_size = int(model["chunk_size"])
 
     def tensor_loader(eid: int, tensor_kind_name: str):
         return resolve_and_load_deepseek_tensor(
