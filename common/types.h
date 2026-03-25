@@ -55,7 +55,7 @@ struct GpuInfo {
     std::uint64_t total_mem_bytes = 0;
     std::uint64_t free_mem_bytes = 0;
     std::uint32_t worker_port = 0;
-    GpuStatus gpu_status = GpuStatus::Unknown;
+    GpuStatus gpu_status = GpuStatus::Idle;
 
     GpuVendor gpu_vendor = GpuVendor::Unknown;
     std::uint32_t capability_flags = 0;
