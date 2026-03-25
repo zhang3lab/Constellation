@@ -6,17 +6,11 @@
 #endif
 #include <cuda_runtime.h>
 
+#include "expert_node_v2/cuda/cuda_common_v2.cuh"
 #include "expert_node_v2/cuda/fp8_decode_lut_v2.h"
 #include "expert_node_v2/cuda/matvec_blockscale_cuda_v2.h"
 
 namespace {
-
-__device__ inline float warp_sum(float v) {
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        v += __shfl_down_sync(0xffffffff, v, offset);
-    }
-    return v;
-}
 
 template <class TAct>
 __global__ void zero_float_kernel(float* x, int n) {
