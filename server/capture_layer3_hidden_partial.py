@@ -287,6 +287,15 @@ def main():
     )
     print("[capture] hidden[:8] =", hidden_np[:8])
 
+    y_ref = run_one_expert_reference(session, 4, hidden_np)
+    print(
+        "[ref] finite=", np.isfinite(y_ref).sum(), "/", y_ref.size,
+        "min=", np.nanmin(y_ref),
+        "max=", np.nanmax(y_ref),
+        "mean=", np.nanmean(y_ref),
+    )
+    print("[ref] y[:8] =", y_ref[:8])
+
     coord = Coordinator(server_cfg["nodes"])
     setup_control_plane(coord, server_cfg)
 
