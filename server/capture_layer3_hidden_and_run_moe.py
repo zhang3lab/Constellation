@@ -2,7 +2,7 @@ import argparse
 import json
 import numpy as np
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
 from server.config import load_config
 from server.coordinator import Coordinator
@@ -23,7 +23,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    cfg = load_config(args.server_config)
+    cfg = AutoConfig.from_pretrained(model_root, trust_remote_code=True)
+    if hasattr(cfg, "quantization_config"):
+        delattr(cfg, "quantization_config")
 
     model_root = str(cfg["model"]["root"])
     layer_id = int(cfg["run"]["layer_id"])
@@ -31,6 +33,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_root, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_root,
+        config=cfg,
         trust_remote_code=True,
         torch_dtype=torch.float16,
         device_map=None,
