@@ -36,13 +36,15 @@ def find_modeling_file(model_root: Path) -> Path:
     return p
 
 
-def import_deepseek_modules(model_root: Path):
-    model_root_str = str(model_root)
-    if model_root_str not in sys.path:
-        sys.path.insert(0, model_root_str)
+def import_deepseek_modules(pkg_root: str, package_name: str):
+    import importlib
+    import sys
 
-    config_module = importlib.import_module("configuration_deepseek")
-    modeling_module = importlib.import_module("modeling_deepseek")
+    if pkg_root not in sys.path:
+        sys.path.insert(0, pkg_root)
+
+    config_module = importlib.import_module(f"{package_name}.configuration_deepseek")
+    modeling_module = importlib.import_module(f"{package_name}.modeling_deepseek")
     return config_module, modeling_module
 
 
@@ -145,15 +147,18 @@ def main():
     layer_id = int(server_cfg["run"]["layer_id"])
 
     # import DeepSeek remote code locally
-    module = import_deepseek_module(model_root)
+    pkg_root = "/root/Constellation/tmp"
+    package_name = "DeepSeek_V3_1"
+
+    config_module, modeling_module = import_deepseek_modules(pkg_root, package_name)
 
     # build partial config
     cfg_dict = build_partial_config(model_root, max_layer_id=layer_id)
-    config = build_config_object(module, cfg_dict)
+    config = build_config_object(config_module, cfg_dict)
 
     if not hasattr(module, "DeepseekV3Model"):
         raise RuntimeError("DeepseekV3Model not found in modeling_deepseek.py")
-    ModelCls = module.DeepseekV3Model
+    ModelCls = modeling_module.DeepseekV3Model
 
     model = ModelCls(config)
     model.to(args.device)
