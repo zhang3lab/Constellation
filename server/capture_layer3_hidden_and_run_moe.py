@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from server.config import load_config
 from server.coordinator import Coordinator
 from server.inference_session import InferenceSession
-from server.main import setup_control_plane
+from server.control_plane import setup_control_plane
 from server.moe_layer_runtime import run_moe_layer
 
 

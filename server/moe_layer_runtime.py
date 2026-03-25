@@ -174,3 +174,14 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         "output": combined,
         "routes": routes,
     }
+
+def run_topk_reference(session, routes, hidden: np.ndarray):
+    hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
+
+    weighted_outputs = []
+    for expert_id, weight in routes:
+        y = run_one_expert_reference(session, expert_id, hidden)
+        weighted_outputs.append((int(expert_id), float(weight), y))
+
+    combined = combine_outputs(weighted_outputs)
+    return combined, weighted_outputs
