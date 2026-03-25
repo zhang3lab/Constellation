@@ -120,7 +120,11 @@ def load_partial_state_dict(model_root: Path, max_layer_id: int, device: str):
             scale_key = k + "_scale_inv"
             if scale_key not in raw:
                 raise RuntimeError(f"missing scale tensor for fp8 weight: {k}")
-            v = dequant_fp8_weight_blockwise(v, raw[scale_key])
+            v = dequant_fp8_weight_blockwise(v, raw[scale_key]).to(torch.bfloat16)
+        elif v.dtype == torch.float32:
+            v = v.to(torch.float32)
+        else:
+            v = v.to(torch.bfloat16)
 
         state[k] = v.to(device)
 
