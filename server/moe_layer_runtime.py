@@ -112,6 +112,20 @@ def dispatch_topk_experts(session, hidden: np.ndarray, routes):
     return weighted_outputs
 
 
+def combine_outputs(weighted_outputs):
+    if not weighted_outputs:
+        raise RuntimeError("weighted_outputs is empty")
+
+    y0 = weighted_outputs[0][2]
+    combined = np.zeros_like(y0, dtype=np.float32)
+
+    for expert_id, weight, y in weighted_outputs:
+        y = np.asarray(y, dtype=np.float32)
+        combined += float(weight) * y
+
+    return combined
+
+
 def run_topk_moe_layer(session, hidden: np.ndarray, routes):
     weighted_outputs = dispatch_topk_experts(session, hidden, routes)
     combined = combine_outputs(weighted_outputs)
