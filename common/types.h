@@ -38,13 +38,17 @@ enum class ExpertStatus : std::uint32_t {
 };
 
 struct GpuInfo {
-    std::string gpu_uid;
     std::int32_t local_gpu_id = -1;
     std::string gpu_name;
+
     std::uint64_t total_mem_bytes = 0;
     std::uint64_t free_mem_bytes = 0;
-    std::int32_t worker_port = -1;
-    GpuStatus status = GpuStatus::Init;
+    std::uint32_t worker_port = 0;
+    GpuStatus gpu_status = GpuStatus::Unknown;
+
+    GpuVendor gpu_vendor = GpuVendor::Unknown;
+    std::uint32_t capability_flags = 0;
+    std::string arch_name;
 };
 
 struct NodeInfo {

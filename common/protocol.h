@@ -60,4 +60,12 @@ void AppendI32(std::string* out, std::int32_t x);
 void AppendU64(std::string* out, std::uint64_t x);
 void AppendString(std::string* out, const std::string& s);
 
+bool ReadU16(const std::string& buf, std::size_t* offset, std::uint16_t* out);
+bool ReadU32(const std::string& buf, std::size_t* offset, std::uint32_t* out);
+bool ReadI32(const std::string& buf, std::size_t* offset, std::int32_t* out);
+bool ReadU64(const std::string& buf, std::size_t* offset, std::uint64_t* out);
+bool ReadBytes(const std::string& buf, std::size_t* offset, std::size_t n, std::string* out);
+bool ReadString(const std::string& buf, std::size_t* offset, std::string* out);
+bool ReadTensorKind(const std::string& buf, std::size_t* offset, TensorKind* out);
+
 }  // namespace common

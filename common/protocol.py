@@ -181,7 +181,6 @@ def decode_inventory_reply(body: bytes):
 
     gpus = []
     for _ in range(num_gpus):
-        gpu_uid, offset = unpack_string(body, offset)
         local_gpu_id, offset = unpack_i32(body, offset)
         gpu_name, offset = unpack_string(body, offset)
         total_mem_bytes, offset = unpack_u64(body, offset)
@@ -189,15 +188,21 @@ def decode_inventory_reply(body: bytes):
         worker_port, offset = unpack_u32(body, offset)
         gpu_status, offset = unpack_u32(body, offset)
 
+        gpu_vendor, offset = unpack_u32(body, offset)
+        capability_flags, offset = unpack_u32(body, offset)
+        arch_name, offset = unpack_string(body, offset)
+
         gpus.append(
             {
-                "gpu_uid": gpu_uid,
                 "local_gpu_id": local_gpu_id,
                 "gpu_name": gpu_name,
                 "total_mem_bytes": total_mem_bytes,
                 "free_mem_bytes": free_mem_bytes,
                 "worker_port": worker_port,
                 "gpu_status": gpu_status,
+                "gpu_vendor": gpu_vendor,
+                "capability_flags": capability_flags,
+                "arch_name": arch_name,
             }
         )
 

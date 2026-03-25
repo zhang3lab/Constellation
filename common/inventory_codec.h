@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "common/types.h"
+#include "common/protocol.h"
 
 namespace common {
 
@@ -16,9 +16,6 @@ namespace common {
 //   u32 num_gpus
 //
 //   repeat num_gpus times:
-//     u32 gpu_uid_len
-//     bytes gpu_uid
-//
 //     i32 local_gpu_id
 //
 //     u32 gpu_name_len
@@ -28,6 +25,12 @@ namespace common {
 //     u64 free_mem_bytes
 //     u32 worker_port
 //     u32 gpu_status
+//
+//     u32 gpu_vendor
+//     u32 capability_flags
+//
+//     u32 arch_name_len
+//     bytes arch_name
 std::string EncodeInventoryReplyBody(
     const NodeInfo& node,
     NodeStatus node_status);

@@ -1,5 +1,6 @@
 #include "common/protocol.h"
 
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -45,6 +46,69 @@ void AppendString(std::string* out, const std::string& s) {
     }
     AppendU32(out, static_cast<std::uint32_t>(s.size()));
     out->append(s);
+}
+
+bool ReadU16(const std::string& buf, std::size_t* offset, std::uint16_t* out) {
+    if (offset == nullptr || out == nullptr) return false;
+    if (*offset + sizeof(std::uint16_t) > buf.size()) return false;
+    std::memcpy(out, buf.data() + *offset, sizeof(std::uint16_t));
+    *offset += sizeof(std::uint16_t);
+    return true;
+}
+
+bool ReadU32(const std::string& buf, std::size_t* offset, std::uint32_t* out) {
+    if (offset == nullptr || out == nullptr) return false;
+    if (*offset + sizeof(std::uint32_t) > buf.size()) return false;
+    std::memcpy(out, buf.data() + *offset, sizeof(std::uint32_t));
+    *offset += sizeof(std::uint32_t);
+    return true;
+}
+
+bool ReadI32(const std::string& buf, std::size_t* offset, std::int32_t* out) {
+    if (offset == nullptr || out == nullptr) return false;
+    if (*offset + sizeof(std::int32_t) > buf.size()) return false;
+    std::memcpy(out, buf.data() + *offset, sizeof(std::int32_t));
+    *offset += sizeof(std::int32_t);
+    return true;
+}
+
+bool ReadU64(const std::string& buf, std::size_t* offset, std::uint64_t* out) {
+    if (offset == nullptr || out == nullptr) return false;
+    if (*offset + sizeof(std::uint64_t) > buf.size()) return false;
+    std::memcpy(out, buf.data() + *offset, sizeof(std::uint64_t));
+    *offset += sizeof(std::uint64_t);
+    return true;
+}
+
+bool ReadBytes(const std::string& buf, std::size_t* offset, std::size_t n, std::string* out) {
+    if (offset == nullptr || out == nullptr) return false;
+    if (*offset + n > buf.size()) return false;
+    out->assign(buf.data() + *offset, n);
+    *offset += n;
+    return true;
+}
+
+bool ReadString(const std::string& buf, std::size_t* offset, std::string* out) {
+    if (offset == nullptr || out == nullptr) return false;
+
+    std::uint32_t n = 0;
+    if (!ReadU32(buf, offset, &n)) return false;
+    return ReadBytes(buf, offset, static_cast<std::size_t>(n), out);
+}
+
+bool ReadTensorKind(const std::string& buf, std::size_t* offset, TensorKind* out) {
+    if (out == nullptr) return false;
+
+    std::int32_t raw = -1;
+    if (!ReadI32(buf, offset, &raw)) return false;
+
+    if (raw < static_cast<std::int32_t>(TensorKind::WUp) ||
+        raw > static_cast<std::int32_t>(TensorKind::WDownScale)) {
+        return false;
+    }
+
+    *out = static_cast<TensorKind>(raw);
+    return true;
 }
 
 }  // namespace common
