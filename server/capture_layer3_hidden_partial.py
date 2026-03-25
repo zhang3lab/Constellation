@@ -92,7 +92,11 @@ def should_keep_tensor(name: str, max_layer_id: int):
     return False
 
 
-def dequant_fp8_weight_blockwise(weight: torch.Tensor, scale_inv: torch.Tensor, block_size: int = 128):
+def dequant_fp8_weight_blockwise(
+    weight: torch.Tensor,
+    scale_inv: torch.Tensor,
+    block_size: int = 128,
+):
     if weight.ndim != 2:
         raise RuntimeError(f"expected 2D weight, got shape={tuple(weight.shape)}")
     if scale_inv.ndim != 2:
@@ -101,20 +105,30 @@ def dequant_fp8_weight_blockwise(weight: torch.Tensor, scale_inv: torch.Tensor, 
     rows, cols = weight.shape
     br, bc = scale_inv.shape
 
-    if rows != br * block_size or cols != bc * block_size:
+    expected_br = (rows + block_size - 1) // block_size
+    expected_bc = (cols + block_size - 1) // block_size
+
+    if br != expected_br or bc != expected_bc:
         raise RuntimeError(
-            f"shape mismatch: weight={tuple(weight.shape)} scale_inv={tuple(scale_inv.shape)} "
+            f"shape mismatch: weight={tuple(weight.shape)} "
+            f"scale_inv={tuple(scale_inv.shape)} "
+            f"expected_scale_inv=({expected_br}, {expected_bc}) "
             f"block_size={block_size}"
         )
 
     w = weight.float()
     s = scale_inv.float()
+    out = torch.empty((rows, cols), dtype=torch.float32)
 
-    w = w.view(br, block_size, bc, block_size)
-    w = w * s[:, None, :, None]
-    w = w.view(rows, cols)
+    for bi in range(br):
+        r0 = bi * block_size
+        r1 = min(r0 + block_size, rows)
+        for bj in range(bc):
+            c0 = bj * block_size
+            c1 = min(c0 + block_size, cols)
+            out[r0:r1, c0:c1] = w[r0:r1, c0:c1] * s[bi, bj]
 
-    return w.to(torch.bfloat16)
+    return out.to(torch.bfloat16)
 
 
 def load_partial_state_dict(model_root: Path, max_layer_id: int, device: str):
