@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from server.fp8_utils import dequant_fp8_weight_blockwise
+from server.moe_layer_runtime import infer_one_expert
 from server.model_locator import (
     resolve_deepseek_tensor_file,
     resolve_and_load_deepseek_tensor,
@@ -16,48 +17,11 @@ from server.test_utils import (
 from safetensors import safe_open
 
 
-def _infer_once(client, expert_id: int, x: np.ndarray, hidden_dim: int):
-    resp = client.send_infer_request(
-        {
-            "expert_id": expert_id,
-            "batch_size": 1,
-            "hidden_dim": hidden_dim,
-            "activation": x.tobytes(),
-        }
-    )
-
-    if resp["status_code"] != 0:
-        raise RuntimeError(
-            f"infer failed: status={resp['status_code']} "
-            f"output_bytes={len(resp['output'])}"
-        )
-
-    y = np.frombuffer(resp["output"], dtype=np.float16).astype(np.float32)
-    if y.size != hidden_dim:
-        raise RuntimeError(f"unexpected output size: got {y.size}, expected {hidden_dim}")
-    return y
-
-
 def _find_target_placement(coord, expert_id: int):
     for p in coord.placements:
         if int(p["expert_id"]) == int(expert_id):
             return p
     raise RuntimeError(f"expert {expert_id} not found in placements")
-
-
-def _infer_with_session_pool(session, expert_id: int, x: np.ndarray, hidden_dim: int):
-    target = _find_target_placement(session.coord, expert_id)
-    host = target["host"]
-    port = target["control_port"]
-
-    pool = session.client_pool
-
-    try:
-        client = pool.get(host, port)
-        return _infer_once(client, expert_id, x, hidden_dim)
-    except Exception:
-        pool.invalidate(host, port)
-        raise
 
 
 def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tensor_kind: str):
@@ -118,12 +82,14 @@ def run_one_expert_correctness_test(session, expert_id: int):
     hidden_dim = 7168
     x = make_safe_input(hidden_dim)
 
-    y_srv = _infer_with_session_pool(session, expert_id, x, hidden_dim)
+    infer_resp = infer_one_expert(session, expert_id, x)
+    y_srv = infer_resp["array"]
 
     print(
         f"[correctness] infer response: "
         f"status=0 batch={batch_size} hidden={hidden_dim} "
-        f"output_bytes={y_srv.size * 2}"
+        f"output_dtype={infer_resp['output_dtype']} "
+        f"output_bytes={len(infer_resp['output'])}"
     )
     if y_srv.size != hidden_dim:
         raise RuntimeError(f"unexpected output size: got {y_srv.size}, expected {hidden_dim}")
@@ -155,7 +121,12 @@ def run_one_expert_correctness_test(session, expert_id: int):
     print_stats("fused", fused)
     print_stats("y_ref_fp32", y_ref)
 
-    y_ref_cmp = y_ref.to(torch.float16).to(torch.float32).cpu().numpy()
+    if infer_resp["output_dtype"] == int(ActivationDType.FP16):
+        y_ref_cmp = y_ref.to(torch.float16).to(torch.float32).cpu().numpy()
+    elif infer_resp["output_dtype"] == int(ActivationDType.BF16):
+        y_ref_cmp = y_ref.to(torch.bfloat16).to(torch.float32).cpu().numpy()
+    else:
+        raise RuntimeError(f"unexpected output_dtype: {infer_resp['output_dtype']}")
 
     print_stats("y_ref_fp16_roundtrip", y_ref_cmp)
     print_stats("y_srv", y_srv)
@@ -164,7 +135,9 @@ def run_one_expert_correctness_test(session, expert_id: int):
     print("[correctness] y_ref[:8]  =", y_ref_cmp[:8])
     print("[correctness] y_srv[:8]  =", y_srv[:8])
 
-    compare_arrays("output", y_ref_cmp, y_srv)
+    y_srv_f32 = y_srv.astype(np.float32)
+    compare_arrays("output", y_ref_cmp, y_srv_f32)
+
 
 def run_multi_expert_correctness_test(session, expert_ids):
     for expert_id in expert_ids:
@@ -194,10 +167,13 @@ def run_one_expert_stability_test(session, expert_id: int, repeats: int = 10):
 
     outputs = []
     for i in range(repeats):
-        y = _infer_with_session_pool(session, expert_id, x, hidden_dim)
+        infer_resp = infer_one_expert(session, expert_id, x)
+        y = infer_resp["array"].astype(np.float32)
+
         outputs.append(y)
         print(
             f"[stability] expert={expert_id} iter={i} "
+            f"output_dtype={infer_resp['output_dtype']} "
             f"min={y.min():.6e} max={y.max():.6e} mean={y.mean():.6e}"
         )
 

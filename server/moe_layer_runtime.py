@@ -28,6 +28,8 @@ def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
 
     pool = session.client_pool
 
+    hidden_fp16 = hidden.astype(np.float16, copy=False)
+
     try:
         client = pool.get(host, port)
         resp = client.send_infer_request(
@@ -35,7 +37,9 @@ def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
                 "expert_id": expert_id,
                 "batch_size": 1,
                 "hidden_dim": int(hidden.shape[0]),
-                "activation": hidden.astype(np.float32).tobytes(),
+                "input_dtype": int(ActivationDType.FP16),
+                "output_dtype": int(ActivationDType.FP16),
+                "activation": hidden_fp16.tobytes(),
             }
         )
     except Exception:
@@ -45,16 +49,31 @@ def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
     if resp["status_code"] != 0:
         raise RuntimeError(
             f"infer failed for expert {expert_id}: "
-            f"status={resp['status_code']} output_bytes={len(resp['output'])}"
+            f"status={resp['status_code']} output_dtype={resp.get('output_dtype')} "
+            f"output_bytes={len(resp['output'])}"
         )
 
-    y = np.frombuffer(resp["output"], dtype=np.float16).astype(np.float32)
+    resp_output_dtype = int(resp["output_dtype"])
+    if resp_output_dtype == int(ActivationDType.FP16):
+        y = np.frombuffer(resp["output"], dtype=np.float16)
+    elif resp_output_dtype == int(ActivationDType.BF16):
+        y = np.frombuffer(resp["output"], dtype=ml_dtypes.bfloat16)
+    else:
+        raise RuntimeError(
+            f"unexpected output dtype for expert {expert_id}: {resp_output_dtype}"
+        )
+
     if y.size != hidden.shape[0]:
         raise RuntimeError(
             f"unexpected output size for expert {expert_id}: "
             f"got={y.size} expected={hidden.shape[0]}"
         )
-    return y
+
+    return {
+        "output_dtype": resp_output_dtype,
+        "output": resp["output"],
+        "array": y,
+    }
 
 
 def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tensor_kind: str):

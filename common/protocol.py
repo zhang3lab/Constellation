@@ -60,6 +60,12 @@ class TensorKind(enum.IntEnum):
     WDownScale = 5
 
 
+class ActivationDType(enum.IntEnum):
+    Unknown = 0
+    FP16 = 1
+    BF16 = 2
+
+
 class HeaderDict(TypedDict):
     magic: int
     version: int
@@ -368,6 +374,8 @@ def encode_infer_request(msg):
     body += pack_i32(int(msg["expert_id"]))
     body += pack_i32(int(msg["batch_size"]))
     body += pack_i32(int(msg["hidden_dim"]))
+    body += pack_u32(int(msg["input_dtype"]))
+    body += pack_u32(int(msg["output_dtype"]))
     body += pack_u32(len(activation))
     body += activation
     return bytes(body)
@@ -378,12 +386,14 @@ def decode_infer_request(body: bytes):
     expert_id, offset = unpack_i32(body, offset)
     batch_size, offset = unpack_i32(body, offset)
     hidden_dim, offset = unpack_i32(body, offset)
-    output_nbytes, offset = unpack_u32(body, offset)
+    input_dtype, offset = unpack_u32(body, offset)
+    output_dtype, offset = unpack_u32(body, offset)
+    activation_nbytes, offset = unpack_u32(body, offset)
 
-    if offset + output_nbytes > len(body):
+    if offset + activation_nbytes > len(body):
         raise ProtocolError("buffer too short while reading activation")
-    activation = body[offset : offset + output_nbytes]
-    offset += output_nbytes
+    activation = body[offset : offset + activation_nbytes]
+    offset += activation_nbytes
 
     if offset != len(body):
         raise ProtocolError(
@@ -394,9 +404,10 @@ def decode_infer_request(body: bytes):
         "expert_id": expert_id,
         "batch_size": batch_size,
         "hidden_dim": hidden_dim,
+        "input_dtype": input_dtype,
+        "output_dtype": output_dtype,
         "activation": activation,
     }
-
 
 def encode_infer_response(msg):
     output = msg["output"]
@@ -407,6 +418,7 @@ def encode_infer_response(msg):
     body += pack_i32(int(msg["status_code"]))
     body += pack_i32(int(msg["batch_size"]))
     body += pack_i32(int(msg["hidden_dim"]))
+    body += pack_u32(int(msg["output_dtype"]))
     body += pack_u32(len(output))
     body += output
     return bytes(body)
@@ -417,6 +429,7 @@ def decode_infer_response(body: bytes):
     status_code, offset = unpack_i32(body, offset)
     batch_size, offset = unpack_i32(body, offset)
     hidden_dim, offset = unpack_i32(body, offset)
+    output_dtype, offset = unpack_u32(body, offset)
     output_nbytes, offset = unpack_u32(body, offset)
 
     if offset + output_nbytes > len(body):
@@ -433,5 +446,6 @@ def decode_infer_response(body: bytes):
         "status_code": status_code,
         "batch_size": batch_size,
         "hidden_dim": hidden_dim,
+        "output_dtype": output_dtype,
         "output": output,
     }

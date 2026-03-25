@@ -42,6 +42,12 @@ enum class TensorKind : std::int32_t {
     WDownScale = 5,
 };
 
+enum class ActivationDType : std::uint32_t {
+    Unknown = 0,
+    FP16 = 1,
+    BF16 = 2,
+};
+
 struct MsgHeader {
     std::uint32_t magic;
     std::uint16_t version;
