@@ -6,11 +6,13 @@
   "model": {
     "family": "deepseek_v3",
     "root": "/model/ModelScope/deepseek-ai/DeepSeek-V3.1",
-    "chunk_size": 1048576
+    "chunk_size": 1048576,
+    "expert_mem_bytes": 2147483648,
+    "memory_utilization": 0.9
   },
-  "test_load": {
+  "run": {
+    "mode": "validation",
     "layer_id": 3,
-    "expert_id": 0,
-    "tensor_kind": "w_up"
+    "num_experts": 8
   }
 }

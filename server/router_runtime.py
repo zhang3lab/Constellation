@@ -303,6 +303,12 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
         compare_stability(f"router run0_vs_run{i}", ref, outputs[i])
 
 
+def run_one_token_real_router_only(session, layer_id: int):
+    hidden_size = int(get_router_config(session)["hidden_size"])
+    hidden = make_safe_input(hidden_size)
+    return run_one_token_moe_real_router(session, hidden, layer_id)
+
+
 def run_real_router_demo(session, layer_id: int, repeats: int = 10):
     hidden_size = int(get_router_config(session)["hidden_size"])
     hidden = make_safe_input(hidden_size)
