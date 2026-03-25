@@ -7,6 +7,7 @@ from server.expert_inference_validation import (
 from server.moe_layer_runtime import (
     run_topk_moe_layer,
     run_topk_reference,
+    run_moe_layer,
 )
 from server.router_runtime import get_router_config
 from server.test_utils import make_safe_input, print_stats, compare_arrays, compare_stability
