@@ -195,6 +195,32 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         "routes": routes,
     }
 
+
+def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
+    hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
+
+    model_root = str(session.cfg["model"]["root"])
+    layer_id = int(session.cfg["run"]["layer_id"])
+
+    w_up = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_up")
+    w_gate = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_gate")
+    w_down = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_down")
+
+    w_up_np = w_up.numpy()
+    w_gate_np = w_gate.numpy()
+    w_down_np = w_down.numpy()
+
+    up = w_up_np @ hidden
+    gate = w_gate_np @ hidden
+
+    up_t = torch.from_numpy(up.astype(np.float32, copy=False))
+    gate_t = torch.from_numpy(gate.astype(np.float32, copy=False))
+    fused = (F.silu(gate_t) * up_t).numpy()
+
+    y = w_down_np @ fused
+    return y.astype(np.float32, copy=False)
+
+
 def run_topk_reference(session, routes, hidden: np.ndarray):
     hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
 
