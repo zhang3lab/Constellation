@@ -8,6 +8,8 @@
 #include "expert_node_v2/expert_format_v2.h"
 #include "common/protocol.h"
 
+using common::TensorKind;
+
 struct ExpertTensorStateV2 {
     ExpertTensorBundleV2 bundle;
 
