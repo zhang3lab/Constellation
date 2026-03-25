@@ -37,6 +37,9 @@ enum class TensorKind : std::int32_t {
     WUp = 0,
     WGate = 1,
     WDown = 2,
+    WUpScale = 3,
+    WGateScale = 4,
+    WDownScale = 5,
 };
 
 struct MsgHeader {

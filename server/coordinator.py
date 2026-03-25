@@ -274,7 +274,7 @@ class Coordinator:
             f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)}"
         )
 
-    def send_one_expert_triplet(
+    def send_one_expert_sixpack(
         self,
         expert_id: int,
         tensor_loader,
@@ -282,20 +282,23 @@ class Coordinator:
     ) -> None:
         order = [
             ("w_up", TensorKind.WUp),
+            ("w_up_scale", TensorKind.WUpScale),
             ("w_gate", TensorKind.WGate),
+            ("w_gate_scale", TensorKind.WGateScale),
             ("w_down", TensorKind.WDown),
+            ("w_down_scale", TensorKind.WDownScale),
         ]
-     
+
         for tensor_kind_name, tensor_kind_enum in order:
             tensor_name, shard_path, tensor_bytes, shape, dtype = tensor_loader(
                 expert_id,
                 tensor_kind_name,
             )
-     
+
             print(f"resolved tensor_name={tensor_name}")
             print(f"resolved shard_path={shard_path}")
             print(f"resolved shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}")
-     
+
             self.send_one_tensor_bytes(
                 expert_id=expert_id,
                 tensor_kind=tensor_kind_enum,
@@ -306,13 +309,13 @@ class Coordinator:
     def preload_all_placed_experts(self, tensor_loader, chunk_size: int):
         expert_ids = sorted({int(p["expert_id"]) for p in self.placements})
         print(f"preloading all placed experts: {expert_ids}")
-     
+
         for expert_id in expert_ids:
             print(f"preloading expert={expert_id}")
-            self.send_one_expert_triplet(
+            self.send_one_expert_sixpack(
                 expert_id=expert_id,
                 tensor_loader=tensor_loader,
                 chunk_size=chunk_size,
             )
-     
+
         return expert_ids

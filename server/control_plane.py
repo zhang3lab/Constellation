@@ -1,4 +1,7 @@
-from server.model_locator import resolve_and_load_deepseek_tensor
+from server.model_locator import (
+    resolve_and_load_deepseek_tensor,
+    resolve_and_load_deepseek_scale_tensor,
+)
 from server.router_runtime import load_router_config
 
 
@@ -10,12 +13,39 @@ def build_tensor_loader(cfg):
     layer_id = int(run_cfg["layer_id"])
 
     def tensor_loader(eid: int, tensor_kind_name: str):
-        return resolve_and_load_deepseek_tensor(
-            model_root=model_root,
-            layer_id=layer_id,
-            expert_id=eid,
-            tensor_kind=tensor_kind_name,
-        )
+        if tensor_kind_name in ("w_up", "w_gate", "w_down"):
+            return resolve_and_load_deepseek_tensor(
+                model_root=model_root,
+                layer_id=layer_id,
+                expert_id=eid,
+                tensor_kind=tensor_kind_name,
+            )
+
+        if tensor_kind_name == "w_up_scale":
+            return resolve_and_load_deepseek_scale_tensor(
+                model_root=model_root,
+                layer_id=layer_id,
+                expert_id=eid,
+                tensor_kind="w_up",
+            )
+
+        if tensor_kind_name == "w_gate_scale":
+            return resolve_and_load_deepseek_scale_tensor(
+                model_root=model_root,
+                layer_id=layer_id,
+                expert_id=eid,
+                tensor_kind="w_gate",
+            )
+
+        if tensor_kind_name == "w_down_scale":
+            return resolve_and_load_deepseek_scale_tensor(
+                model_root=model_root,
+                layer_id=layer_id,
+                expert_id=eid,
+                tensor_kind="w_down",
+            )
+
+        raise RuntimeError(f"unsupported tensor_kind_name: {tensor_kind_name}")
 
     return tensor_loader
 

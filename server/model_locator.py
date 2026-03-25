@@ -88,3 +88,25 @@ def resolve_and_load_deepseek_tensor(
     )
 
     return tensor_name, shard_path, tensor_bytes, shape, dtype
+
+def resolve_and_load_deepseek_scale_tensor(
+    model_root: str,
+    layer_id: int,
+    expert_id: int,
+    tensor_kind: str,
+) -> tuple[str, str, bytes, tuple[int, ...], str]:
+    weight_name, shard_path = resolve_deepseek_tensor_file(
+        model_root=model_root,
+        layer_id=layer_id,
+        expert_id=expert_id,
+        tensor_kind=tensor_kind,
+    )
+
+    scale_name = weight_name + "_scale_inv"
+
+    tensor_bytes, shape, dtype = load_tensor_bytes_from_safetensors(
+        shard_path=shard_path,
+        tensor_name=scale_name,
+    )
+
+    return scale_name, shard_path, tensor_bytes, shape, dtype

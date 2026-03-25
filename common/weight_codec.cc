@@ -34,7 +34,7 @@ bool DecodeLoadWeightsBeginBody(
     if (!ReadU64(body, &offset, &out->total_bytes)) return false;
 
     if (tensor_kind_raw < static_cast<std::int32_t>(TensorKind::WUp) ||
-        tensor_kind_raw > static_cast<std::int32_t>(TensorKind::WDown)) {
+        tensor_kind_raw > static_cast<std::int32_t>(TensorKind::WDownScale)) {
         return false;
     }
     out->tensor_kind = static_cast<TensorKind>(tensor_kind_raw);

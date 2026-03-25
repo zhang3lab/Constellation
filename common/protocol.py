@@ -55,6 +55,9 @@ class TensorKind(enum.IntEnum):
     WUp = 0
     WGate = 1
     WDown = 2
+    WUpScale = 3
+    WGateScale = 4
+    WDownScale = 5
 
 
 class HeaderDict(TypedDict):

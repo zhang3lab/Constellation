@@ -61,7 +61,7 @@ bool ReadTensorKind(const std::string& buf, std::size_t* offset, TensorKind* out
     if (!ReadI32(buf, offset, &raw)) return false;
 
     if (raw < static_cast<std::int32_t>(TensorKind::WUp) ||
-        raw > static_cast<std::int32_t>(TensorKind::WDown)) {
+        raw > static_cast<std::int32_t>(TensorKind::WDownScale)) {
         return false;
     }
 
