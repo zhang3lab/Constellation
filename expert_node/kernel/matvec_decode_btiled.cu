@@ -37,10 +37,14 @@ float g_lut_ieee_e5m2_host[256];
 float g_lut_torch_e4m3fn_host[256];
 bool g_luts_built = false;
 
-float* g_lut_ieee_e4m3_dev = nullptr;
-float* g_lut_ieee_e5m2_dev = nullptr;
-float* g_lut_torch_e4m3fn_dev = nullptr;
-bool g_luts_uploaded = false;
+struct DeviceLutState {
+    bool uploaded = false;
+    float* lut_ieee_e4m3_dev = nullptr;
+    float* lut_ieee_e5m2_dev = nullptr;
+    float* lut_torch_e4m3fn_dev = nullptr;
+};
+
+static DeviceLutState g_lut_states[16];
 
 float decode_fp8_e4m3_host(uint8_t x) {
     const int sign = (x >> 7) & 0x1;
@@ -337,91 +341,105 @@ bool launch_dispatch_impl(
 bool initialize(cudaStream_t stream) {
     build_host_luts();
 
-    if (g_luts_uploaded) return true;
-
-    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&g_lut_ieee_e4m3_dev), 256 * sizeof(float));
+    int device = -1;
+    cudaError_t err = cudaGetDevice(&device);
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: cudaMalloc g_lut_ieee_e4m3_dev failed: %s\n",
+        std::fprintf(stderr, "initialize: cudaGetDevice failed: %s\n",
                      cudaGetErrorString(err));
         return false;
     }
-
-    err = cudaMalloc(reinterpret_cast<void**>(&g_lut_ieee_e5m2_dev), 256 * sizeof(float));
-    if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: cudaMalloc g_lut_ieee_e5m2_dev failed: %s\n",
-                     cudaGetErrorString(err));
-        cudaFree(g_lut_ieee_e4m3_dev);
-        g_lut_ieee_e4m3_dev = nullptr;
+    if (device < 0 || device >= 16) {
+        std::fprintf(stderr, "initialize: device %d out of range\n", device);
         return false;
     }
 
-    err = cudaMalloc(reinterpret_cast<void**>(&g_lut_torch_e4m3fn_dev), 256 * sizeof(float));
+    DeviceLutState& s = g_lut_states[device];
+    if (s.uploaded) return true;
+
+    err = cudaMalloc(reinterpret_cast<void**>(&s.lut_ieee_e4m3_dev), 256 * sizeof(float));
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: cudaMalloc g_lut_torch_e4m3fn_dev failed: %s\n",
-                     cudaGetErrorString(err));
-        cudaFree(g_lut_ieee_e4m3_dev);
-        cudaFree(g_lut_ieee_e5m2_dev);
-        g_lut_ieee_e4m3_dev = nullptr;
-        g_lut_ieee_e5m2_dev = nullptr;
+        std::fprintf(stderr, "initialize: cudaMalloc lut_ieee_e4m3_dev failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
         return false;
     }
 
-    err = cudaMemcpyAsync(g_lut_ieee_e4m3_dev, g_lut_ieee_e4m3_host,
+    err = cudaMalloc(reinterpret_cast<void**>(&s.lut_ieee_e5m2_dev), 256 * sizeof(float));
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "initialize: cudaMalloc lut_ieee_e5m2_dev failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
+        cudaFree(s.lut_ieee_e4m3_dev);
+        s.lut_ieee_e4m3_dev = nullptr;
+        return false;
+    }
+
+    err = cudaMalloc(reinterpret_cast<void**>(&s.lut_torch_e4m3fn_dev), 256 * sizeof(float));
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "initialize: cudaMalloc lut_torch_e4m3fn_dev failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
+        cudaFree(s.lut_ieee_e4m3_dev);
+        cudaFree(s.lut_ieee_e5m2_dev);
+        s.lut_ieee_e4m3_dev = nullptr;
+        s.lut_ieee_e5m2_dev = nullptr;
+        return false;
+    }
+
+    err = cudaMemcpyAsync(s.lut_ieee_e4m3_dev, g_lut_ieee_e4m3_host,
                           256 * sizeof(float), cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: memcpy g_lut_ieee_e4m3_dev failed: %s\n",
-                     cudaGetErrorString(err));
-        cudaFree(g_lut_ieee_e4m3_dev);
-        cudaFree(g_lut_ieee_e5m2_dev);
-        cudaFree(g_lut_torch_e4m3fn_dev);
-        g_lut_ieee_e4m3_dev = nullptr;
-        g_lut_ieee_e5m2_dev = nullptr;
-        g_lut_torch_e4m3fn_dev = nullptr;
-        return false;
+        std::fprintf(stderr, "initialize: memcpy lut_ieee_e4m3_dev failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
+        goto fail;
     }
 
-    err = cudaMemcpyAsync(g_lut_ieee_e5m2_dev, g_lut_ieee_e5m2_host,
+    err = cudaMemcpyAsync(s.lut_ieee_e5m2_dev, g_lut_ieee_e5m2_host,
                           256 * sizeof(float), cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: memcpy g_lut_ieee_e5m2_dev failed: %s\n",
-                     cudaGetErrorString(err));
-        cudaFree(g_lut_ieee_e4m3_dev);
-        cudaFree(g_lut_ieee_e5m2_dev);
-        cudaFree(g_lut_torch_e4m3fn_dev);
-        g_lut_ieee_e4m3_dev = nullptr;
-        g_lut_ieee_e5m2_dev = nullptr;
-        g_lut_torch_e4m3fn_dev = nullptr;
-        return false;
+        std::fprintf(stderr, "initialize: memcpy lut_ieee_e5m2_dev failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
+        goto fail;
     }
 
-    err = cudaMemcpyAsync(g_lut_torch_e4m3fn_dev, g_lut_torch_e4m3fn_host,
+    err = cudaMemcpyAsync(s.lut_torch_e4m3fn_dev, g_lut_torch_e4m3fn_host,
                           256 * sizeof(float), cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: memcpy g_lut_torch_e4m3fn_dev failed: %s\n",
-                     cudaGetErrorString(err));
-        cudaFree(g_lut_ieee_e4m3_dev);
-        cudaFree(g_lut_ieee_e5m2_dev);
-        cudaFree(g_lut_torch_e4m3fn_dev);
-        g_lut_ieee_e4m3_dev = nullptr;
-        g_lut_ieee_e5m2_dev = nullptr;
-        g_lut_torch_e4m3fn_dev = nullptr;
-        return false;
+        std::fprintf(stderr, "initialize: memcpy lut_torch_e4m3fn_dev failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
+        goto fail;
     }
 
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "initialize: stream sync failed: %s\n", cudaGetErrorString(err));
-        cudaFree(g_lut_ieee_e4m3_dev);
-        cudaFree(g_lut_ieee_e5m2_dev);
-        cudaFree(g_lut_torch_e4m3fn_dev);
-        g_lut_ieee_e4m3_dev = nullptr;
-        g_lut_ieee_e5m2_dev = nullptr;
-        g_lut_torch_e4m3fn_dev = nullptr;
-        return false;
+        std::fprintf(stderr, "initialize: stream sync failed on dev %d: %s\n",
+                     device, cudaGetErrorString(err));
+        goto fail;
     }
 
-    g_luts_uploaded = true;
+    s.uploaded = true;
     return true;
+
+fail:
+    cudaFree(s.lut_ieee_e4m3_dev);
+    cudaFree(s.lut_ieee_e5m2_dev);
+    cudaFree(s.lut_torch_e4m3fn_dev);
+    s.lut_ieee_e4m3_dev = nullptr;
+    s.lut_ieee_e5m2_dev = nullptr;
+    s.lut_torch_e4m3fn_dev = nullptr;
+    return false;
+}
+
+const DeviceLutState* get_device_lut_state() {
+    int device = -1;
+    cudaError_t err = cudaGetDevice(&device);
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "get_device_lut_state: cudaGetDevice failed: %s\n",
+                     cudaGetErrorString(err));
+        return nullptr;
+    }
+    if (device < 0 || device >= 16) {
+        std::fprintf(stderr, "get_device_lut_state: device %d out of range\n", device);
+        return nullptr;
+    }
+    return &g_lut_states[device];
 }
 
 bool launch_matvec_decode_from_float(
@@ -431,11 +449,18 @@ bool launch_matvec_decode_from_float(
     const MlpShape& shape,
     cudaStream_t stream) {
     if (!initialize(stream)) return false;
+
+    const DeviceLutState* s = get_device_lut_state();
+    if (s == nullptr || !s->uploaded) {
+        std::fprintf(stderr, "launch_matvec_decode_from_float: device LUT state unavailable\n");
+        return false;
+    }
+
     return launch_dispatch_impl(
         W, d_x, d_y, shape, stream,
-        g_lut_ieee_e4m3_dev,
-        g_lut_ieee_e5m2_dev,
-        g_lut_torch_e4m3fn_dev);
+        s->lut_ieee_e4m3_dev,
+        s->lut_ieee_e5m2_dev,
+        s->lut_torch_e4m3fn_dev);
 }
 
 bool launch_matvec_decode(
@@ -445,14 +470,24 @@ bool launch_matvec_decode(
     const MlpShape& shape,
     cudaStream_t stream) {
     if (!initialize(stream)) return false;
+
+    const DeviceLutState* s = get_device_lut_state();
+    if (s == nullptr || !s->uploaded) {
+        std::fprintf(stderr, "launch_matvec_decode: device LUT state unavailable\n");
+        return false;
+    }
+
     if (!d_y) {
         std::fprintf(stderr, "launch_matvec_decode: null output pointer\n");
         return false;
     }
 
     float* d_y_float = nullptr;
-    const size_t numel = static_cast<size_t>(shape.num_tokens) * static_cast<size_t>(W.rows);
-    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&d_y_float), numel * sizeof(float));
+    const size_t numel =
+        static_cast<size_t>(shape.num_tokens) * static_cast<size_t>(W.rows);
+
+    cudaError_t err =
+        cudaMalloc(reinterpret_cast<void**>(&d_y_float), numel * sizeof(float));
     if (err != cudaSuccess) {
         std::fprintf(stderr, "launch_matvec_decode: cudaMalloc temp failed: %s\n",
                      cudaGetErrorString(err));
@@ -461,15 +496,16 @@ bool launch_matvec_decode(
 
     const bool ok = launch_dispatch_impl(
         W, d_x, d_y_float, shape, stream,
-        g_lut_ieee_e4m3_dev,
-        g_lut_ieee_e5m2_dev,
-        g_lut_torch_e4m3fn_dev);
+        s->lut_ieee_e4m3_dev,
+        s->lut_ieee_e5m2_dev,
+        s->lut_torch_e4m3fn_dev);
     if (!ok) {
         cudaFree(d_y_float);
         return false;
     }
 
-    if (!launch_cast_float_to_half_local(d_y_float, d_y, static_cast<int>(numel), stream)) {
+    if (!launch_cast_float_to_half_local(
+            d_y_float, d_y, static_cast<int>(numel), stream)) {
         cudaFree(d_y_float);
         return false;
     }
