@@ -1,4 +1,4 @@
-#include "expert_node_v2/cuda/mlp_blockscale_cuda_v2.h"
+#include "expert_node_v2/cuda/fused_up_gate_cuda_v2.h"
 
 #include <cuda_fp16.h>
 #if EXPERT_NODE_V2_HAS_CUDA_BF16
