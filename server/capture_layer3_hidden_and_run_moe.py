@@ -2,7 +2,7 @@ import argparse
 import json
 import numpy as np
 import torch
-from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoConfig, AutoTokenizer, AutoModel
 
 from server.config import load_config
 from server.coordinator import Coordinator
@@ -31,13 +31,23 @@ def main():
     model_cfg = AutoConfig.from_pretrained(model_root, trust_remote_code=True)
     if hasattr(model_cfg, "quantization_config"):
         delattr(model_cfg, "quantization_config")
+
+    # 只保留前 layer_id+1 层
+    model_cfg.num_hidden_layers = layer_id + 1
+
+    # 可选：如果这个字段在配置里存在，也关掉额外 nextn 预测层
+    if hasattr(model_cfg, "num_nextn_predict_layers"):
+        model_cfg.num_nextn_predict_layers = 0
+
     tokenizer = AutoTokenizer.from_pretrained(model_root, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
+
+    model = AutoModel.from_pretrained(
         model_root,
         config=model_cfg,
         trust_remote_code=True,
         torch_dtype=torch.float16,
         device_map=None,
+        low_cpu_mem_usage=True,
     )
     model.eval()
     model.to(args.device)
