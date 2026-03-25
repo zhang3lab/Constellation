@@ -2,6 +2,7 @@ from server.config import load_config
 from server.coordinator import Coordinator
 from server.inference_session import InferenceSession
 from server.model_locator import resolve_and_load_deepseek_tensor
+from server.moe_layer_runtime import run_moe_layer
 from server.router_runtime import load_router_config, run_one_token_moe_real_router
 from server.test_utils import make_safe_input
 from server.validation_suite import run_validation_suite
@@ -69,7 +70,7 @@ def run_runtime_demo(coord, cfg):
 
     with InferenceSession(coord, cfg) as session:
         hidden = make_safe_input(hidden_size)
-        result = run_one_token_moe_real_router(session, hidden, layer_id)
+        result = run_moe_layer(session, hidden, layer_id)
 
         print("[demo] routes =", result["routes"])
         print("[demo] combined[:8] =", result["combined"][:8])

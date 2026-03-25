@@ -4,6 +4,11 @@ import torch.nn.functional as F
 from safetensors import safe_open
 
 from server.model_locator import resolve_deepseek_tensor_file
+from server.router_runtime import (
+    get_router_config,
+    get_router_tensors,
+    route_token_real,
+)
 from server.test_utils import make_safe_input, print_stats, compare_arrays
 
 
@@ -111,6 +116,53 @@ def run_topk_moe_layer(session, hidden: np.ndarray, routes):
     weighted_outputs = dispatch_topk_experts(session, hidden, routes)
     combined = combine_outputs(weighted_outputs)
     return combined, weighted_outputs
+
+
+def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: bool = False):
+    router_cfg = get_router_config(session)
+    gate_weight, e_score_correction_bias = get_router_tensors(session, layer_id)
+
+    hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
+    hidden_size = int(router_cfg["hidden_size"])
+    if hidden.shape[0] != hidden_size:
+        raise RuntimeError(
+            f"hidden size mismatch: got={hidden.shape[0]} expected={hidden_size}"
+        )
+
+    resident_expert_ids = sorted({int(p["expert_id"]) for p in session.coord.placements})
+    if not resident_expert_ids:
+        raise RuntimeError("no resident experts found in current placement")
+
+    routes, aux = route_token_real(
+        hidden,
+        gate_weight,
+        e_score_correction_bias,
+        n_group=int(router_cfg["n_group"]),
+        topk_group=int(router_cfg["topk_group"]),
+        top_k=min(int(router_cfg["top_k"]), len(resident_expert_ids)),
+        norm_topk_prob=bool(router_cfg["norm_topk_prob"]),
+        routed_scaling_factor=float(router_cfg["routed_scaling_factor"]),
+        scoring_func=str(router_cfg["scoring_func"]),
+        topk_method=str(router_cfg["topk_method"]),
+        n_routed_experts=int(router_cfg["n_routed_experts"]),
+        hidden_size=int(router_cfg["hidden_size"]),
+        resident_expert_ids=resident_expert_ids,
+    )
+
+    combined, weighted_outputs = run_topk_moe_layer(session, hidden, routes)
+
+    if return_aux:
+        return {
+            "output": combined,
+            "routes": routes,
+            "weighted_outputs": weighted_outputs,
+            "aux": aux,
+        }
+
+    return {
+        "output": combined,
+        "routes": routes,
+    }
 
 
 def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
