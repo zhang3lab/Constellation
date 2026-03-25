@@ -92,12 +92,37 @@ def should_keep_tensor(name: str, max_layer_id: int):
     return False
 
 
+def dequant_fp8_weight_blockwise(weight: torch.Tensor, scale_inv: torch.Tensor, block_size: int = 128):
+    if weight.ndim != 2:
+        raise RuntimeError(f"expected 2D weight, got shape={tuple(weight.shape)}")
+    if scale_inv.ndim != 2:
+        raise RuntimeError(f"expected 2D scale_inv, got shape={tuple(scale_inv.shape)}")
+
+    rows, cols = weight.shape
+    br, bc = scale_inv.shape
+
+    if rows != br * block_size or cols != bc * block_size:
+        raise RuntimeError(
+            f"shape mismatch: weight={tuple(weight.shape)} scale_inv={tuple(scale_inv.shape)} "
+            f"block_size={block_size}"
+        )
+
+    w = weight.float()
+    s = scale_inv.float()
+
+    w = w.view(br, block_size, bc, block_size)
+    w = w * s[:, None, :, None]
+    w = w.view(rows, cols)
+
+    return w.to(torch.bfloat16)
+
+
 def load_partial_state_dict(model_root: Path, max_layer_id: int, device: str):
     shard_paths = sorted(model_root.rglob("*.safetensors"))
     if not shard_paths:
         raise RuntimeError(f"no safetensors found under {model_root}")
 
-    state = {}
+    raw = {}
 
     for shard_path in shard_paths:
         with safe_open(shard_path, framework="pt", device="cpu") as f:
@@ -107,7 +132,21 @@ def load_partial_state_dict(model_root: Path, max_layer_id: int, device: str):
                 continue
 
             for k in keep:
-                state[k] = f.get_tensor(k).to(device)
+                raw[k] = f.get_tensor(k)
+
+    state = {}
+
+    for k, v in raw.items():
+        if k.endswith(".weight_scale_inv"):
+            continue
+
+        if v.dtype == torch.float8_e4m3fn:
+            scale_key = k + "_scale_inv"
+            if scale_key not in raw:
+                raise RuntimeError(f"missing scale tensor for fp8 weight: {k}")
+            v = dequant_fp8_weight_blockwise(v, raw[scale_key])
+
+        state[k] = v.to(device)
 
     return state
 
