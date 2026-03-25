@@ -62,7 +62,13 @@ __device__ inline __nv_bfloat16 float_to_act<__nv_bfloat16>(float x) {
 
 template <class TIn, class TOut, int WARPS_PER_BLOCK>
 __global__ void matvec_blockscale_kernel(
-    MatrixBlockScaleViewV2 W,
+    int rows,
+    int cols,
+    const std::uint8_t* __restrict__ weights,
+    int row_block,
+    int col_block,
+    int num_col_blocks,
+    const float* __restrict__ scales,
     const TIn* __restrict__ x,
     TOut* __restrict__ y,
     const float* __restrict__ lut) {
@@ -73,23 +79,20 @@ __global__ void matvec_blockscale_kernel(
     const int lane = tid % WARP_SIZE;
     const int row = blockIdx.x * WARPS_PER_BLOCK + warp_id;
 
-    if (row >= W.matrix.rows) return;
+    if (row >= rows) return;
 
-    const std::uint8_t* weights = W.weight.data.data();
-    const float* scales = W.scale.data.data();
-
-    const int rb = row / W.scale_meta.row_block;
+    const int rb = row / row_block;
     float sum = 0.0f;
 
-    for (int k = lane; k < W.matrix.cols; k += WARP_SIZE) {
-        const int cb = k / W.scale_meta.col_block;
+    for (int k = lane; k < cols; k += WARP_SIZE) {
+        const int cb = k / col_block;
 
         const std::size_t w_idx =
-            static_cast<std::size_t>(row) * static_cast<std::size_t>(W.matrix.cols) +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) +
             static_cast<std::size_t>(k);
         const std::size_t s_idx =
             static_cast<std::size_t>(rb) *
-                static_cast<std::size_t>(W.scale_meta.num_col_blocks) +
+                static_cast<std::size_t>(num_col_blocks) +
             static_cast<std::size_t>(cb);
 
         const float scale = scales[s_idx];
@@ -132,7 +135,17 @@ bool LaunchMatvecBlockScaleCudaV2(
     const int blocks = (W.matrix.rows + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
 
     matvec_blockscale_kernel<TIn, TOut, WARPS_PER_BLOCK>
-        <<<blocks, THREADS, 0, stream>>>(W, d_x, d_y, lut);
+        <<<blocks, THREADS, 0, stream>>>(
+            W.matrix.rows,
+            W.matrix.cols,
+            W.weight.data.data(),
+            W.scale_meta.row_block,
+            W.scale_meta.col_block,
+            W.scale_meta.num_col_blocks,
+            W.scale.data.data(),
+            d_x,
+            d_y,
+            lut);
 
     err = cudaGetLastError();
     return err == cudaSuccess;

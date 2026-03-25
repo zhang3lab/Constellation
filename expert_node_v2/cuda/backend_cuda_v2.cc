@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 
+#include "expert_node_v2/cuda/mlp_blockscale_cuda_v2.h"
 #include "expert_node_v2/expert_loader_v2.h"
 
 namespace {
@@ -67,22 +68,6 @@ bool UploadOneMatrixCuda(
 
     return true;
 }
-
-// internal kernel launch helpers, implemented in .cu later
-template <class TAct>
-bool LaunchFusedUpGateCudaV2Impl(
-    const MatrixBlockScaleViewV2& w_up_device_view,
-    const MatrixBlockScaleViewV2& w_gate_device_view,
-    const TAct* d_x,
-    float* d_h,
-    cudaStream_t stream);
-
-template <class TAct>
-bool LaunchDownCudaV2Impl(
-    const MatrixBlockScaleViewV2& w_down_device_view,
-    const float* d_h,
-    TAct* d_y,
-    cudaStream_t stream);
 
 }  // namespace
 
