@@ -15,12 +15,18 @@ from server.inference_session import InferenceSession
 from server.moe_layer_runtime import run_moe_layer
 
 
+class StopBeforeMoE(Exception):
+    pass
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--server-config", type=str, default="server/config.json")
     p.add_argument("--prompt", type=str, default="Hello world")
     p.add_argument("--token-index", type=int, default=-1)
     p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--pkg-root", type=str, default="/root/Constellation/tmp")
+    p.add_argument("--package-name", type=str, default="DeepSeek_V3_1")
     return p.parse_args()
 
 
@@ -65,34 +71,43 @@ def build_config_object(config_module, cfg_dict):
     return ConfigCls(**cfg_dict)
 
 
-def list_needed_tensor_names(max_layer_id: int):
-    needed_prefixes = ["model.embed_tokens."]
-    for i in range(max_layer_id + 1):
-        needed_prefixes.append(f"model.layers.{i}.")
-    return needed_prefixes
+def should_keep_tensor(name: str, max_layer_id: int):
+    if name.startswith("model.embed_tokens."):
+        return True
+
+    # full keep for layers before target layer
+    for i in range(max_layer_id):
+        if name.startswith(f"model.layers.{i}."):
+            return True
+
+    # for target layer, keep only attention-side tensors and norms
+    last = max_layer_id
+    if name.startswith(f"model.layers.{last}.input_layernorm."):
+        return True
+    if name.startswith(f"model.layers.{last}.self_attn."):
+        return True
+    if name.startswith(f"model.layers.{last}.post_attention_layernorm."):
+        return True
+
+    return False
 
 
-def should_keep_tensor(name: str, needed_prefixes):
-    return any(name.startswith(p) for p in needed_prefixes)
-
-
-def load_partial_state_dict(model_root: Path, max_layer_id: int):
+def load_partial_state_dict(model_root: Path, max_layer_id: int, device: str):
     shard_paths = sorted(model_root.rglob("*.safetensors"))
     if not shard_paths:
         raise RuntimeError(f"no safetensors found under {model_root}")
 
-    needed_prefixes = list_needed_tensor_names(max_layer_id)
     state = {}
 
     for shard_path in shard_paths:
         with safe_open(shard_path, framework="pt", device="cpu") as f:
             keys = list(f.keys())
-            keep = [k for k in keys if should_keep_tensor(k, needed_prefixes)]
+            keep = [k for k in keys if should_keep_tensor(k, max_layer_id)]
             if not keep:
                 continue
 
             for k in keep:
-                state[k] = f.get_tensor(k)
+                state[k] = f.get_tensor(k).to(device)
 
     return state
 
@@ -145,15 +160,15 @@ def main():
         raise RuntimeError("DeepseekV3Model not found in modeling_deepseek.py")
     ModelCls = modeling_module.DeepseekV3Model
 
-    model = ModelCls(config)
-    model.to(args.device)
+    with torch.device("meta"):
+        model = ModelCls(config)
     model.eval()
 
     # load only embedding + layers 0..layer_id
-    raw_state = load_partial_state_dict(model_root, max_layer_id=layer_id)
+    raw_state = load_partial_state_dict(model_root, max_layer_id=layer_id, device=args.device)
     state = strip_model_prefix_for_base_model(raw_state)
 
-    missing, unexpected = model.load_state_dict(state, strict=False)
+    missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
     print(f"[partial-load] missing={len(missing)} unexpected={len(unexpected)}")
     if missing:
         print("[partial-load] first missing keys:", missing[:20])
@@ -166,19 +181,23 @@ def main():
 
     captured = {}
 
-    def hook_mlp_input(module_, inputs, output):
+    def hook_mlp_input(module_, inputs):
         captured["hidden"] = inputs[0].detach()
+        raise StopBeforeMoE
 
     layers = get_layers_root(model)
-    handle = layers[layer_id].mlp.register_forward_hook(hook_mlp_input)
+    handle = layers[layer_id].mlp.register_forward_pre_hook(hook_mlp_input)
 
     enc = tokenizer(args.prompt, return_tensors="pt")
     enc = {k: v.to(args.device) for k, v in enc.items()}
 
-    with torch.no_grad():
-        _ = model(**enc)
-
-    handle.remove()
+    try:
+        with torch.no_grad():
+            _ = model(**enc)
+    except StopBeforeMoE:
+        pass
+    finally:
+        handle.remove()
 
     if "hidden" not in captured:
         raise RuntimeError("failed to capture mlp input")
