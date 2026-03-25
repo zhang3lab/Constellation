@@ -252,6 +252,8 @@ def main():
         f"mean={hidden_np.mean():.6e} std={hidden_np.std():.6e}"
     )
     print("[capture] hidden[:8] =", hidden_np[:8])
+    np.save("server/debug_hidden_layer3.npy", hidden_np)
+    print("[capture] saved debug hidden to server/debug_hidden_layer3.npy")
 
     coord = Coordinator(server_cfg["nodes"])
     setup_control_plane(coord, server_cfg)

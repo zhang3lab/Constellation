@@ -3,11 +3,11 @@ import torch
 
 
 def make_safe_input(hidden_dim: int):
-    x = np.zeros(hidden_dim, dtype=np.float32)
-    x[0] = 1e-4
-    x[7] = -2e-4
-    x[19] = 5e-5
-    x[123] = -1e-4
+    x = np.load("server/debug_hidden_layer3.npy").astype(np.float32, copy=False).reshape(-1)
+    if x.shape[0] != hidden_dim:
+        raise RuntimeError(
+            f"debug hidden size mismatch: got={x.shape[0]} expected={hidden_dim}"
+        )
     return x
 
 
