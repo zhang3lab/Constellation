@@ -201,7 +201,7 @@ def combine_outputs(weighted_outputs):
     return combined
 
 
-def run_top8_reference(session, routes, hidden: np.ndarray):
+def run_topk_reference(session, routes, hidden: np.ndarray):
     weighted_outputs = []
     for expert_id, weight in routes:
         y = run_one_expert_reference(session, expert_id, hidden)
