@@ -75,6 +75,9 @@ __global__ void matvec_blockscale_kernel(
 
     if (row >= W.matrix.rows) return;
 
+    const std::uint8_t* weights = W.weight.data.data();
+    const float* scales = W.scale.data.data();
+
     const int rb = row / W.scale_meta.row_block;
     float sum = 0.0f;
 
@@ -89,8 +92,8 @@ __global__ void matvec_blockscale_kernel(
                 static_cast<std::size_t>(W.scale_meta.num_col_blocks) +
             static_cast<std::size_t>(cb);
 
-        const float scale = W.scale.data[s_idx];
-        const float w = lut[W.weight.data[w_idx]] * scale;
+        const float scale = scales[s_idx];
+        const float w = lut[weights[w_idx]] * scale;
         const float xv = act_to_float<TIn>(x[k]);
         sum += w * xv;
     }
