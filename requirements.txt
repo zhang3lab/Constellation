@@ -1,0 +1,7 @@
+numpy
+torch
+safetensors
+accelerate
+sentencepiece
+transformers==4.44.2
+tokenizers<0.20
