@@ -119,10 +119,21 @@ def run_topk_moe_layer(session, hidden: np.ndarray, routes):
 
 
 def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: bool = False):
+    if not isinstance(hidden, np.ndarray):
+        raise TypeError(f"hidden must be a numpy.ndarray, got {type(hidden)}")
+
+    if hidden.ndim != 1:
+        raise RuntimeError(f"hidden must be 1-D, got shape={hidden.shape}")
+
+    if hidden.dtype != np.float32:
+        raise RuntimeError(f"hidden must have dtype float32, got {hidden.dtype}")
+
+    if not hidden.flags["C_CONTIGUOUS"]:
+        hidden = np.ascontiguousarray(hidden)
+
     router_cfg = get_router_config(session)
     gate_weight, e_score_correction_bias = get_router_tensors(session, layer_id)
 
-    hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
     hidden_size = int(router_cfg["hidden_size"])
     if hidden.shape[0] != hidden_size:
         raise RuntimeError(
@@ -163,48 +174,3 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         "output": combined,
         "routes": routes,
     }
-
-
-def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
-    cfg = session.cfg
-    model = cfg["model"]
-    run_cfg = cfg["run"]
-
-    model_root = str(model["root"])
-    layer_id = int(run_cfg["layer_id"])
-
-    W_up = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_up")
-    W_gate = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_gate")
-    W_down = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_down")
-
-    x_t = torch.from_numpy(hidden.astype(np.float32))
-
-    up = W_up @ x_t
-    gate = W_gate @ x_t
-    fused = up * F.silu(gate)
-    y_ref = W_down @ fused
-
-    # 对齐 server 最终 fp16 输出路径
-    y_ref = y_ref.to(torch.float16).to(torch.float32).cpu().numpy()
-    return y_ref
-
-
-def combine_outputs(weighted_outputs):
-    if not weighted_outputs:
-        raise RuntimeError("weighted_outputs is empty")
-
-    hidden_dim = weighted_outputs[0][2].shape[0]
-    combined = np.zeros(hidden_dim, dtype=np.float32)
-
-    for _, weight, y in weighted_outputs:
-        combined += float(weight) * y
-    return combined
-
-
-def run_topk_reference(session, routes, hidden: np.ndarray):
-    weighted_outputs = []
-    for expert_id, weight in routes:
-        y = run_one_expert_reference(session, expert_id, hidden)
-        weighted_outputs.append((expert_id, weight, y))
-    combined = combine_outputs(weighted_outputs)
-    return combined, weighted_outputs
