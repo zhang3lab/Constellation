@@ -8,7 +8,6 @@
 
 #include "expert_node_v2/cuda/cuda_common_v2.cuh"
 #include "expert_node_v2/cuda/fp8_decode_lut_v2.h"
-#include "expert_node_v2/cuda/matvec_blockscale_cuda_v2.h"
 
 namespace {
 
