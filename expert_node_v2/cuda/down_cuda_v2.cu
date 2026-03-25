@@ -1,4 +1,4 @@
-#include "expert_node_v2/cuda/matvec_blockscale_cuda_v2.h"
+#include "expert_node_v2/cuda/down_cuda_v2.h"
 
 #include <cuda_fp16.h>
 #if EXPERT_NODE_V2_HAS_CUDA_BF16
@@ -14,8 +14,8 @@
 
 namespace {
 
-template <class TIn, class TOut, int WARPS_PER_BLOCK>
-__global__ void matvec_blockscale_kernel(
+template <class TAct, int WARPS_PER_BLOCK>
+__global__ void down_blockscale_kernel(
     int rows,
     int cols,
     const std::uint8_t* __restrict__ weights,
@@ -23,8 +23,8 @@ __global__ void matvec_blockscale_kernel(
     int col_block,
     int num_col_blocks,
     const float* __restrict__ scales,
-    const TIn* __restrict__ x,
-    TOut* __restrict__ y,
+    const float* __restrict__ h,
+    TAct* __restrict__ y,
     const float* __restrict__ lut) {
     constexpr int WARP_SIZE = 32;
 
@@ -51,27 +51,33 @@ __global__ void matvec_blockscale_kernel(
 
         const float scale = scales[s_idx];
         const float w = lut[weights[w_idx]] * scale;
-        const float xv = act_to_float<TIn>(x[k]);
-        sum += w * xv;
+        sum += w * h[k];
     }
 
     sum = warp_sum(sum);
     if (lane == 0) {
-        y[row] = float_to_act<TOut>(sum);
+        y[row] = float_to_act<TAct>(sum);
     }
 }
 
 }  // namespace
 
-template <class TIn, class TOut>
-bool LaunchMatvecBlockScaleCudaV2(
-    const MatrixBlockScaleViewV2& W,
-    const TIn* d_x,
-    TOut* d_y,
+template <class TAct>
+bool LaunchDownCudaV2Impl(
+    const MatrixBlockScaleViewV2& w_down_device_view,
+    const float* d_h,
+    TAct* d_y,
     cudaStream_t stream) {
-    if (d_x == nullptr || d_y == nullptr) return false;
-    if (W.matrix.rows <= 0 || W.matrix.cols <= 0) return false;
-    if (W.weight.data.empty() || W.scale.data.empty()) return false;
+    if (d_h == nullptr || d_y == nullptr) return false;
+
+    const int rows = w_down_device_view.matrix.rows;
+    const int cols = w_down_device_view.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    if (w_down_device_view.weight.data.empty() ||
+        w_down_device_view.scale.data.empty()) {
+        return false;
+    }
 
     int device_id = -1;
     cudaError_t err = cudaGetDevice(&device_id);
@@ -79,25 +85,26 @@ bool LaunchMatvecBlockScaleCudaV2(
         return false;
     }
 
-    const float* lut = GetOrInitFp8DecodeLutCudaV2(device_id, W.matrix.fp8_format, stream);
+    const float* lut =
+        GetOrInitFp8DecodeLutCudaV2(device_id, w_down_device_view.matrix.fp8_format, stream);
     if (lut == nullptr) {
         return false;
     }
 
     constexpr int WARPS_PER_BLOCK = 4;
     constexpr int THREADS = WARPS_PER_BLOCK * 32;
-    const int blocks = (W.matrix.rows + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
+    const int blocks = (rows + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
 
-    matvec_blockscale_kernel<TIn, TOut, WARPS_PER_BLOCK>
+    down_blockscale_kernel<TAct, WARPS_PER_BLOCK>
         <<<blocks, THREADS, 0, stream>>>(
-            W.matrix.rows,
-            W.matrix.cols,
-            W.weight.data.data(),
-            W.scale_meta.row_block,
-            W.scale_meta.col_block,
-            W.scale_meta.num_col_blocks,
-            W.scale.data.data(),
-            d_x,
+            rows,
+            cols,
+            w_down_device_view.weight.data.data(),
+            w_down_device_view.scale_meta.row_block,
+            w_down_device_view.scale_meta.col_block,
+            w_down_device_view.scale_meta.num_col_blocks,
+            w_down_device_view.scale.data.data(),
+            d_h,
             d_y,
             lut);
 
@@ -105,46 +112,16 @@ bool LaunchMatvecBlockScaleCudaV2(
     return err == cudaSuccess;
 }
 
-template bool LaunchMatvecBlockScaleCudaV2<float, float>(
+template bool LaunchDownCudaV2Impl<__half>(
     const MatrixBlockScaleViewV2&,
     const float*,
-    float*,
-    cudaStream_t);
-
-template bool LaunchMatvecBlockScaleCudaV2<float, __half>(
-    const MatrixBlockScaleViewV2&,
-    const float*,
-    __half*,
-    cudaStream_t);
-
-template bool LaunchMatvecBlockScaleCudaV2<__half, float>(
-    const MatrixBlockScaleViewV2&,
-    const __half*,
-    float*,
-    cudaStream_t);
-
-template bool LaunchMatvecBlockScaleCudaV2<__half, __half>(
-    const MatrixBlockScaleViewV2&,
-    const __half*,
     __half*,
     cudaStream_t);
 
 #if EXPERT_NODE_V2_HAS_CUDA_BF16
-template bool LaunchMatvecBlockScaleCudaV2<float, __nv_bfloat16>(
+template bool LaunchDownCudaV2Impl<__nv_bfloat16>(
     const MatrixBlockScaleViewV2&,
     const float*,
-    __nv_bfloat16*,
-    cudaStream_t);
-
-template bool LaunchMatvecBlockScaleCudaV2<__nv_bfloat16, float>(
-    const MatrixBlockScaleViewV2&,
-    const __nv_bfloat16*,
-    float*,
-    cudaStream_t);
-
-template bool LaunchMatvecBlockScaleCudaV2<__nv_bfloat16, __nv_bfloat16>(
-    const MatrixBlockScaleViewV2&,
-    const __nv_bfloat16*,
     __nv_bfloat16*,
     cudaStream_t);
 #endif

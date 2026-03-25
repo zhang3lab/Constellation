@@ -171,30 +171,11 @@ bool LaunchFusedUpGateCudaV2Impl(
     return err == cudaSuccess;
 }
 
-template <class TAct>
-bool LaunchDownCudaV2Impl(
-    const MatrixBlockScaleViewV2& w_down_device_view,
-    const float* d_h,
-    TAct* d_y,
-    cudaStream_t stream) {
-    return LaunchMatvecBlockScaleCudaV2<float, TAct>(
-        w_down_device_view,
-        d_h,
-        d_y,
-        stream);
-}
-
 template bool LaunchFusedUpGateCudaV2Impl<__half>(
     const MatrixBlockScaleViewV2&,
     const MatrixBlockScaleViewV2&,
     const __half*,
     float*,
-    cudaStream_t);
-
-template bool LaunchDownCudaV2Impl<__half>(
-    const MatrixBlockScaleViewV2&,
-    const float*,
-    __half*,
     cudaStream_t);
 
 #if EXPERT_NODE_V2_HAS_CUDA_BF16
@@ -203,11 +184,5 @@ template bool LaunchFusedUpGateCudaV2Impl<__nv_bfloat16>(
     const MatrixBlockScaleViewV2&,
     const __nv_bfloat16*,
     float*,
-    cudaStream_t);
-
-template bool LaunchDownCudaV2Impl<__nv_bfloat16>(
-    const MatrixBlockScaleViewV2&,
-    const float*,
-    __nv_bfloat16*,
     cudaStream_t);
 #endif

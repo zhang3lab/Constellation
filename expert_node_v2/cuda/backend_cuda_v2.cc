@@ -4,7 +4,8 @@
 #include <cstdint>
 #include <span>
 
-#include "expert_node_v2/cuda/mlp_blockscale_cuda_v2.h"
+#include "expert_node_v2/cuda/down_cuda_v2.h"
+#include "expert_node_v2/cuda/fused_up_gate_cuda_v2.h"
 #include "expert_node_v2/expert_loader_v2.h"
 
 namespace {

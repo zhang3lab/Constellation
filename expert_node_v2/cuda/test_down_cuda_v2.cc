@@ -8,7 +8,7 @@
 
 #include "expert_node_v2/expert_format_v2.h"
 #include "expert_node_v2/cuda/backend_cuda_v2.h"
-#include "expert_node_v2/cuda/mlp_blockscale_cuda_v2.h"
+#include "expert_node_v2/cuda/down_cuda_v2.h"
 
 static float decode_torch_e4m3fn_byte(std::uint8_t v) {
     const int sign = (v >> 7) & 0x1;

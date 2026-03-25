@@ -17,10 +17,3 @@ bool LaunchFusedUpGateCudaV2Impl(
     const TAct* d_x,
     float* d_h,
     cudaStream_t stream);
-
-template <class TAct>
-bool LaunchDownCudaV2Impl(
-    const MatrixBlockScaleViewV2& w_down_device_view,
-    const float* d_h,
-    TAct* d_y,
-    cudaStream_t stream);
