@@ -48,20 +48,6 @@ def import_deepseek_modules(pkg_root: str, package_name: str):
     return config_module, modeling_module
 
 
-def import_deepseek_module(model_root: Path):
-    modeling_file = find_modeling_file(model_root)
-    module_name = "local_modeling_deepseek_partial"
-
-    spec = importlib.util.spec_from_file_location(module_name, modeling_file)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to create import spec for {modeling_file}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 def build_partial_config(model_root: Path, max_layer_id: int):
     cfg_dict = load_json(model_root / "config.json")
 
@@ -72,11 +58,10 @@ def build_partial_config(model_root: Path, max_layer_id: int):
     return cfg_dict
 
 
-def build_config_object(module, cfg_dict):
-    # remote code config class name from DeepSeek config
-    if not hasattr(module, "DeepseekV3Config"):
-        raise RuntimeError("DeepseekV3Config not found in modeling/config module path")
-    ConfigCls = module.DeepseekV3Config
+def build_config_object(config_module, cfg_dict):
+    if not hasattr(config_module, "DeepseekV3Config"):
+        raise RuntimeError("DeepseekV3Config not found in configuration_deepseek")
+    ConfigCls = config_module.DeepseekV3Config
     return ConfigCls(**cfg_dict)
 
 
@@ -156,7 +141,7 @@ def main():
     cfg_dict = build_partial_config(model_root, max_layer_id=layer_id)
     config = build_config_object(config_module, cfg_dict)
 
-    if not hasattr(module, "DeepseekV3Model"):
+    if not hasattr(modeling_module, "DeepseekV3Model"):
         raise RuntimeError("DeepseekV3Model not found in modeling_deepseek.py")
     ModelCls = modeling_module.DeepseekV3Model
 
