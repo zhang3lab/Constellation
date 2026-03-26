@@ -4,7 +4,6 @@
 #include <cstdint>
 
 #include "common/protocol.h"
-#include "common/wire_reader.h"
 
 namespace common {
 
