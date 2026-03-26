@@ -25,6 +25,7 @@
 #include "common/weight_codec.h"
 #include "expert_node_v2/cuda/gpu_info_cuda_v2.h"
 #include "expert_node_v2/expert_registry_v2.h"
+#include "expert_node_v2/node_info.h"
 
 namespace {
 
@@ -500,7 +501,8 @@ bool HandleLoadWeightsEnd(
         return false;
     }
 
-    const ExpertEntryV2* entry = state->registry.FindEntry(msg.expert_id);
+    const expert_node_v2::ExpertEntryV2* entry =
+        state->registry.FindEntry(msg.expert_id);
     if (entry == nullptr) {
         std::fprintf(stderr,
                      "[%s] missing entry after StoreIncomingTensor for expert=%d\n",
