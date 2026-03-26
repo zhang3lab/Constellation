@@ -633,6 +633,8 @@ bool HandleOneRequest(
     return DispatchRequest(fd, state, req, req_body);
 }
 
+}  // namespace
+
 void RunControlLoop(ControlState* state) {
     if (state == nullptr) {
         std::fprintf(stderr, "[control] RunControlLoop: state is null\n");
@@ -695,5 +697,3 @@ void RunControlLoop(ControlState* state) {
 
     ::close(listen_fd);
 }
-
-}  // namespace
