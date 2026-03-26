@@ -118,7 +118,6 @@ bool ExpertRegistryV2::Update(
     const common::VendorWorkerSpan& vendor_span =
         vendor_spans[static_cast<size_t>(vendor)];
 
-    if (vendor_span.vendor != vendor) return false;
     if (worker_id < vendor_span.worker_id_begin) return false;
     if (worker_id >= vendor_span.worker_id_begin + vendor_span.worker_count) {
         return false;

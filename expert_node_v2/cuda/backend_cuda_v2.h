@@ -19,6 +19,7 @@ struct ExpertWorkspaceCudaV2 {
 };
 
 bool UploadExpertCudaV2(
+    int local_gpu_id,
     const ExpertTensorBundleV2& host_bundle,
     ExpertDeviceStorageV2* out_storage);
 

@@ -73,9 +73,14 @@ bool UploadOneMatrixCuda(
 }  // namespace
 
 bool UploadExpertCudaV2(
+    int local_gpu_id,
     const ExpertTensorBundleV2& host_bundle,
     ExpertDeviceStorageV2* out_storage) {
-    if (out_storage == nullptr) return false;
+    if (local_gpu_id < 0 || out_storage == nullptr) return false;
+
+    const cudaError_t err = cudaSetDevice(local_gpu_id);
+    if (err != cudaSuccess) return false;
+
     out_storage->clear();
 
     ExpertWeightsViewV2 host_view;
