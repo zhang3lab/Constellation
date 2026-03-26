@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "common/types.h"
 #include "common/protocol.h"
@@ -14,7 +15,7 @@ struct ActiveLoad {
     common::TensorKind tensor_kind = common::TensorKind::WUp;
     std::uint64_t total_bytes = 0;
     std::uint64_t received_bytes = 0;
-    std::string buffer;
+    std::vector<std::uint8_t> buffer;
 };
 
 struct ControlState {

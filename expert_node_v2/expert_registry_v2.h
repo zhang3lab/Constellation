@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 #include "common/protocol.h"
 #include "common/types.h"
@@ -33,7 +34,7 @@ public:
         int expert_id,
         common::TensorKind tensor_kind,
         std::uint64_t total_bytes,
-        std::string&& bytes);
+        std::vector<std::uint8_t>&& bytes);
 
     bool Update(
         int expert_id,

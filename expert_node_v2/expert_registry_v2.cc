@@ -90,20 +90,19 @@ bool ExpertRegistryV2::StoreIncomingTensor(
     int expert_id,
     common::TensorKind tensor_kind,
     std::uint64_t total_bytes,
-    std::string&& bytes) {
+    std::vector<std::uint8_t>&& bytes) {
     ExpertEntryV2* entry = FindOrCreateEntry_(expert_id);
     if (entry == nullptr) return false;
 
     HostTensorV2* slot = select_incoming_slot(entry, tensor_kind);
     if (slot == nullptr) return false;
 
-    slot->bytes = std::move(bytes);
-    slot->ready = true;
-
-    if (static_cast<std::uint64_t>(slot->bytes.size()) != total_bytes) {
-        slot->ready = false;
+    if (static_cast<std::uint64_t>(bytes.size()) != total_bytes) {
         return false;
     }
+
+    slot->bytes = std::move(bytes);
+    slot->ready = true;
 
     entry->incoming_ready = entry->incoming.all_ready();
     return true;

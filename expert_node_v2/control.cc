@@ -375,7 +375,10 @@ bool HandleLoadWeightsChunk(
         return false;
     }
 
-    state->active_load.buffer.append(msg.chunk_data);
+    state->active_load.buffer.insert(
+        state->active_load.buffer.end(),
+        msg.chunk_data.begin(),
+        msg.chunk_data.end());
     state->active_load.received_bytes =
         static_cast<std::uint64_t>(state->active_load.buffer.size());
 

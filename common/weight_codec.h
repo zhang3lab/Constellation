@@ -19,7 +19,7 @@ struct LoadWeightsChunkMsg {
     std::int32_t worker_id = -1;
     TensorKind tensor_kind = TensorKind::WUp;
     std::uint64_t chunk_offset = 0;
-    std::string chunk_data;
+    std::vector<std::uint8_t> chunk_data;
 };
 
 struct LoadWeightsEndMsg {

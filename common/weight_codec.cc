@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "common/protocol.h"
 #include "common/wire_reader.h"
@@ -51,7 +52,9 @@ std::string EncodeLoadWeightsChunkBody(const LoadWeightsChunkMsg& msg) {
     AppendI32(&body, static_cast<std::int32_t>(msg.tensor_kind));
     AppendU64(&body, msg.chunk_offset);
     AppendU32(&body, static_cast<std::uint32_t>(msg.chunk_data.size()));
-    body.append(msg.chunk_data);
+    body.append(
+        reinterpret_cast<const char*>(msg.chunk_data.data()),
+        msg.chunk_data.size());
 
     return body;
 }
@@ -67,7 +70,13 @@ bool DecodeLoadWeightsChunkBody(const std::string& body, LoadWeightsChunkMsg* ou
 
     std::uint32_t chunk_size = 0;
     if (!ReadU32(body, &offset, &chunk_size)) return false;
-    if (!ReadBytes(body, &offset, chunk_size, &out->chunk_data)) return false;
+    if (offset + chunk_size > body.size()) return false;
+
+    out->chunk_data.resize(chunk_size);
+    if (chunk_size > 0) {
+        std::memcpy(out->chunk_data.data(), body.data() + offset, chunk_size);
+    }
+    offset += chunk_size;
 
     return offset == body.size();
 }
