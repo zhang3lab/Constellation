@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "common/protocol.h"
+#include "common/socket_utils.h"
 #include "expert_node_v2/control.h"
 #include "expert_node_v2/expert_registry_v2.h"
 
