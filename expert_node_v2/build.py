@@ -84,6 +84,7 @@ TEST_TARGETS = {
     "test_gpu_info_cuda_v2": {
         "cpp": [
             "cuda/test_gpu_info_cuda_v2.cc",
+            "cuda/gpu_info_cuda_v2.cc",
         ],
         "cu": [],
     },
