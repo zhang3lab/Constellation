@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "common/messages.h"
+#include "common/infer_codec.h"
 #include "common/types.h"
 #include "expert_node_v2/expert_format_v2.h"
 
