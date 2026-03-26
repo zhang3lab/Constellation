@@ -11,10 +11,10 @@
 #include "expert_node_v2/expert_format_v2.h"
 
 struct ExpertWorkspaceCudaV2 {
-    DeviceBufferV2<float> h_tmp;
+    DeviceBufferV2<float> d_tmp;
 
     void clear() {
-        h_tmp.clear();
+        d_tmp.clear();
     }
 };
 
@@ -30,10 +30,10 @@ bool InitExpertWorkspaceCudaV2(
 
 void FreeExpertWorkspaceCudaV2(ExpertWorkspaceCudaV2* ws);
 
-template <class TAct>
+template <class TIn, class TOut>
 bool RunExpertCudaV2(
     const ExpertWeightsViewV2& expert_device_view,
     ExpertWorkspaceCudaV2* ws,
-    const TAct* d_x,
-    TAct* d_y,
+    const TIn* d_x,
+    TOut* d_y,
     cudaStream_t stream);

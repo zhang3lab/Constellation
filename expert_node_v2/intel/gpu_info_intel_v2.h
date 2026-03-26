@@ -5,11 +5,11 @@
 
 #include "common/types.h"
 
-bool BuildLocalCudaGpuInfosV2(
+bool BuildLocalIntelGpuInfosV2(
     std::int32_t worker_id_begin,
     std::uint32_t worker_port_base,
     std::vector<common::StaticGpuInfo>* out);
 
-bool BuildLocalCudaDynamicGpuInfosV2(
+bool BuildLocalIntelDynamicGpuInfosV2(
     std::int32_t worker_id_begin,
     std::vector<common::DynamicGpuInfo>* out);

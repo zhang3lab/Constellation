@@ -8,7 +8,7 @@ namespace common {
 
 struct PlacementAssignment {
     std::int32_t expert_id = -1;
-    std::int32_t local_gpu_id = -1;
+    std::int32_t worker_id = -1;
 };
 
 std::string EncodePlacementPlanBody(

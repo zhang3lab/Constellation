@@ -9,14 +9,14 @@ namespace common {
 
 struct LoadWeightsBeginMsg {
     std::int32_t expert_id = -1;
-    std::int32_t local_gpu_id = -1;
+    std::int32_t worker_id = -1;
     TensorKind tensor_kind = TensorKind::WUp;
     std::uint64_t total_bytes = 0;
 };
 
 struct LoadWeightsChunkMsg {
     std::int32_t expert_id = -1;
-    std::int32_t local_gpu_id = -1;
+    std::int32_t worker_id = -1;
     TensorKind tensor_kind = TensorKind::WUp;
     std::uint64_t chunk_offset = 0;
     std::string chunk_data;
@@ -24,7 +24,7 @@ struct LoadWeightsChunkMsg {
 
 struct LoadWeightsEndMsg {
     std::int32_t expert_id = -1;
-    std::int32_t local_gpu_id = -1;
+    std::int32_t worker_id = -1;
     TensorKind tensor_kind = TensorKind::WUp;
 };
 

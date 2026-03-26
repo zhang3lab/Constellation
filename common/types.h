@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -48,32 +49,40 @@ constexpr std::uint32_t kGpuCapFp16 = 1u << 0;
 constexpr std::uint32_t kGpuCapBf16 = 1u << 1;
 constexpr std::uint32_t kGpuCapFp8  = 1u << 2;
 
-struct GpuInfo {
-    std::int32_t local_gpu_id = -1;
-    std::string gpu_name;
+struct VendorWorkerSpan {
+    std::int32_t worker_id_begin = -1;
+    std::int32_t worker_count = 0;
+};
 
+struct StaticGpuInfo {
+    std::int32_t worker_id = -1;
+
+    std::string gpu_name;
     std::uint64_t total_mem_bytes = 0;
-    std::uint64_t free_mem_bytes = 0;
     std::uint32_t worker_port = 0;
-    GpuStatus gpu_status = GpuStatus::Idle;
 
     GpuVendor gpu_vendor = GpuVendor::Unknown;
     std::uint32_t capability_flags = 0;
     std::string arch_name;
 };
 
-struct NodeInfo {
+struct StaticNodeInfo {
     std::string node_id;
     std::string host;
     std::int32_t control_port = -1;
-    std::vector<GpuInfo> gpus;
+
+    std::array<VendorWorkerSpan, 256> vendor_spans{};
+    std::vector<StaticGpuInfo> gpus;
 };
 
-struct ExpertPlacement {
-    std::int32_t expert_id = -1;
+struct DynamicGpuInfo {
+    std::int32_t worker_id = -1;
+    std::uint64_t free_mem_bytes = 0;
+    GpuStatus gpu_status = GpuStatus::Idle;
+};
+
+struct DynamicNodeInfo {
     std::string node_id;
-    std::string gpu_uid;
-    std::int32_t local_gpu_id = -1;
+    NodeStatus node_status = NodeStatus::Booting;
+    std::vector<DynamicGpuInfo> gpus;
 };
-
-}  // namespace common

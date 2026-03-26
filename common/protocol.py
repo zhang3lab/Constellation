@@ -187,7 +187,7 @@ def decode_inventory_reply(body: bytes):
 
     gpus = []
     for _ in range(num_gpus):
-        local_gpu_id, offset = unpack_i32(body, offset)
+        worker_id, offset = unpack_i32(body, offset)
         gpu_name, offset = unpack_string(body, offset)
         total_mem_bytes, offset = unpack_u64(body, offset)
         free_mem_bytes, offset = unpack_u64(body, offset)
@@ -200,7 +200,7 @@ def decode_inventory_reply(body: bytes):
 
         gpus.append(
             {
-                "local_gpu_id": local_gpu_id,
+                "worker_id": worker_id,
                 "gpu_name": gpu_name,
                 "total_mem_bytes": total_mem_bytes,
                 "free_mem_bytes": free_mem_bytes,
@@ -224,14 +224,15 @@ def decode_inventory_reply(body: bytes):
         "gpus": gpus,
     }
 
+
 def encode_placement_plan(assignments):
     body = bytearray()
     body += pack_u32(len(assignments))
     for a in assignments:
         expert_id = int(a["expert_id"])
-        local_gpu_id = int(a["local_gpu_id"])
+        worker_id = int(a["worker_id"])
         body += pack_i32(expert_id)
-        body += pack_i32(local_gpu_id)
+        body += pack_i32(worker_id)
     return bytes(body)
 
 
@@ -242,11 +243,11 @@ def decode_placement_plan(body: bytes):
     assignments = []
     for _ in range(num_assignments):
         expert_id, offset = unpack_i32(body, offset)
-        local_gpu_id, offset = unpack_i32(body, offset)
+        worker_id, offset = unpack_i32(body, offset)
         assignments.append(
             {
                 "expert_id": expert_id,
-                "local_gpu_id": local_gpu_id,
+                "worker_id": worker_id,
             }
         )
 
@@ -257,18 +258,20 @@ def decode_placement_plan(body: bytes):
 
     return assignments
 
+
 def encode_load_weights_begin(msg):
     body = bytearray()
     body += pack_i32(int(msg["expert_id"]))
-    body += pack_i32(int(msg["local_gpu_id"]))
+    body += pack_i32(int(msg["worker_id"]))
     body += pack_i32(int(msg["tensor_kind"]))
     body += pack_u64(int(msg["total_bytes"]))
     return bytes(body)
 
+
 def decode_load_weights_begin(body: bytes):
     offset = 0
     expert_id, offset = unpack_i32(body, offset)
-    local_gpu_id, offset = unpack_i32(body, offset)
+    worker_id, offset = unpack_i32(body, offset)
 
     tensor_kind_raw, offset = unpack_i32(body, offset)
     try:
@@ -285,10 +288,11 @@ def decode_load_weights_begin(body: bytes):
 
     return {
         "expert_id": expert_id,
-        "local_gpu_id": local_gpu_id,
+        "worker_id": worker_id,
         "tensor_kind": tensor_kind,
         "total_bytes": total_bytes,
     }
+
 
 def encode_load_weights_chunk(msg):
     chunk_data = msg["chunk_data"]
@@ -297,17 +301,18 @@ def encode_load_weights_chunk(msg):
 
     body = bytearray()
     body += pack_i32(int(msg["expert_id"]))
-    body += pack_i32(int(msg["local_gpu_id"]))
+    body += pack_i32(int(msg["worker_id"]))
     body += pack_i32(int(msg["tensor_kind"]))
     body += pack_u64(int(msg["chunk_offset"]))
     body += pack_u32(len(chunk_data))
     body += chunk_data
     return bytes(body)
 
+
 def decode_load_weights_chunk(body: bytes):
     offset = 0
     expert_id, offset = unpack_i32(body, offset)
-    local_gpu_id, offset = unpack_i32(body, offset)
+    worker_id, offset = unpack_i32(body, offset)
 
     tensor_kind_raw, offset = unpack_i32(body, offset)
     try:
@@ -330,23 +335,25 @@ def decode_load_weights_chunk(body: bytes):
 
     return {
         "expert_id": expert_id,
-        "local_gpu_id": local_gpu_id,
+        "worker_id": worker_id,
         "tensor_kind": tensor_kind,
         "chunk_offset": chunk_offset,
         "chunk_data": chunk_data,
     }
 
+
 def encode_load_weights_end(msg):
     body = bytearray()
     body += pack_i32(int(msg["expert_id"]))
-    body += pack_i32(int(msg["local_gpu_id"]))
+    body += pack_i32(int(msg["worker_id"]))
     body += pack_i32(int(msg["tensor_kind"]))
     return bytes(body)
+
 
 def decode_load_weights_end(body: bytes):
     offset = 0
     expert_id, offset = unpack_i32(body, offset)
-    local_gpu_id, offset = unpack_i32(body, offset)
+    worker_id, offset = unpack_i32(body, offset)
 
     tensor_kind_raw, offset = unpack_i32(body, offset)
     try:
@@ -361,9 +368,10 @@ def decode_load_weights_end(body: bytes):
 
     return {
         "expert_id": expert_id,
-        "local_gpu_id": local_gpu_id,
+        "worker_id": worker_id,
         "tensor_kind": tensor_kind,
     }
+
 
 def encode_infer_request(msg):
     activation = msg["activation"]

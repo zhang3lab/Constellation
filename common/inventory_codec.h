@@ -16,7 +16,7 @@ namespace common {
 //   u32 num_gpus
 //
 //   repeat num_gpus times:
-//     i32 local_gpu_id
+//     i32 worker_id
 //
 //     u32 gpu_name_len
 //     bytes gpu_name
@@ -31,8 +31,9 @@ namespace common {
 //
 //     u32 arch_name_len
 //     bytes arch_name
-std::string EncodeInventoryReplyBody(
-    const NodeInfo& node,
-    NodeStatus node_status);
+bool EncodeInventoryReplyBody(
+    const StaticNodeInfo& static_info,
+    const DynamicNodeInfo& dynamic_info,
+    std::string* out);
 
 }  // namespace common

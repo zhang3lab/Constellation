@@ -37,8 +37,9 @@ common::GpuStatus make_initial_gpu_status() {
 }  // namespace
 
 bool BuildLocalCudaGpuInfosV2(
-    std::uint32_t base_worker_port,
-    std::vector<common::GpuInfo>* out) {
+    std::int32_t worker_id_begin,
+    std::uint32_t worker_port_base,
+    std::vector<common::StaticGpuInfo>* out) {
     if (out == nullptr) return false;
     out->clear();
 
@@ -55,33 +56,53 @@ bool BuildLocalCudaGpuInfosV2(
             continue;
         }
 
-        std::size_t free_mem = 0;
-        std::size_t total_mem = 0;
-
-        err = cudaSetDevice(i);
-        if (err == cudaSuccess) {
-            cudaError_t mem_err = cudaMemGetInfo(&free_mem, &total_mem);
-            if (mem_err != cudaSuccess) {
-                free_mem = 0;
-                total_mem = static_cast<std::size_t>(prop.totalGlobalMem);
-            }
-        } else {
-            free_mem = 0;
-            total_mem = static_cast<std::size_t>(prop.totalGlobalMem);
-        }
-
-        common::GpuInfo gpu;
-        gpu.local_gpu_id = i;
+        common::StaticGpuInfo gpu;
+        gpu.worker_id = worker_id_begin + i;
         gpu.gpu_name = prop.name;
-
-        gpu.total_mem_bytes = static_cast<std::uint64_t>(total_mem);
-        gpu.free_mem_bytes = static_cast<std::uint64_t>(free_mem);
-        gpu.worker_port = base_worker_port + static_cast<std::uint32_t>(i);
-        gpu.gpu_status = make_initial_gpu_status();
+        gpu.total_mem_bytes = static_cast<std::uint64_t>(prop.totalGlobalMem);
+        gpu.worker_port =
+            worker_port_base + static_cast<std::uint32_t>(gpu.worker_id);
 
         gpu.gpu_vendor = common::GpuVendor::Nvidia;
         gpu.capability_flags = make_cuda_capability_flags(prop);
         gpu.arch_name = make_cuda_arch_name(prop);
+
+        out->push_back(std::move(gpu));
+    }
+
+    return true;
+}
+
+bool BuildLocalCudaDynamicGpuInfosV2(
+    std::int32_t worker_id_begin,
+    std::vector<common::DynamicGpuInfo>* out) {
+    if (out == nullptr) return false;
+    out->clear();
+
+    int count = 0;
+    cudaError_t err = cudaGetDeviceCount(&count);
+    if (err != cudaSuccess) {
+        return false;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        std::size_t free_mem = 0;
+        std::size_t total_mem = 0;
+
+        err = cudaSetDevice(i);
+        if (err != cudaSuccess) {
+            continue;
+        }
+
+        err = cudaMemGetInfo(&free_mem, &total_mem);
+        if (err != cudaSuccess) {
+            continue;
+        }
+
+        common::DynamicGpuInfo gpu;
+        gpu.worker_id = worker_id_begin + i;
+        gpu.free_mem_bytes = static_cast<std::uint64_t>(free_mem);
+        gpu.gpu_status = make_initial_gpu_status();
 
         out->push_back(std::move(gpu));
     }

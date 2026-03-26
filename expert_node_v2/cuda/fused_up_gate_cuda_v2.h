@@ -10,10 +10,10 @@
 
 #include "expert_node_v2/expert_format_v2.h"
 
-template <class TAct>
+template <class TIn>
 bool LaunchFusedUpGateCudaV2Impl(
     const MatrixBlockScaleViewV2& w_up_device_view,
     const MatrixBlockScaleViewV2& w_gate_device_view,
-    const TAct* d_x,
+    const TIn* d_x,
     float* d_h,
     cudaStream_t stream);

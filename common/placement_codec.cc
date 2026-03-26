@@ -16,7 +16,7 @@ std::string EncodePlacementPlanBody(
     AppendU32(&body, static_cast<std::uint32_t>(assignments.size()));
     for (const auto& a : assignments) {
         AppendI32(&body, a.expert_id);
-        AppendI32(&body, a.local_gpu_id);
+        AppendI32(&body, a.worker_id);
     }
     return body;
 }
@@ -35,7 +35,7 @@ bool DecodePlacementPlanBody(
     for (std::uint32_t i = 0; i < n; ++i) {
         PlacementAssignment a;
         if (!ReadI32(body, &offset, &a.expert_id)) return false;
-        if (!ReadI32(body, &offset, &a.local_gpu_id)) return false;
+        if (!ReadI32(body, &offset, &a.worker_id)) return false;
         out->push_back(a);
     }
 

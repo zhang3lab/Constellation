@@ -10,9 +10,9 @@
 
 #include "expert_node_v2/expert_format_v2.h"
 
-template <class TAct>
+template <class TOut>
 bool LaunchDownCudaV2Impl(
     const MatrixBlockScaleViewV2& w_down_device_view,
     const float* d_h,
-    TAct* d_y,
+    TOut* d_y,
     cudaStream_t stream);

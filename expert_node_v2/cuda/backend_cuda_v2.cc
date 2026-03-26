@@ -149,23 +149,23 @@ bool InitExpertWorkspaceCudaV2(
         return false;
     }
 
-    out_ws->h_tmp.data = h_ptr;
-    out_ws->h_tmp.size = static_cast<std::size_t>(config.inter_dim);
+    out_ws->d_tmp.data = h_ptr;
+    out_ws->d_tmp.size = static_cast<std::size_t>(config.inter_dim);
     return true;
 }
 
 void FreeExpertWorkspaceCudaV2(ExpertWorkspaceCudaV2* ws) {
     if (ws == nullptr) return;
-    FreeDeviceBuffer(&ws->h_tmp);
+    FreeDeviceBuffer(&ws->d_tmp);
     ws->clear();
 }
 
-template <class TAct>
+template <class TIn, class TOut>
 bool RunExpertCudaV2(
     const ExpertWeightsViewV2& expert_device_view,
     ExpertWorkspaceCudaV2* ws,
-    const TAct* d_x,
-    TAct* d_y,
+    const TIn* d_x,
+    TOut* d_y,
     cudaStream_t stream) {
     if (ws == nullptr || d_x == nullptr || d_y == nullptr) {
         return false;
@@ -188,23 +188,23 @@ bool RunExpertCudaV2(
         return false;
     }
 
-    if (ws->h_tmp.data == nullptr ||
-        ws->h_tmp.size < static_cast<std::size_t>(inter_dim)) {
+    if (ws->d_tmp.data == nullptr ||
+        ws->d_tmp.size < static_cast<std::size_t>(inter_dim)) {
         return false;
     }
 
-    if (!LaunchFusedUpGateCudaV2Impl(
+    if (!LaunchFusedUpGateCudaV2Impl<TIn>(
             expert_device_view.w_up,
             expert_device_view.w_gate,
             d_x,
-            ws->h_tmp.data,
+            ws->d_tmp.data,
             stream)) {
         return false;
     }
 
-    if (!LaunchDownCudaV2Impl(
+    if (!LaunchDownCudaV2Impl<TOut>(
             expert_device_view.w_down,
-            ws->h_tmp.data,
+            ws->d_tmp.data,
             d_y,
             stream)) {
         return false;
@@ -213,7 +213,7 @@ bool RunExpertCudaV2(
     return true;
 }
 
-template bool RunExpertCudaV2<__half>(
+template bool RunExpertCudaV2<__half, __half>(
     const ExpertWeightsViewV2&,
     ExpertWorkspaceCudaV2*,
     const __half*,
@@ -221,7 +221,21 @@ template bool RunExpertCudaV2<__half>(
     cudaStream_t);
 
 #if EXPERT_NODE_V2_HAS_CUDA_BF16
-template bool RunExpertCudaV2<__nv_bfloat16>(
+template bool RunExpertCudaV2<__half, __nv_bfloat16>(
+    const ExpertWeightsViewV2&,
+    ExpertWorkspaceCudaV2*,
+    const __half*,
+    __nv_bfloat16*,
+    cudaStream_t);
+
+template bool RunExpertCudaV2<__nv_bfloat16, __half>(
+    const ExpertWeightsViewV2&,
+    ExpertWorkspaceCudaV2*,
+    const __nv_bfloat16*,
+    __half*,
+    cudaStream_t);
+
+template bool RunExpertCudaV2<__nv_bfloat16, __nv_bfloat16>(
     const ExpertWeightsViewV2&,
     ExpertWorkspaceCudaV2*,
     const __nv_bfloat16*,
