@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include "common/node_info.h"
 #include "common/protocol.h"
+#include "common/types.h"
 #include "expert_node_v2/expert_format_v2.h"
 
 namespace expert_node_v2 {
