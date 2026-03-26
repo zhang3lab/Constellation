@@ -86,3 +86,5 @@ struct DynamicNodeInfo {
     NodeStatus node_status = NodeStatus::Booting;
     std::vector<DynamicGpuInfo> gpus;
 };
+
+}  // namespace common
