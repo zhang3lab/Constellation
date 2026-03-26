@@ -12,6 +12,6 @@ bool BuildStaticNodeInfo(
     common::StaticNodeInfo* out);
 
 bool BuildDynamicNodeInfo(
-    const std::string& node_id,
+    const common::StaticNodeInfo& static_info,
     common::NodeStatus node_status,
     common::DynamicNodeInfo* out);
