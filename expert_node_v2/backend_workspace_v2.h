@@ -19,6 +19,7 @@ public:
 };
 
 std::unique_ptr<BackendWorkspaceV2> CreateBackendWorkspaceV2(
+    common::GpuVendor vendor,
     const common::VendorWorkerSpan& vendor_span,
     int worker_id);
 

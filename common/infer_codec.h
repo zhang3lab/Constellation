@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "common/protocol.h"
+
 namespace common {
 
 struct InferRequestMsg {

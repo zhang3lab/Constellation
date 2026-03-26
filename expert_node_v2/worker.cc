@@ -168,6 +168,7 @@ void RunGpuWorkerLoopV2(GpuWorkerContextV2* ctx) {
         ctx->state->static_info.vendor_spans[static_cast<std::size_t>(vendor)];
 
     ctx->workspace = expert_node_v2::CreateBackendWorkspaceV2(
+        vendor,
         vendor_span,
         ctx->worker_id);
     if (!ctx->workspace) {
