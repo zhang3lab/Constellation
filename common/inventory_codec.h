@@ -3,6 +3,7 @@
 #include <string>
 
 #include "common/protocol.h"
+#include "common/types.h"
 
 namespace common {
 
