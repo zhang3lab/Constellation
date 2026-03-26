@@ -27,7 +27,7 @@ ENABLE_CUDA_BF16 = True
 
 DEBUG = False
 OPT = "-O3"
-CXX_STD = "c++17"
+CXX_STD = "c++20"
 
 # main / test_gpu_info_cuda_v2 / test_down_cuda_v2 / test_fused_up_gate_cuda_v2 /
 # test_benchmark_run_expert_cuda_v2
