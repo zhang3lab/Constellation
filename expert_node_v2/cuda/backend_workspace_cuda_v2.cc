@@ -80,9 +80,6 @@ bool run_expert_request_typed(
         return false;
     }
 
-    resp->request_id = req.request_id;
-    resp->expert_id = req.expert_id;
-    resp->worker_id = req.worker_id;
     resp->status_code = 0;
     resp->batch_size = req.batch_size;
     resp->hidden_dim = req.hidden_dim;
