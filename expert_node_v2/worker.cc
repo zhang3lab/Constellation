@@ -107,9 +107,6 @@ bool HandleInferRequest(
                 ctx->worker_id);
 
     common::InferResponseMsg resp_msg;
-    resp_msg.request_id = req.request_id;
-    resp_msg.expert_id = msg.expert_id;
-    resp_msg.worker_id = ctx->worker_id;
     resp_msg.status_code = 4;
     resp_msg.batch_size = msg.batch_size;
     resp_msg.hidden_dim = msg.hidden_dim;
@@ -119,7 +116,8 @@ bool HandleInferRequest(
     const ExpertDeviceStorageV2* storage =
         ctx->state->registry.FindDeviceStorage(msg.expert_id, ctx->worker_id);
     if (storage == nullptr) {
-        const ExpertEntryV2* entry = ctx->state->registry.FindEntry(msg.expert_id);
+        const expert_node_v2::ExpertEntryV2* entry =
+            ctx->state->registry.FindEntry(msg.expert_id);
         resp_msg.status_code = (entry == nullptr) ? 1 : 2;
         return SendInferResponse(
             fd,
@@ -206,19 +204,49 @@ void RunGpuWorkerLoopV2(GpuWorkerContextV2* ctx) {
         }
 
         for (;;) {
-            common::MsgHeader req{};
-            std::string req_body;
-            const bool ok = common::ReadMessage(fd, &req, &req_body);
-            if (!ok) {
+            std::uint8_t hdr_buf[16];
+            if (!common::RecvAll(fd, hdr_buf, sizeof(hdr_buf))) {
                 break;
             }
 
-            if (req.magic != common::kMagic || req.version != common::kVersion) {
+            common::MsgHeader req{};
+            if (!common::DecodeHeader(hdr_buf, sizeof(hdr_buf), &req)) {
                 std::fprintf(stderr,
-                             "[%s] bad message header on worker_id=%d\n",
+                             "[%s] failed to decode request header on worker_id=%d\n",
                              ctx->state->static_info.node_id.c_str(),
                              ctx->worker_id);
                 break;
+            }
+
+            if (req.magic != common::kMagic) {
+                std::fprintf(stderr,
+                             "[%s] bad magic on worker_id=%d: 0x%x\n",
+                             ctx->state->static_info.node_id.c_str(),
+                             ctx->worker_id,
+                             req.magic);
+                break;
+            }
+
+            if (req.version != common::kVersion) {
+                std::fprintf(stderr,
+                             "[%s] bad version on worker_id=%d: %u\n",
+                             ctx->state->static_info.node_id.c_str(),
+                             ctx->worker_id,
+                             req.version);
+                break;
+            }
+
+            std::string req_body;
+            req_body.resize(req.body_len);
+            if (req.body_len > 0) {
+                if (!common::RecvAll(fd, req_body.data(), req.body_len)) {
+                    std::fprintf(stderr,
+                                 "[%s] failed to read request body (%u bytes) on worker_id=%d\n",
+                                 ctx->state->static_info.node_id.c_str(),
+                                 req.body_len,
+                                 ctx->worker_id);
+                    break;
+                }
             }
 
             const auto msg_type = static_cast<common::MsgType>(req.msg_type);
