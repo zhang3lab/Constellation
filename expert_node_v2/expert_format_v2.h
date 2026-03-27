@@ -79,6 +79,8 @@ struct ExpertTensorBundleV2 {
         w_down.clear();
         w_down_scale.clear();
     }
+
+    void debug_print(const char* prefix = "") const;
 };
 
 // -----------------------------------------------------------------------------
