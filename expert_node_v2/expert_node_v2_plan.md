@@ -52,9 +52,7 @@ server 侧 `build_tensor_loader(cfg)` 也已支持六种 tensor kind。
 expert_node_v2/
   expert_format_v2.h
   expert_runtime_v2.h
-  expert_tensor_store_v2.h
 
-  expert_tensor_store_v2.cc
   expert_loader_v2.cc
   expert_runtime_v2.cc
 
@@ -255,7 +253,6 @@ node_v2 负责：
 - `MatrixHostBlockScaleV2`
 - `ExpertWeightsHostV2`
 
-### `expert_tensor_store_v2.h/.cc`
 负责：
 
 - expert -> six tensors 存储
@@ -302,8 +299,6 @@ node_v2 负责：
 
 ### Phase 1：先把 loader 层写稳
 1. `expert_format_v2.h`
-2. `expert_tensor_store_v2.h`
-3. `expert_tensor_store_v2.cc`
 4. `expert_loader_v2.cc`
 
 目标：
@@ -406,8 +401,6 @@ server 已经能发 6 kinds，但 node_v2 必须严格按同样枚举接。
 立刻开始写：
 
 1. `expert_node_v2/expert_format_v2.h`
-2. `expert_node_v2/expert_tensor_store_v2.h`
-3. `expert_node_v2/expert_tensor_store_v2.cc`
 4. `expert_node_v2/expert_loader_v2.cc`
 
 只要这 4 个文件落地，整个 v2 的 host-side 结构就定下来了，后面 CUDA backend 和 runtime 才容易接。
