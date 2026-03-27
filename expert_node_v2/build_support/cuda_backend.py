@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -10,6 +11,38 @@ _FALLBACK_SMS = ["89"]
 
 def _capture(cmd):
     return subprocess.check_output(cmd, text=True)
+
+
+def _resolve_nvcc(explicit_nvcc: str | None):
+    candidates = []
+
+    if explicit_nvcc:
+        candidates.append(explicit_nvcc)
+
+    env_nvcc = os.environ.get("NVCC")
+    if env_nvcc:
+        candidates.append(env_nvcc)
+
+    which_nvcc = shutil.which("nvcc")
+    if which_nvcc:
+        candidates.append(which_nvcc)
+
+    seen = set()
+    uniq = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+
+    for c in uniq:
+        p = shutil.which(c) if Path(c).name == c else c
+        if p:
+            return p
+
+    raise RuntimeError(
+        "CUDA backend enabled, but nvcc was not found. "
+        "Set NVCC, or add nvcc to PATH."
+    )
 
 
 def _detect_sms():
@@ -47,6 +80,7 @@ def _resolve_sms():
     if sms:
         print(f"detected sms={sms}")
         return sms
+
     print(f"warning: nvidia-smi probe failed, using fallback sms={_FALLBACK_SMS}")
     return _FALLBACK_SMS[:]
 
@@ -107,12 +141,17 @@ def build_objects(
     defines,
     debug: bool,
 ):
+    if not sources:
+        return []
+
+    nvcc_path = _resolve_nvcc(nvcc)
     sms = _resolve_sms()
+
     objs = []
     for src_rel in sources:
         objs.append(
             _compile_cu(
-                nvcc=nvcc,
+                nvcc=nvcc_path,
                 project_root=project_root,
                 repo_root=repo_root,
                 build_dir=build_dir,

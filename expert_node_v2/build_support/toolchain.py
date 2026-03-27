@@ -61,6 +61,43 @@ def include_flags(project_root: Path, repo_root: Path):
     ]
 
 
+def _detect_cuda_include_dirs():
+    dirs = []
+
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if cuda_home:
+        inc = Path(cuda_home) / "include"
+        if inc.exists():
+            dirs.append(inc)
+
+    nvcc = shutil.which("nvcc")
+    if nvcc:
+        nvcc_path = Path(nvcc).resolve()
+        for cand in [
+            nvcc_path.parent.parent / "include",
+            nvcc_path.parent / "include",
+        ]:
+            if cand.exists() and cand not in dirs:
+                dirs.append(cand)
+
+    for cand in [
+        Path("/usr/local/cuda/include"),
+        Path("/usr/local/include"),
+        Path("/usr/include"),
+    ]:
+        if cand.exists() and cand not in dirs:
+            dirs.append(cand)
+
+    return dirs
+
+
+def cuda_include_flags():
+    flags = []
+    for d in _detect_cuda_include_dirs():
+        flags += ["-I", str(d)]
+    return flags
+
+
 def compile_cpp(
     cxx: str,
     project_root: Path,
@@ -71,6 +108,7 @@ def compile_cpp(
     opt: str,
     defines,
     debug: bool,
+    enable_cuda: bool,
 ):
     src = resolve_src(project_root, src_rel)
     obj = obj_path(build_dir, src_rel)
@@ -88,9 +126,8 @@ def compile_cpp(
     cmd += list(defines)
     cmd += include_flags(project_root, repo_root)
 
-    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
-    if cuda_home:
-        cmd += ["-I", str(Path(cuda_home) / "include")]
+    if enable_cuda:
+        cmd += cuda_include_flags()
 
     if debug:
         cmd += ["-g"]
@@ -110,7 +147,20 @@ def link_exe(
     if enable_cuda:
         cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
         if cuda_home:
-            cmd += ["-L", str(Path(cuda_home) / "lib64")]
+            lib64 = Path(cuda_home) / "lib64"
+            if lib64.exists():
+                cmd += ["-L", str(lib64)]
+
+        nvcc = shutil.which("nvcc")
+        if nvcc:
+            nvcc_path = Path(nvcc).resolve()
+            for cand in [
+                nvcc_path.parent.parent / "lib64",
+                nvcc_path.parent.parent / "targets/x86_64-linux/lib",
+            ]:
+                if cand.exists():
+                    cmd += ["-L", str(cand)]
+
         cmd += ["-lcudart", "-ldl"]
 
     cmd += ["-lpthread"]

@@ -1,7 +1,8 @@
 #pragma once
 
+#include <memory>
+
 #include "expert_node_v2/backend_workspace_v2.h"
-#include "expert_node_v2/cuda/backend_cuda_v2.h"
 
 namespace expert_node_v2 {
 
@@ -15,12 +16,11 @@ public:
         const common::InferRequestMsg& req,
         common::InferResponseMsg* resp) override;
 
-    bool ok() const { return ok_; }
+    bool ok() const;
 
 private:
-    int local_gpu_id_ = -1;
-    ExpertWorkspaceCudaV2 ws_{};
-    bool ok_ = false;
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace expert_node_v2

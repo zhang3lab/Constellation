@@ -63,6 +63,7 @@ def build_main(debug: bool):
                 opt=config.OPT,
                 defines=defines,
                 debug=debug,
+                enable_cuda=config.ENABLE_CUDA,
             )
         )
 
@@ -125,6 +126,7 @@ def build_test(name: str, debug: bool):
                 opt=config.OPT,
                 defines=defines,
                 debug=debug,
+                enable_cuda=config.ENABLE_CUDA,
             )
         )
 
