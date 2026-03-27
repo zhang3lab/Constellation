@@ -39,8 +39,8 @@ class Coordinator:
             self.node_inventories.append(node_row)
 
             for gpu in inv["gpus"]:
-                local_gpu_id = gpu["local_gpu_id"]
-                gpu_uid_global = f"{node_instance_id}/gpu{local_gpu_id}"
+                worker_id = gpu["worker_id"]
+                gpu_uid_global = f"{node_instance_id}/gpu{worker_id}"
 
                 row = {
                     "node_instance_id": node_instance_id,
@@ -51,7 +51,7 @@ class Coordinator:
                     "gpu_uid_global": gpu_uid_global,
                     "gpu_uid_reported": gpu["gpu_uid"],
 
-                    "local_gpu_id": local_gpu_id,
+                    "worker_id": worker_id,
                     "gpu_name": gpu["gpu_name"],
                     "total_mem_bytes": gpu["total_mem_bytes"],
                     "free_mem_bytes": gpu["free_mem_bytes"],
@@ -80,7 +80,7 @@ class Coordinator:
                 f"reported_node_id={gpu['reported_node_id']} "
                 f"gpu_uid_global={gpu['gpu_uid_global']} "
                 f"gpu_uid_reported={gpu['gpu_uid_reported']} "
-                f"local_gpu_id={gpu['local_gpu_id']} "
+                f"worker_id={gpu['worker_id']} "
                 f"name={gpu['gpu_name']} "
                 f"free={free_gib:.2f}GiB/{total_gib:.2f}GiB "
                 f"worker_port={gpu['worker_port']} "
@@ -108,7 +108,7 @@ class Coordinator:
                 f"expert={p['expert_id']} "
                 f"node_instance_id={p['node_instance_id']} "
                 f"gpu_uid_global={p['gpu_uid_global']} "
-                f"local_gpu_id={p['local_gpu_id']} "
+                f"worker_id={p['worker_id']} "
                 f"worker_port={p['worker_port']} "
                 f"gpu_name={p['gpu_name']} "
                 f"expert_mem={gib:.2f}GiB"
@@ -122,13 +122,13 @@ class Coordinator:
             grouped.setdefault(node_instance_id, []).append(
                 {
                     "expert_id": p["expert_id"],
-                    "local_gpu_id": p["local_gpu_id"],
+                    "worker_id": p["worker_id"],
                 }
             )
      
         for node_instance_id in grouped:
             grouped[node_instance_id].sort(
-                key=lambda x: (x["local_gpu_id"], x["expert_id"])
+                key=lambda x: (x["worker_id"], x["expert_id"])
             )
      
         return grouped
@@ -161,7 +161,7 @@ class Coordinator:
      
         msg = {
             "expert_id": p["expert_id"],
-            "local_gpu_id": p["local_gpu_id"],
+            "worker_id": p["worker_id"],
             "tensor_kind": TensorKind.WUp,
             "total_bytes": 123456,
         }
@@ -172,7 +172,7 @@ class Coordinator:
      
         print(
             f"sent LoadWeightsBegin to {p['node_instance_id']} "
-            f"expert={p['expert_id']} local_gpu_id={p['local_gpu_id']} "
+            f"expert={p['expert_id']} worker_id={p['worker_id']} "
             f"tensor_kind={msg['tensor_kind'].name} total_bytes={msg['total_bytes']}"
         )
 
@@ -187,14 +187,14 @@ class Coordinator:
      
         begin_msg = {
             "expert_id": p["expert_id"],
-            "local_gpu_id": p["local_gpu_id"],
+            "worker_id": p["worker_id"],
             "tensor_kind": TensorKind.WUp,
             "total_bytes": total_bytes,
         }
      
         chunk_msg = {
             "expert_id": p["expert_id"],
-            "local_gpu_id": p["local_gpu_id"],
+            "worker_id": p["worker_id"],
             "tensor_kind": TensorKind.WUp,
             "chunk_offset": 0,
             "chunk_data": fake_chunk,
@@ -202,7 +202,7 @@ class Coordinator:
      
         end_msg = {
             "expert_id": p["expert_id"],
-            "local_gpu_id": p["local_gpu_id"],
+            "worker_id": p["worker_id"],
             "tensor_kind": TensorKind.WUp,
         }
      
@@ -214,7 +214,7 @@ class Coordinator:
      
         print(
             f"sent full load sequence to {p['node_instance_id']} "
-            f"expert={p['expert_id']} local_gpu_id={p['local_gpu_id']} "
+            f"expert={p['expert_id']} worker_id={p['worker_id']} "
             f"tensor_kind={begin_msg['tensor_kind'].name} total_bytes={total_bytes}"
         )
 
@@ -239,7 +239,7 @@ class Coordinator:
      
         begin_msg = {
             "expert_id": expert_id,
-            "local_gpu_id": target["local_gpu_id"],
+            "worker_id": target["worker_id"],
             "tensor_kind": tensor_kind,
             "total_bytes": len(tensor_bytes),
         }
@@ -253,7 +253,7 @@ class Coordinator:
                 chunk = tensor_bytes[offset : offset + chunk_size]
                 chunk_msg = {
                     "expert_id": expert_id,
-                    "local_gpu_id": target["local_gpu_id"],
+                    "worker_id": target["worker_id"],
                     "tensor_kind": tensor_kind,
                     "chunk_offset": offset,
                     "chunk_data": chunk,
@@ -263,14 +263,14 @@ class Coordinator:
      
             end_msg = {
                 "expert_id": expert_id,
-                "local_gpu_id": target["local_gpu_id"],
+                "worker_id": target["worker_id"],
                 "tensor_kind": tensor_kind,
             }
             client.send_load_weights_end(end_msg)
      
         print(
             f"sent tensor bytes to {target['node_instance_id']} "
-            f"expert={expert_id} local_gpu_id={target['local_gpu_id']} "
+            f"expert={expert_id} worker_id={target['worker_id']} "
             f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)}"
         )
 

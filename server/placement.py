@@ -69,7 +69,7 @@ def build_balanced_placement(
                 "control_port": chosen["control_port"],
                 "gpu_uid_global": chosen["gpu_uid_global"],
                 "gpu_uid_reported": chosen["gpu_uid_reported"],
-                "local_gpu_id": chosen["local_gpu_id"],
+                "worker_id": chosen["worker_id"],
                 "worker_port": chosen["worker_port"],
                 "gpu_name": chosen["gpu_name"],
                 "expert_mem_bytes": expert_mem_bytes,
