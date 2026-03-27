@@ -25,7 +25,7 @@ def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
     coord = session.coord
     target = _find_target_placement(coord, expert_id)
     host = target["host"]
-    port = target["control_port"]
+    port = target["worker_port"]
 
     pool = session.client_pool
 
