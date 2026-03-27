@@ -1,9 +1,9 @@
-#include "expert_node_v2/backend_workspace_v2.h"
+#include "expert_node_v2/backend/backend_workspace_v2.h"
 
 #include "expert_node_v2/build_config_v2.h"
 
 #if EXPERT_NODE_V2_ENABLE_CUDA
-#include "expert_node_v2/cuda/backend_workspace_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/backend_workspace_cuda_v2.h"
 #endif
 
 namespace expert_node_v2 {

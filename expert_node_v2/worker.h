@@ -4,7 +4,7 @@
 #include <string>
 
 #include "common/protocol.h"
-#include "expert_node_v2/backend_workspace_v2.h"
+#include "expert_node_v2/backend/backend_workspace_v2.h"
 
 struct ControlState;
 

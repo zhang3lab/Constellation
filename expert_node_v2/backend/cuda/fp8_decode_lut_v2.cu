@@ -1,4 +1,4 @@
-#include "expert_node_v2/cuda/fp8_decode_lut_v2.h"
+#include "expert_node_v2/backend/cuda/fp8_decode_lut_v2.h"
 
 #include <cuda_runtime.h>
 

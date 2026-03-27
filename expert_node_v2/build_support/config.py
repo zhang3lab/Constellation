@@ -22,30 +22,30 @@ CORE_CPP = [
     "main.cc",
     "control.cc",
     "worker.cc",
-    "backend_workspace_v2.cc",
+    "backend/backend_workspace_v2.cc",
     "node_info.cc",
     "expert_registry_v2.cc",
     "expert_format_v2.cc",
 ]
 
 CUDA_CPP = [
-    "cuda/backend_workspace_cuda_v2.cc",
-    "cuda/backend_cuda_v2.cc",
-    "cuda/gpu_info_cuda_v2.cc",
+    "backend/cuda/backend_workspace_cuda_v2.cc",
+    "backend/cuda/backend_cuda_v2.cc",
+    "backend/cuda/gpu_info_cuda_v2.cc",
 ]
 
 CUDA_CU = [
-    "cuda/down_cuda_v2.cu",
-    "cuda/fused_up_gate_cuda_v2.cu",
-    "cuda/fp8_decode_lut_v2.cu",
+    "backend/cuda/down_cuda_v2.cu",
+    "backend/cuda/fused_up_gate_cuda_v2.cu",
+    "backend/cuda/fp8_decode_lut_v2.cu",
 ]
 
 AMD_CPP = [
-    "amd/gpu_info_amd_v2.cc",
+    "backend/amd/gpu_info_amd_v2.cc",
 ]
 
 INTEL_CPP = [
-    "intel/gpu_info_intel_v2.cc",
+    "backend/intel/gpu_info_intel_v2.cc",
 ]
 
 COMMON_CPP = [
@@ -61,38 +61,39 @@ COMMON_CPP = [
 TEST_TARGETS = {
     "test_gpu_info_cuda_v2": {
         "cpp": [
-            "cuda/test_gpu_info_cuda_v2.cc",
-            "cuda/gpu_info_cuda_v2.cc",
+            "backend/cuda/tests/test_gpu_info_cuda_v2.cc",
+            "backend/cuda/gpu_info_cuda_v2.cc",
         ],
         "cu": [],
     },
     "test_down_cuda_v2": {
         "cpp": [
-            "cuda/test_down_cuda_v2.cc",
+            "backend/cuda/tests/test_down_cuda_v2.cc",
         ],
         "cu": [
-            "cuda/down_cuda_v2.cu",
-            "cuda/fp8_decode_lut_v2.cu",
+            "backend/cuda/down_cuda_v2.cu",
+            "backend/cuda/fp8_decode_lut_v2.cu",
         ],
     },
     "test_fused_up_gate_cuda_v2": {
         "cpp": [
-            "cuda/test_fused_up_gate_cuda_v2.cc",
+            "backend/cuda/tests/test_fused_up_gate_cuda_v2.cc",
         ],
         "cu": [
-            "cuda/fused_up_gate_cuda_v2.cu",
-            "cuda/fp8_decode_lut_v2.cu",
+            "backend/cuda/fused_up_gate_cuda_v2.cu",
+            "backend/cuda/fp8_decode_lut_v2.cu",
         ],
     },
     "test_benchmark_run_expert_cuda_v2": {
         "cpp": [
-            "cuda/test_benchmark_run_expert_cuda_v2.cc",
-            "cuda/backend_cuda_v2.cc",
+            "backend/cuda/tests/test_benchmark_run_expert_cuda_v2.cc",
+            "backend/cuda/backend_cuda_v2.cc",
+            "expert_format_v2.cc",
         ],
         "cu": [
-            "cuda/down_cuda_v2.cu",
-            "cuda/fused_up_gate_cuda_v2.cu",
-            "cuda/fp8_decode_lut_v2.cu",
+            "backend/cuda/down_cuda_v2.cu",
+            "backend/cuda/fused_up_gate_cuda_v2.cu",
+            "backend/cuda/fp8_decode_lut_v2.cu",
         ],
     },
 }

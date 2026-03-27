@@ -6,15 +6,15 @@
 #include "expert_node_v2/build_config_v2.h"
 
 #if EXPERT_NODE_V2_ENABLE_CUDA
-#include "expert_node_v2/cuda/backend_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/backend_cuda_v2.h"
 #endif
 
 #if EXPERT_NODE_V2_ENABLE_AMD
-#include "expert_node_v2/amd/backend_amd_v2.h"
+#include "expert_node_v2/backend/amd/backend_amd_v2.h"
 #endif
 
 #if EXPERT_NODE_V2_ENABLE_INTEL
-#include "expert_node_v2/intel/backend_intel_v2.h"
+#include "expert_node_v2/backend/intel/backend_intel_v2.h"
 #endif
 
 namespace expert_node_v2 {

@@ -9,8 +9,8 @@
 #include <cuda_bf16.h>
 #endif
 
-#include "expert_node_v2/cuda/backend_cuda_v2.h"
-#include "expert_node_v2/cuda/backend_workspace_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/backend_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/backend_workspace_cuda_v2.h"
 
 namespace expert_node_v2 {
 

@@ -1,11 +1,11 @@
-#include "expert_node_v2/cuda/backend_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/backend_cuda_v2.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "expert_node_v2/cuda/down_cuda_v2.h"
-#include "expert_node_v2/cuda/fused_up_gate_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/down_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/fused_up_gate_cuda_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
 namespace {

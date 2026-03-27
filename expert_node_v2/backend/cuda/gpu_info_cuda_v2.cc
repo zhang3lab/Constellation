@@ -1,4 +1,4 @@
-#include "expert_node_v2/cuda/gpu_info_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/gpu_info_cuda_v2.h"
 
 #include <cuda_runtime.h>
 

@@ -4,9 +4,9 @@
 #include <utility>
 #include <vector>
 
-#include "expert_node_v2/cuda/gpu_info_cuda_v2.h"
-#include "expert_node_v2/amd/gpu_info_amd_v2.h"
-#include "expert_node_v2/intel/gpu_info_intel_v2.h"
+#include "expert_node_v2/backend/cuda/gpu_info_cuda_v2.h"
+#include "expert_node_v2/backend/amd/gpu_info_amd_v2.h"
+#include "expert_node_v2/backend/intel/gpu_info_intel_v2.h"
 
 namespace {
 

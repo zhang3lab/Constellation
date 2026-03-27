@@ -1,4 +1,4 @@
-#include "expert_node_v2/amd/gpu_info_amd_v2.h"
+#include "expert_node_v2/backend/amd/gpu_info_amd_v2.h"
 
 bool BuildLocalAmdGpuInfosV2(
     std::int32_t worker_id_begin,

@@ -1,4 +1,4 @@
-#include "expert_node_v2/intel/gpu_info_intel_v2.h"
+#include "expert_node_v2/backend/intel/gpu_info_intel_v2.h"
 
 bool BuildLocalIntelGpuInfosV2(
     std::int32_t worker_id_begin,

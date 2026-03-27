@@ -1,4 +1,4 @@
-#include "expert_node_v2/cuda/backend_workspace_cuda_v2_internal.h"
+#include "expert_node_v2/backend/cuda/backend_workspace_cuda_v2_internal.h"
 
 namespace expert_node_v2 {
 

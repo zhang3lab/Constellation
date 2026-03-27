@@ -1,4 +1,4 @@
-#include "expert_node_v2/cuda/down_cuda_v2.h"
+#include "expert_node_v2/backend/cuda/down_cuda_v2.h"
 
 #include <cuda_fp16.h>
 #if EXPERT_NODE_V2_HAS_CUDA_BF16
@@ -9,8 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "expert_node_v2/cuda/cuda_common_v2.cuh"
-#include "expert_node_v2/cuda/fp8_decode_lut_v2.h"
+#include "expert_node_v2/backend/cuda/cuda_common_v2.cuh"
+#include "expert_node_v2/backend/cuda/fp8_decode_lut_v2.h"
 
 namespace {
 
