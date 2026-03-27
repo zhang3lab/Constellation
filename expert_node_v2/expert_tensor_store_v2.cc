@@ -29,27 +29,33 @@ void ExpertTensorStoreV2::clear() {
 
 bool ExpertTensorStoreV2::store_tensor(
     int expert_id,
-    TensorKind tensor_kind,
+    common::TensorKind tensor_kind,
     std::vector<std::uint8_t> bytes,
     std::vector<std::uint64_t> shape,
     std::string dtype) {
-    ExpertTensorStateV2& state = get_or_create(expert_id);
-    HostTensorV2* slot = select_slot(&state.bundle, tensor_kind);
+    ExpertTensorBundleV2* bundle = find_or_create_bundle(expert_id);
+    if (bundle == nullptr) return false;
+
+    HostTensorV2* slot = select_slot(bundle, tensor_kind);
     if (slot == nullptr) return false;
 
     slot->bytes = std::move(bytes);
-    slot->shape = std::move(shape);
-    slot->dtype = std::move(dtype);
-    slot->ready = false;
+    slot->meta.shape = std::move(shape);
+    slot->meta.dtype = std::move(dtype);
     return true;
 }
 
-bool ExpertTensorStoreV2::mark_ready(int expert_id, TensorKind tensor_kind) {
-    HostTensorV2* slot = get_tensor_slot(expert_id, tensor_kind);
+bool ExpertTensorStoreV2::mark_ready(int expert_id, common::TensorKind tensor_kind) {
+    ExpertTensorBundleV2* bundle = find_or_create_bundle(expert_id);
+    if (bundle == nullptr) return false;
+
+    HostTensorV2* slot = select_slot(bundle, tensor_kind);
     if (slot == nullptr) return false;
-    if (slot->bytes.empty() || slot->shape.empty() || slot->dtype.empty()) {
+
+    if (slot->bytes.empty() || slot->meta.shape.empty() || slot->meta.dtype.empty()) {
         return false;
     }
+
     slot->ready = true;
     return true;
 }
