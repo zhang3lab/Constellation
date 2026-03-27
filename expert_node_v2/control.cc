@@ -13,8 +13,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #include "common/header_codec.h"
 #include "common/infer_codec.h"
 #include "common/inventory_codec.h"
@@ -23,7 +21,6 @@
 #include "common/socket_utils.h"
 #include "common/types.h"
 #include "common/weight_codec.h"
-#include "expert_node_v2/cuda/gpu_info_cuda_v2.h"
 #include "expert_node_v2/expert_registry_v2.h"
 #include "expert_node_v2/node_info.h"
 
