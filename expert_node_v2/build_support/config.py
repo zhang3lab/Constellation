@@ -27,6 +27,7 @@ CORE_CPP = [
     "expert_registry_v2.cc",
     "expert_loader_v2.cc",
     "expert_tensor_store_v2.cc",
+    "expert_format_v2.cc",
 ]
 
 CUDA_CPP = [
