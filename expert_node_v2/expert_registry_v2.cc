@@ -188,6 +188,11 @@ bool ExpertRegistryV2::Update(
     }
 
     if (!ok) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] upload failed expert=%d worker=%d vendor=%u\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor));
         slot->storage.clear();
         slot->resident_ready = false;
         return false;

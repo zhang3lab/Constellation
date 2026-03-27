@@ -85,6 +85,40 @@ bool UploadExpertCudaV2(
 
     ExpertWeightsViewV2 host_view;
     if (!BuildExpertWeightsViewV2(host_bundle, &host_view)) {
+        std::fprintf(stderr,
+                     "[UploadExpertCudaV2] BuildExpertWeightsViewV2 failed "
+                     "local_gpu_id=%d\n"
+                     "  w_up: bytes=%zu shape=(%llu,%llu) dtype=%s\n"
+                     "  w_up_scale: bytes=%zu shape=(%llu,%llu) dtype=%s\n"
+                     "  w_gate: bytes=%zu shape=(%llu,%llu) dtype=%s\n"
+                     "  w_gate_scale: bytes=%zu shape=(%llu,%llu) dtype=%s\n"
+                     "  w_down: bytes=%zu shape=(%llu,%llu) dtype=%s\n"
+                     "  w_down_scale: bytes=%zu shape=(%llu,%llu) dtype=%s\n",
+                     local_gpu_id,
+                     host_bundle.w_up.bytes.size(),
+                     host_bundle.w_up.shape.size() > 0 ? (unsigned long long)host_bundle.w_up.shape[0] : 0ULL,
+                     host_bundle.w_up.shape.size() > 1 ? (unsigned long long)host_bundle.w_up.shape[1] : 0ULL,
+                     host_bundle.w_up.dtype.c_str(),
+                     host_bundle.w_up_scale.bytes.size(),
+                     host_bundle.w_up_scale.shape.size() > 0 ? (unsigned long long)host_bundle.w_up_scale.shape[0] : 0ULL,
+                     host_bundle.w_up_scale.shape.size() > 1 ? (unsigned long long)host_bundle.w_up_scale.shape[1] : 0ULL,
+                     host_bundle.w_up_scale.dtype.c_str(),
+                     host_bundle.w_gate.bytes.size(),
+                     host_bundle.w_gate.shape.size() > 0 ? (unsigned long long)host_bundle.w_gate.shape[0] : 0ULL,
+                     host_bundle.w_gate.shape.size() > 1 ? (unsigned long long)host_bundle.w_gate.shape[1] : 0ULL,
+                     host_bundle.w_gate.dtype.c_str(),
+                     host_bundle.w_gate_scale.bytes.size(),
+                     host_bundle.w_gate_scale.shape.size() > 0 ? (unsigned long long)host_bundle.w_gate_scale.shape[0] : 0ULL,
+                     host_bundle.w_gate_scale.shape.size() > 1 ? (unsigned long long)host_bundle.w_gate_scale.shape[1] : 0ULL,
+                     host_bundle.w_gate_scale.dtype.c_str(),
+                     host_bundle.w_down.bytes.size(),
+                     host_bundle.w_down.shape.size() > 0 ? (unsigned long long)host_bundle.w_down.shape[0] : 0ULL,
+                     host_bundle.w_down.shape.size() > 1 ? (unsigned long long)host_bundle.w_down.shape[1] : 0ULL,
+                     host_bundle.w_down.dtype.c_str(),
+                     host_bundle.w_down_scale.bytes.size(),
+                     host_bundle.w_down_scale.shape.size() > 0 ? (unsigned long long)host_bundle.w_down_scale.shape[0] : 0ULL,
+                     host_bundle.w_down_scale.shape.size() > 1 ? (unsigned long long)host_bundle.w_down_scale.shape[1] : 0ULL,
+                     host_bundle.w_down_scale.dtype.c_str());
         return false;
     }
 
