@@ -147,7 +147,8 @@ def dispatch_topk_experts(session, hidden: np.ndarray, routes):
 
     weighted_outputs = []
     for expert_id, weight in routes:
-        y = infer_one_expert(session, expert_id, hidden)
+        resp = infer_one_expert(session, expert_id, hidden)
+        y = resp["array"]
         weighted_outputs.append((expert_id, weight, y))
         print(
             f"[dispatch] expert={expert_id} weight={weight:.6f} "
