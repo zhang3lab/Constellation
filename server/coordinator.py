@@ -40,7 +40,8 @@ class Coordinator:
 
             for gpu in inv["gpus"]:
                 worker_id = gpu["worker_id"]
-                gpu_uid_global = f"{node_instance_id}/gpu{worker_id}"
+                gpu_uid_global = f"{node_instance_id}/worker{worker_id}"
+                gpu_uid_reported = f"{inv['node_id']}/worker{worker_id}"
 
                 row = {
                     "node_instance_id": node_instance_id,
@@ -49,7 +50,7 @@ class Coordinator:
                     "control_port": control_port,
 
                     "gpu_uid_global": gpu_uid_global,
-                    "gpu_uid_reported": gpu["gpu_uid"],
+                    "gpu_uid_reported": gpu_uid_reported,
 
                     "worker_id": worker_id,
                     "gpu_name": gpu["gpu_name"],
@@ -57,6 +58,9 @@ class Coordinator:
                     "free_mem_bytes": gpu["free_mem_bytes"],
                     "worker_port": gpu["worker_port"],
                     "gpu_status": gpu["gpu_status"],
+                    "gpu_vendor": gpu["gpu_vendor"],
+                    "capability_flags": gpu["capability_flags"],
+                    "arch_name": gpu["arch_name"],
                 }
                 self.gpu_inventory.append(row)
 
