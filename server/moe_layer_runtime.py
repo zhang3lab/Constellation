@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
+from common.protocol import ActivationDType
 from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.model_locator import resolve_deepseek_tensor_file
 from server.router_runtime import (
