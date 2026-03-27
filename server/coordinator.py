@@ -13,6 +13,7 @@ class Coordinator:
         self.gpu_inventory: List[Dict[str, Any]] = []
         self.placements: List[Dict[str, Any]] = []
 
+
     def discover_nodes(self) -> None:
         self.node_inventories = []
         self.gpu_inventory = []
@@ -64,6 +65,7 @@ class Coordinator:
                 }
                 self.gpu_inventory.append(row)
 
+
     def print_summary(self) -> None:
         print(f"discovered {len(self.node_inventories)} nodes")
         print(f"discovered {len(self.gpu_inventory)} gpus total")
@@ -91,6 +93,7 @@ class Coordinator:
                 f"status={gpu['gpu_status']}"
             )
 
+
     def build_placement(
         self,
         num_experts: int,
@@ -103,6 +106,7 @@ class Coordinator:
             expert_mem_bytes=expert_mem_bytes,
             memory_utilization=memory_utilization,
         )
+
 
     def print_placement(self) -> None:
         print(f"built placement for {len(self.placements)} experts")
@@ -117,6 +121,7 @@ class Coordinator:
                 f"gpu_name={p['gpu_name']} "
                 f"expert_mem={gib:.2f}GiB"
             )
+
 
     def group_placements_by_node(self):
         grouped = {}
@@ -136,6 +141,7 @@ class Coordinator:
             )
      
         return grouped
+
 
     def send_placement_plan(self) -> None:
         grouped = self.group_placements_by_node()
@@ -157,70 +163,6 @@ class Coordinator:
                 f"assignments={len(assignments)}"
             )
 
-    def test_send_load_weights_begin(self) -> None:
-        if not self.placements:
-            raise RuntimeError("placements are empty")
-     
-        p = self.placements[0]
-     
-        msg = {
-            "expert_id": p["expert_id"],
-            "worker_id": p["worker_id"],
-            "tensor_kind": TensorKind.WUp,
-            "total_bytes": 123456,
-        }
-     
-        client = NodeClient(p["host"], p["control_port"])
-        with client:
-            client.send_load_weights_begin(msg)
-     
-        print(
-            f"sent LoadWeightsBegin to {p['node_instance_id']} "
-            f"expert={p['expert_id']} worker_id={p['worker_id']} "
-            f"tensor_kind={msg['tensor_kind'].name} total_bytes={msg['total_bytes']}"
-        )
-
-    def test_send_full_load_sequence(self) -> None:
-        if not self.placements:
-            raise RuntimeError("placements are empty")
-     
-        p = self.placements[0]
-     
-        fake_chunk = b"hello_fake_weight_bytes"
-        total_bytes = len(fake_chunk)
-     
-        begin_msg = {
-            "expert_id": p["expert_id"],
-            "worker_id": p["worker_id"],
-            "tensor_kind": TensorKind.WUp,
-            "total_bytes": total_bytes,
-        }
-     
-        chunk_msg = {
-            "expert_id": p["expert_id"],
-            "worker_id": p["worker_id"],
-            "tensor_kind": TensorKind.WUp,
-            "chunk_offset": 0,
-            "chunk_data": fake_chunk,
-        }
-     
-        end_msg = {
-            "expert_id": p["expert_id"],
-            "worker_id": p["worker_id"],
-            "tensor_kind": TensorKind.WUp,
-        }
-     
-        client = NodeClient(p["host"], p["control_port"])
-        with client:
-            client.send_load_weights_begin(begin_msg)
-            client.send_load_weights_chunk(chunk_msg)
-            client.send_load_weights_end(end_msg)
-     
-        print(
-            f"sent full load sequence to {p['node_instance_id']} "
-            f"expert={p['expert_id']} worker_id={p['worker_id']} "
-            f"tensor_kind={begin_msg['tensor_kind'].name} total_bytes={total_bytes}"
-        )
 
     def send_one_tensor_bytes(
         self,
@@ -228,30 +170,51 @@ class Coordinator:
         tensor_kind: TensorKind,
         tensor_bytes: bytes,
         chunk_size: int,
+        shape: Sequence[int],
+        dtype: str,
     ) -> None:
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
-     
+
         target = None
         for p in self.placements:
             if p["expert_id"] == expert_id:
                 target = p
                 break
-     
+
         if target is None:
             raise RuntimeError(f"expert {expert_id} not found in placements")
-     
-        begin_msg = {
-            "expert_id": expert_id,
-            "worker_id": target["worker_id"],
-            "tensor_kind": tensor_kind,
-            "total_bytes": len(tensor_bytes),
+
+        shape_list = [int(x) for x in shape]
+        for d in shape_list:
+            if d < 0:
+                raise ValueError(f"shape dim must be >= 0, got {d}")
+
+        dtype_map = {
+            "torch.float32": "float32",
+            "torch.float16": "float16",
+            "torch.bfloat16": "bfloat16",
+            "torch.float8_e4m3fn": "float8_e4m3fn",
         }
-     
+        dtype = dtype_map.get(str(dtype), str(dtype))
+        if not dtype:
+            raise ValueError("dtype must be non-empty")
+
+        begin_msg = {
+             "expert_id": expert_id,
+             "worker_id": target["worker_id"],
+             "tensor_kind": tensor_kind,
+             "total_bytes": len(tensor_bytes),
+             "meta": {
+                 "shape": shape_list,
+                 "dtype": dtype,
+             },
+        }
+
         client = NodeClient(target["host"], target["control_port"])
         with client:
             client.send_load_weights_begin(begin_msg)
-     
+
             offset = 0
             while offset < len(tensor_bytes):
                 chunk = tensor_bytes[offset : offset + chunk_size]
@@ -264,19 +227,21 @@ class Coordinator:
                 }
                 client.send_load_weights_chunk(chunk_msg)
                 offset += len(chunk)
-     
+
             end_msg = {
                 "expert_id": expert_id,
                 "worker_id": target["worker_id"],
                 "tensor_kind": tensor_kind,
             }
             client.send_load_weights_end(end_msg)
-     
+
         print(
             f"sent tensor bytes to {target['node_instance_id']} "
             f"expert={expert_id} worker_id={target['worker_id']} "
-            f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)}"
+            f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)} "
+            f"shape={tuple(shape_list)} dtype={dtype}"
         )
+
 
     def send_one_expert_sixpack(
         self,
@@ -308,7 +273,10 @@ class Coordinator:
                 tensor_kind=tensor_kind_enum,
                 tensor_bytes=tensor_bytes,
                 chunk_size=chunk_size,
+                shape=shape,
+                dtype=str(dtype),
             )
+
 
     def preload_all_placed_experts(self, tensor_loader, chunk_size: int):
         expert_ids = sorted({int(p["expert_id"]) for p in self.placements})
