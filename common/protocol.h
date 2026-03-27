@@ -62,6 +62,8 @@ static_assert(sizeof(MsgHeader) == 16, "MsgHeader must be 16 bytes");
 struct TensorMeta {
     std::vector<std::uint64_t> shape;
     std::string dtype;
+    std::uint32_t row_block = 0;
+    std::uint32_t col_block = 0;
 };
 
 // Body-building helpers.

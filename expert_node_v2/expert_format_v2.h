@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "common/protocol.h"
+
 enum class Fp8Format : std::int32_t {
     IEEE_E4M3 = 0,
     IEEE_E5M2 = 1,
@@ -35,14 +37,12 @@ struct ExpertWorkspaceConfigV2 {
 // -----------------------------------------------------------------------------
 struct HostTensorV2 {
     std::vector<std::uint8_t> bytes;
-    std::vector<std::uint64_t> shape;
-    std::string dtype;
+    common::TensorMeta meta;
     bool ready = false;
 
     void clear() {
         bytes.clear();
-        shape.clear();
-        dtype.clear();
+        meta = common::TensorMeta{};
         ready = false;
     }
 

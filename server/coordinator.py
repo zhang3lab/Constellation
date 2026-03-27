@@ -172,6 +172,8 @@ class Coordinator:
         chunk_size: int,
         shape: Sequence[int],
         dtype: str,
+        row_block: int,
+        col_block: int,
     ) -> None:
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
@@ -199,6 +201,8 @@ class Coordinator:
         dtype = dtype_map.get(str(dtype), str(dtype))
         if not dtype:
             raise ValueError("dtype must be non-empty")
+        if row_block <= 0 or col_block <= 0:
+            raise ValueError(f"row_block/col_block must be > 0, got {row_block}/{col_block}")
 
         begin_msg = {
              "expert_id": expert_id,
@@ -208,6 +212,8 @@ class Coordinator:
              "meta": {
                  "shape": shape_list,
                  "dtype": dtype,
+                 "row_block": int(row_block),
+                 "col_block": int(col_block),
              },
         }
 
@@ -259,7 +265,7 @@ class Coordinator:
         ]
 
         for tensor_kind_name, tensor_kind_enum in order:
-            tensor_name, shard_path, tensor_bytes, shape, dtype = tensor_loader(
+            tensor_name, shard_path, tensor_bytes, shape, dtype, row_block, col_block = tensor_loader(
                 expert_id,
                 tensor_kind_name,
             )
@@ -275,6 +281,8 @@ class Coordinator:
                 chunk_size=chunk_size,
                 shape=shape,
                 dtype=str(dtype),
+                row_block=row_block,
+                col_block=col_block,
             )
 
 

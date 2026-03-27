@@ -263,9 +263,15 @@ def encode_load_weights_begin(msg):
     meta = msg.get("meta", {})
     shape = meta.get("shape", [])
     dtype = str(meta.get("dtype", ""))
+    row_block = int(meta.get("row_block", 0))
+    col_block = int(meta.get("col_block", 0))
 
     if not dtype:
         raise ValueError("meta.dtype must be non-empty")
+    if row_block <= 0 or col_block <= 0:
+        raise ValueError(
+            f"meta.row_block/meta.col_block must be > 0, got {row_block}/{col_block}"
+        )
 
     body = bytearray()
     body += pack_i32(int(msg["expert_id"]))
@@ -281,6 +287,8 @@ def encode_load_weights_begin(msg):
         body += pack_u64(d)
 
     body += pack_string(dtype)
+    body += pack_u32(row_block)
+    body += pack_u32(col_block)
     return bytes(body)
 
 
@@ -310,6 +318,13 @@ def decode_load_weights_begin(body: bytes):
     if not dtype:
         raise ProtocolError("load_weights_begin has empty dtype")
 
+    row_block, offset = unpack_u32(body, offset)
+    col_block, offset = unpack_u32(body, offset)
+    if row_block == 0 or col_block == 0:
+        raise ProtocolError(
+            f"load_weights_begin has invalid block size {row_block}x{col_block}"
+        )
+
     if offset != len(body):
         raise ProtocolError(
             f"load_weights_begin has trailing bytes: parsed {offset}, total {len(body)}"
@@ -323,6 +338,8 @@ def decode_load_weights_begin(body: bytes):
         "meta": {
             "shape": shape,
             "dtype": dtype,
+            "row_block": row_block,
+            "col_block": col_block,
         },
     }
 

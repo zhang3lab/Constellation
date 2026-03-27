@@ -13,7 +13,7 @@ std::string EncodeLoadWeightsBeginBody(const LoadWeightsBeginMsg& msg) {
     body.reserve(
         4 + 4 + 4 + 8 + 4 +
         msg.meta.shape.size() * 8 +
-        msg.meta.dtype.size() + 8);
+        msg.meta.dtype.size() + 4 + 4 + 8);
 
     AppendI32(&body, msg.expert_id);
     AppendI32(&body, msg.worker_id);
@@ -26,6 +26,9 @@ std::string EncodeLoadWeightsBeginBody(const LoadWeightsBeginMsg& msg) {
     }
 
     AppendString(&body, msg.meta.dtype);
+    AppendU32(&body, msg.meta.row_block);
+    AppendU32(&body, msg.meta.col_block);
+
     return body;
 }
 
@@ -60,6 +63,10 @@ bool DecodeLoadWeightsBeginBody(
 
     if (!ReadString(body, &offset, &out->meta.dtype)) return false;
     if (out->meta.dtype.empty()) return false;
+
+    if (!ReadU32(body, &offset, &out->meta.row_block)) return false;
+    if (!ReadU32(body, &offset, &out->meta.col_block)) return false;
+    if (out->meta.row_block == 0 || out->meta.col_block == 0) return false;
 
     return offset == body.size();
 }

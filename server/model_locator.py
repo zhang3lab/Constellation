@@ -87,7 +87,9 @@ def resolve_and_load_deepseek_tensor(
         tensor_name=tensor_name,
     )
 
-    return tensor_name, shard_path, tensor_bytes, shape, dtype
+    row_block = 128
+    col_block = 128
+    return tensor_name, shard_path, tensor_bytes, shape, dtype, row_block, col_block
 
 def resolve_and_load_deepseek_scale_tensor(
     model_root: str,
@@ -109,4 +111,6 @@ def resolve_and_load_deepseek_scale_tensor(
         tensor_name=scale_name,
     )
 
-    return scale_name, shard_path, tensor_bytes, shape, dtype
+    row_block = 128
+    col_block = 128
+    return scale_name, shard_path, tensor_bytes, shape, dtype, row_block, col_block

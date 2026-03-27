@@ -103,8 +103,7 @@ bool ExpertRegistryV2::StoreIncomingTensor(
     }
 
     slot->bytes = std::move(bytes);
-    slot->shape = std::move(meta.shape);
-    slot->dtype = std::move(meta.dtype);
+    slot->meta = std::move(meta);
     slot->ready = true;
 
     entry->incoming_ready = entry->incoming.all_ready();
