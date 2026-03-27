@@ -90,7 +90,8 @@ bool ExpertRegistryV2::StoreIncomingTensor(
     int expert_id,
     common::TensorKind tensor_kind,
     std::uint64_t total_bytes,
-    std::vector<std::uint8_t>&& bytes) {
+    std::vector<std::uint8_t>&& bytes,
+    common::TensorMeta&& meta) {
     ExpertEntryV2* entry = FindOrCreateEntry_(expert_id);
     if (entry == nullptr) return false;
 
@@ -102,6 +103,8 @@ bool ExpertRegistryV2::StoreIncomingTensor(
     }
 
     slot->bytes = std::move(bytes);
+    slot->shape = std::move(meta.shape);
+    slot->dtype = std::move(meta.dtype);
     slot->ready = true;
 
     entry->incoming_ready = entry->incoming.all_ready();

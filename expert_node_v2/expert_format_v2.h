@@ -35,7 +35,7 @@ struct ExpertWorkspaceConfigV2 {
 // -----------------------------------------------------------------------------
 struct HostTensorV2 {
     std::vector<std::uint8_t> bytes;
-    std::vector<std::int64_t> shape;
+    std::vector<std::uint64_t> shape;
     std::string dtype;
     bool ready = false;
 

@@ -260,11 +260,27 @@ def decode_placement_plan(body: bytes):
 
 
 def encode_load_weights_begin(msg):
+    meta = msg.get("meta", {})
+    shape = meta.get("shape", [])
+    dtype = str(meta.get("dtype", ""))
+
+    if not dtype:
+        raise ValueError("meta.dtype must be non-empty")
+
     body = bytearray()
     body += pack_i32(int(msg["expert_id"]))
     body += pack_i32(int(msg["worker_id"]))
     body += pack_i32(int(msg["tensor_kind"]))
     body += pack_u64(int(msg["total_bytes"]))
+
+    body += pack_u32(len(shape))
+    for d in shape:
+        d = int(d)
+        if d < 0:
+            raise ValueError(f"shape dim must be >= 0, got {d}")
+        body += pack_u64(d)
+
+    body += pack_string(dtype)
     return bytes(body)
 
 
@@ -281,6 +297,19 @@ def decode_load_weights_begin(body: bytes):
 
     total_bytes, offset = unpack_u64(body, offset)
 
+    ndim, offset = unpack_u32(body, offset)
+    if ndim > 16:
+        raise ProtocolError(f"unreasonable ndim: {ndim}")
+
+    shape = []
+    for _ in range(ndim):
+        d, offset = unpack_u64(body, offset)
+        shape.append(d)
+
+    dtype, offset = unpack_string(body, offset)
+    if not dtype:
+        raise ProtocolError("load_weights_begin has empty dtype")
+
     if offset != len(body):
         raise ProtocolError(
             f"load_weights_begin has trailing bytes: parsed {offset}, total {len(body)}"
@@ -291,6 +320,10 @@ def decode_load_weights_begin(body: bytes):
         "worker_id": worker_id,
         "tensor_kind": tensor_kind,
         "total_bytes": total_bytes,
+        "meta": {
+            "shape": shape,
+            "dtype": dtype,
+        },
     }
 
 

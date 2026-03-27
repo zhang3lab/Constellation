@@ -274,22 +274,20 @@ bool HandleLoadWeightsBegin(
     state->active_load.received_bytes = 0;
     state->active_load.buffer.clear();
     state->active_load.buffer.reserve(static_cast<std::size_t>(msg.total_bytes));
+    state->active_load.meta = msg.meta;
 
     std::printf("[%s] received LoadWeightsBegin rid=%u "
-                "expert=%d worker_id=%d tensor_kind=%s total_bytes=%llu\n",
+                "expert=%d worker_id=%d tensor_kind=%s total_bytes=%llu "
+                "shape=[%llu,%llu] dtype=%s\n",
                 state->static_info.node_id.c_str(),
                 req.request_id,
                 msg.expert_id,
                 msg.worker_id,
                 TensorKindName(msg.tensor_kind),
-                static_cast<unsigned long long>(msg.total_bytes));
-
-    std::printf("[%s] active_load armed: expert=%d worker_id=%d tensor_kind=%s total=%llu\n",
-                state->static_info.node_id.c_str(),
-                state->active_load.expert_id,
-                state->active_load.worker_id,
-                TensorKindName(state->active_load.tensor_kind),
-                static_cast<unsigned long long>(state->active_load.total_bytes));
+                static_cast<unsigned long long>(msg.total_bytes),
+                msg.meta.shape.size() > 0 ? static_cast<unsigned long long>(msg.meta.shape[0]) : 0ULL,
+                msg.meta.shape.size() > 1 ? static_cast<unsigned long long>(msg.meta.shape[1]) : 0ULL,
+                msg.meta.dtype.c_str());
 
     const bool ok =
         SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
@@ -492,7 +490,8 @@ bool HandleLoadWeightsEnd(
             msg.expert_id,
             msg.tensor_kind,
             total_bytes,
-            std::move(state->active_load.buffer))) {
+            std::move(state->active_load.buffer),
+            std::move(state->active_load.meta))) {
         std::fprintf(stderr,
                      "[%s] failed to store incoming tensor for expert=%d tensor_kind=%s\n",
                      state->static_info.node_id.c_str(),

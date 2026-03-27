@@ -16,6 +16,7 @@ struct ActiveLoad {
     std::uint64_t total_bytes = 0;
     std::uint64_t received_bytes = 0;
     std::vector<std::uint8_t> buffer;
+    common::TensorMeta meta;
 };
 
 struct ControlState {

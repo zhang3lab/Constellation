@@ -41,7 +41,7 @@ public:
         int expert_id,
         TensorKind tensor_kind,
         std::vector<std::uint8_t> bytes,
-        std::vector<std::int64_t> shape,
+        std::vector<std::uint64_t> shape,
         std::string dtype);
 
     // Mark one tensor as fully received.

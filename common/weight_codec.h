@@ -13,6 +13,7 @@ struct LoadWeightsBeginMsg {
     std::int32_t worker_id = -1;
     TensorKind tensor_kind = TensorKind::WUp;
     std::uint64_t total_bytes = 0;
+    TensorMeta meta;
 };
 
 struct LoadWeightsChunkMsg {

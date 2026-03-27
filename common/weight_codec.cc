@@ -10,13 +10,22 @@ namespace common {
 
 std::string EncodeLoadWeightsBeginBody(const LoadWeightsBeginMsg& msg) {
     std::string body;
-    body.reserve(4 + 4 + 4 + 8);
+    body.reserve(
+        4 + 4 + 4 + 8 + 4 +
+        msg.meta.shape.size() * 8 +
+        msg.meta.dtype.size() + 8);
 
     AppendI32(&body, msg.expert_id);
     AppendI32(&body, msg.worker_id);
     AppendI32(&body, static_cast<std::int32_t>(msg.tensor_kind));
     AppendU64(&body, msg.total_bytes);
 
+    AppendU32(&body, static_cast<std::uint32_t>(msg.meta.shape.size()));
+    for (std::uint64_t d : msg.meta.shape) {
+        AppendU64(&body, d);
+    }
+
+    AppendString(&body, msg.meta.dtype);
     return body;
 }
 
@@ -38,6 +47,19 @@ bool DecodeLoadWeightsBeginBody(
         return false;
     }
     out->tensor_kind = static_cast<TensorKind>(tensor_kind_raw);
+
+    std::uint32_t ndim = 0;
+    if (!ReadU32(body, &offset, &ndim)) return false;
+    if (ndim > 16) return false;
+
+    out->meta.shape.clear();
+    out->meta.shape.resize(ndim);
+    for (std::uint32_t i = 0; i < ndim; ++i) {
+        if (!ReadU64(body, &offset, &out->meta.shape[i])) return false;
+    }
+
+    if (!ReadString(body, &offset, &out->meta.dtype)) return false;
+    if (out->meta.dtype.empty()) return false;
 
     return offset == body.size();
 }

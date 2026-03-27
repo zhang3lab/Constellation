@@ -34,7 +34,8 @@ public:
         int expert_id,
         common::TensorKind tensor_kind,
         std::uint64_t total_bytes,
-        std::vector<std::uint8_t>&& bytes);
+        std::vector<std::uint8_t>&& bytes,
+        common::TensorMeta&& meta);
 
     bool Update(
         int expert_id,

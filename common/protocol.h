@@ -58,6 +58,11 @@ struct MsgHeader {
 
 static_assert(sizeof(MsgHeader) == 16, "MsgHeader must be 16 bytes");
 
+struct TensorMeta {
+    std::vector<std::uint64_t> shape;
+    std::string dtype;
+};
+
 // Body-building helpers.
 // These helpers must append values in little-endian wire order.
 void AppendU16(std::string* out, std::uint16_t x);

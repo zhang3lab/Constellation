@@ -31,7 +31,7 @@ bool ExpertTensorStoreV2::store_tensor(
     int expert_id,
     TensorKind tensor_kind,
     std::vector<std::uint8_t> bytes,
-    std::vector<std::int64_t> shape,
+    std::vector<std::uint64_t> shape,
     std::string dtype) {
     ExpertTensorStateV2& state = get_or_create(expert_id);
     HostTensorV2* slot = select_slot(&state.bundle, tensor_kind);
