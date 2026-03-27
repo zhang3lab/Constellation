@@ -8,6 +8,7 @@ from server.model_locator import (
     resolve_deepseek_tensor_file,
     resolve_and_load_deepseek_tensor,
 )
+from common.protocol import ActivationDType
 from server.test_utils import (
     make_safe_input,
     print_stats,
