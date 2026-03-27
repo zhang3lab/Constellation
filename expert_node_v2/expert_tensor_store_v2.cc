@@ -2,18 +2,18 @@
 
 #include <utility>
 
-ExpertTensorStateV2& ExpertTensorStoreV2::get_or_create(int expert_id) {
+ExpertTensorBundleV2& ExpertTensorStoreV2::get_or_create(int expert_id) {
     auto [it, inserted] = experts_.try_emplace(expert_id);
     return it->second;
 }
 
-ExpertTensorStateV2* ExpertTensorStoreV2::find(int expert_id) {
+ExpertTensorBundleV2* ExpertTensorStoreV2::find(int expert_id) {
     auto it = experts_.find(expert_id);
     if (it == experts_.end()) return nullptr;
     return &it->second;
 }
 
-const ExpertTensorStateV2* ExpertTensorStoreV2::find(int expert_id) const {
+const ExpertTensorBundleV2* ExpertTensorStoreV2::find(int expert_id) const {
     auto it = experts_.find(expert_id);
     if (it == experts_.end()) return nullptr;
     return &it->second;
@@ -29,24 +29,24 @@ void ExpertTensorStoreV2::clear() {
 
 bool ExpertTensorStoreV2::store_tensor(
     int expert_id,
-    common::TensorKind tensor_kind,
+    TensorKind tensor_kind,
     std::vector<std::uint8_t> bytes,
     std::vector<std::uint64_t> shape,
     std::string dtype) {
-    ExpertTensorBundleV2* bundle = find_or_create_bundle(expert_id);
-    if (bundle == nullptr) return false;
+    ExpertTensorBundleV2& bundle = get_or_create(expert_id);
 
-    HostTensorV2* slot = select_slot(bundle, tensor_kind);
+    HostTensorV2* slot = select_slot(&bundle, tensor_kind);
     if (slot == nullptr) return false;
 
     slot->bytes = std::move(bytes);
     slot->meta.shape = std::move(shape);
     slot->meta.dtype = std::move(dtype);
+    slot->ready = false;
     return true;
 }
 
-bool ExpertTensorStoreV2::mark_ready(int expert_id, common::TensorKind tensor_kind) {
-    ExpertTensorBundleV2* bundle = find_or_create_bundle(expert_id);
+bool ExpertTensorStoreV2::mark_ready(int expert_id, TensorKind tensor_kind) {
+    ExpertTensorBundleV2* bundle = find(expert_id);
     if (bundle == nullptr) return false;
 
     HostTensorV2* slot = select_slot(bundle, tensor_kind);
@@ -67,21 +67,21 @@ bool ExpertTensorStoreV2::is_tensor_ready(int expert_id, TensorKind tensor_kind)
 }
 
 bool ExpertTensorStoreV2::is_expert_ready(int expert_id) const {
-    const ExpertTensorStateV2* state = find(expert_id);
-    if (state == nullptr) return false;
-    return state->all_ready();
+    const ExpertTensorBundleV2* bundle = find(expert_id);
+    if (bundle == nullptr) return false;
+    return bundle->all_ready();
 }
 
 HostTensorV2* ExpertTensorStoreV2::get_tensor_slot(int expert_id, TensorKind tensor_kind) {
-    ExpertTensorStateV2* state = find(expert_id);
-    if (state == nullptr) return nullptr;
-    return select_slot(&state->bundle, tensor_kind);
+    ExpertTensorBundleV2* bundle = find(expert_id);
+    if (bundle == nullptr) return nullptr;
+    return select_slot(bundle, tensor_kind);
 }
 
 const HostTensorV2* ExpertTensorStoreV2::get_tensor_slot(int expert_id, TensorKind tensor_kind) const {
-    const ExpertTensorStateV2* state = find(expert_id);
-    if (state == nullptr) return nullptr;
-    return select_slot(&state->bundle, tensor_kind);
+    const ExpertTensorBundleV2* bundle = find(expert_id);
+    if (bundle == nullptr) return nullptr;
+    return select_slot(bundle, tensor_kind);
 }
 
 HostTensorV2* ExpertTensorStoreV2::select_slot(ExpertTensorBundleV2* bundle, TensorKind tensor_kind) {
@@ -105,7 +105,9 @@ HostTensorV2* ExpertTensorStoreV2::select_slot(ExpertTensorBundleV2* bundle, Ten
     }
 }
 
-const HostTensorV2* ExpertTensorStoreV2::select_slot(const ExpertTensorBundleV2* bundle, TensorKind tensor_kind) {
+const HostTensorV2* ExpertTensorStoreV2::select_slot(
+    const ExpertTensorBundleV2* bundle,
+    TensorKind tensor_kind) {
     if (bundle == nullptr) return nullptr;
 
     switch (tensor_kind) {

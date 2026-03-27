@@ -5,32 +5,20 @@
 #include <unordered_map>
 #include <vector>
 
-#include "expert_node_v2/expert_format_v2.h"
 #include "common/protocol.h"
+#include "expert_node_v2/expert_format_v2.h"
 
 using common::TensorKind;
-
-struct ExpertTensorStateV2 {
-    ExpertTensorBundleV2 bundle;
-
-    bool all_ready() const {
-        return bundle.all_ready();
-    }
-
-    void clear() {
-        bundle.clear();
-    }
-};
 
 class ExpertTensorStoreV2 {
 public:
     ExpertTensorStoreV2() = default;
     ~ExpertTensorStoreV2() = default;
 
-    ExpertTensorStateV2& get_or_create(int expert_id);
+    ExpertTensorBundleV2& get_or_create(int expert_id);
 
-    ExpertTensorStateV2* find(int expert_id);
-    const ExpertTensorStateV2* find(int expert_id) const;
+    ExpertTensorBundleV2* find(int expert_id);
+    const ExpertTensorBundleV2* find(int expert_id) const;
 
     void erase(int expert_id);
     void clear();
@@ -58,5 +46,5 @@ private:
     static const HostTensorV2* select_slot(const ExpertTensorBundleV2* bundle, TensorKind tensor_kind);
 
 private:
-    std::unordered_map<int, ExpertTensorStateV2> experts_;
+    std::unordered_map<int, ExpertTensorBundleV2> experts_;
 };
