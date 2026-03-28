@@ -10,6 +10,8 @@ class SessionClientPool:
     def __init__(self):
         self._lock = threading.Lock()
         self._clients: Dict[Tuple[str, int], NodeClient] = {}
+        self.reference_weight_cache = {}
+        self.model_locator = None
 
     def get(self, host: str, port: int) -> NodeClient:
         key = (host, int(port))
