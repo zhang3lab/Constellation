@@ -3,7 +3,6 @@ from server.model_locator import DeepseekModelLocator
 from server.router_runtime import load_router_config
 
 
-
 def build_restricted_global_expert_ids(run_cfg):
     restricted_local_ids = run_cfg.get("restricted_expert_ids")
     if restricted_local_ids is None:

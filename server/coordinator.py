@@ -7,6 +7,7 @@ from server.expert_placement import (
     find_expert_placement,
     group_placements_by_control_endpoint,
 )
+from server.model_locator import DeepseekModelLocator
 from server.placement import build_balanced_placement
 
 
