@@ -26,7 +26,7 @@ def run_runtime_demo(coord, cfg):
         result = run_moe_layer(session, hidden, layer_id)
 
         print("[demo] routes =", result["routes"])
-        print("[demo] combined[:8] =", result["combined"][:8])
+        print("[demo] output[:8] =", result["output"][:8])
 
 
 def main():
@@ -35,11 +35,13 @@ def main():
     coord = Coordinator(cfg["nodes"])
     setup_control_plane(coord, cfg)
 
-    mode = cfg["run"].get("mode", "validation")
+    mode = str(cfg["run"].get("mode", "validation"))
     if mode == "validation":
         run_runtime_validation(coord, cfg)
     elif mode == "demo":
         run_runtime_demo(coord, cfg)
+    elif mode == "partial_61layer_debug":
+        run_runtime_validation(coord, cfg)
     else:
         raise RuntimeError(f"unknown mode={mode}")
 
