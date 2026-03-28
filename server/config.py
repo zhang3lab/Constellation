@@ -70,4 +70,32 @@ def load_config(path: str) -> Dict[str, Any]:
                     f"run.restricted_expert_ids[{i}] must be >= 0, got {x}"
                 )
 
+    experts_per_layer = run_cfg.get("experts_per_layer")
+    if experts_per_layer is not None:
+        if not isinstance(experts_per_layer, int):
+            raise ValueError("run.experts_per_layer must be an integer when provided")
+        if experts_per_layer <= 0:
+            raise ValueError("run.experts_per_layer must be > 0")
+
+    sparse_layer_start = run_cfg.get("sparse_layer_start")
+    sparse_layer_end = run_cfg.get("sparse_layer_end")
+
+    if sparse_layer_start is not None:
+        if not isinstance(sparse_layer_start, int):
+            raise ValueError("run.sparse_layer_start must be an integer when provided")
+        if sparse_layer_start < 0:
+            raise ValueError("run.sparse_layer_start must be >= 0")
+
+    if sparse_layer_end is not None:
+        if not isinstance(sparse_layer_end, int):
+            raise ValueError("run.sparse_layer_end must be an integer when provided")
+        if sparse_layer_end < 0:
+            raise ValueError("run.sparse_layer_end must be >= 0")
+
+    if sparse_layer_start is not None and sparse_layer_end is not None:
+        if sparse_layer_end < sparse_layer_start:
+            raise ValueError(
+                "run.sparse_layer_end must be >= run.sparse_layer_start"
+            )
+
     return obj
