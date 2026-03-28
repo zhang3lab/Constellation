@@ -9,6 +9,7 @@ from server.expert_id import (
     make_global_expert_id,
     allowed_local_expert_ids_for_layer,
 )
+from server.expert_id import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.model_locator import resolve_deepseek_tensor_file
 from server.router_runtime import (
@@ -281,11 +282,16 @@ def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
     hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
 
     model_root = str(session.cfg["model"]["root"])
-    layer_id = int(session.cfg["run"]["layer_id"])
+    experts_per_layer = int(session.cfg["run"].get("experts_per_layer", 256))
 
-    w_up = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_up")
-    w_gate = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_gate")
-    w_down = _load_one_weight_tensor(model_root, layer_id, expert_id, "w_down")
+    layer_id, local_expert_id = split_global_expert_id(
+        int(expert_id),
+        experts_per_layer=experts_per_layer,
+    )
+
+    w_up = _load_one_weight_tensor(model_root, layer_id, local_expert_id, "w_up")
+    w_gate = _load_one_weight_tensor(model_root, layer_id, local_expert_id, "w_gate")
+    w_down = _load_one_weight_tensor(model_root, layer_id, local_expert_id, "w_down")
 
     w_up_np = w_up.numpy()
     w_gate_np = w_gate.numpy()
