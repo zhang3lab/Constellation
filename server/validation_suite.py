@@ -1,5 +1,6 @@
 import numpy as np
 
+from server.expert_id import make_global_expert_id
 from server.expert_inference_validation import (
     run_multi_expert_correctness_test,
     run_one_expert_stability_test,
@@ -13,20 +14,41 @@ from server.router_runtime import get_router_config
 from server.test_utils import make_safe_input, print_stats, compare_arrays, compare_stability
 
 
+def _get_experts_per_layer(session) -> int:
+    return int(session.cfg["run"].get("experts_per_layer", 256))
+
+
+def _local_to_global(layer_id: int, local_expert_id: int, experts_per_layer: int) -> int:
+    return make_global_expert_id(
+        layer_id=layer_id,
+        local_expert_id=local_expert_id,
+        experts_per_layer=experts_per_layer,
+    )
+
+
+def _make_global_expert_ids_for_layer(session, layer_id: int, local_expert_ids):
+    experts_per_layer = _get_experts_per_layer(session)
+    return [
+        _local_to_global(layer_id, int(local_eid), experts_per_layer)
+        for local_eid in local_expert_ids
+    ]
+
+
 def run_real_router_demo(session, layer_id: int, repeats: int = 10):
     hidden_size = int(get_router_config(session)["hidden_size"])
     hidden = make_safe_input(hidden_size)
 
     result = run_moe_layer(session, hidden, layer_id, return_aux=True)
 
-    print("[router] routes =", result["routes"])
+    print("[router] global routes =", result["routes"])
+    print("[router] local routes  =", result["local_routes"])
     print("[router] selected_group_idx =", result["aux"]["selected_group_idx"])
     print("[router] topk_idx =", result["aux"]["topk_idx"])
     print("[router] topk_weight =", result["aux"]["topk_weight"])
     print("[router] topk_weight_sum =", float(np.sum(result["aux"]["topk_weight"])))
     print("[router] output[:8] =", result["output"][:8])
 
-    out = result["output"]
+    out = np.asarray(result["output"], dtype=np.float32)
     finite = np.isfinite(out)
     finite_count = int(finite.sum())
     total = out.size
@@ -48,13 +70,15 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
 
     outputs = []
     routes_ref = None
+    local_routes_ref = None
     topk_idx_ref = None
     topk_weight_ref = None
 
     for i in range(repeats):
         result = run_moe_layer(session, hidden, layer_id, return_aux=True)
         routes = result["routes"]
-        out = result["output"]
+        local_routes = result["local_routes"]
+        out = np.asarray(result["output"], dtype=np.float32)
         aux = result["aux"]
 
         print(
@@ -69,14 +93,22 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
 
         if routes_ref is None:
             routes_ref = routes
+            local_routes_ref = local_routes
             topk_idx_ref = np.asarray(aux["topk_idx"])
             topk_weight_ref = np.asarray(aux["topk_weight"], dtype=np.float32)
         else:
             if routes != routes_ref:
                 raise RuntimeError(
-                    f"router routes changed between runs:\n"
+                    f"router global routes changed between runs:\n"
                     f"ref={routes_ref}\n"
                     f"cur={routes}"
+                )
+
+            if local_routes != local_routes_ref:
+                raise RuntimeError(
+                    f"router local routes changed between runs:\n"
+                    f"ref={local_routes_ref}\n"
+                    f"cur={local_routes}"
                 )
 
             if not np.array_equal(np.asarray(aux["topk_idx"]), topk_idx_ref):
@@ -105,15 +137,23 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
         compare_stability(f"router run0_vs_run{i}", ref, outputs[i])
 
 
-def run_top8_reference_compare_test(session):
+def run_top8_reference_compare_test(session, layer_id: int):
     hidden_size = int(get_router_config(session)["hidden_size"])
     x = make_safe_input(hidden_size)
 
-    routes = [(eid, 1.0 / 8.0) for eid in range(8)]
-    print(f"[top8] routes={routes}")
+    global_expert_ids = _make_global_expert_ids_for_layer(
+        session,
+        layer_id=layer_id,
+        local_expert_ids=range(8),
+    )
+    routes = [(eid, 1.0 / 8.0) for eid in global_expert_ids]
+    print(f"[top8] global routes={routes}")
 
     combined_srv, outputs_srv = run_topk_moe_layer(session, x, routes)
     combined_ref, outputs_ref = run_topk_reference(session, routes, x)
+
+    combined_srv = np.asarray(combined_srv, dtype=np.float32)
+    combined_ref = np.asarray(combined_ref, dtype=np.float32)
 
     print_stats("combined_srv", combined_srv)
     print_stats("combined_ref", combined_ref)
@@ -126,6 +166,9 @@ def run_top8_reference_compare_test(session):
             raise RuntimeError(f"expert order mismatch: runtime={eid_s}, ref={eid_r}")
         if abs(float(w_s) - float(w_r)) > 1e-12:
             raise RuntimeError(f"weight mismatch for expert {eid_s}: runtime={w_s}, ref={w_r}")
+
+        y_s = np.asarray(y_s, dtype=np.float32)
+        y_r = np.asarray(y_r, dtype=np.float32)
 
         print_stats(f"expert{eid_s}_srv", y_s)
         print_stats(f"expert{eid_s}_ref", y_r)
@@ -140,18 +183,29 @@ def run_top8_reference_compare_test(session):
 def run_validation_suite(session):
     layer_id = int(session.cfg["run"]["layer_id"])
 
+    correctness_expert_ids = _make_global_expert_ids_for_layer(
+        session,
+        layer_id=layer_id,
+        local_expert_ids=[0, 1, 2],
+    )
+    stability_expert_ids = _make_global_expert_ids_for_layer(
+        session,
+        layer_id=layer_id,
+        local_expert_ids=[0, 1],
+    )
+
     print("\n" + "=" * 80)
     print("[suite] multi-expert correctness")
-    run_multi_expert_correctness_test(session, expert_ids=[0, 1, 2])
+    run_multi_expert_correctness_test(session, expert_ids=correctness_expert_ids)
 
     print("\n" + "=" * 80)
     print("[suite] expert stability")
-    run_one_expert_stability_test(session, expert_id=0, repeats=10)
-    run_one_expert_stability_test(session, expert_id=1, repeats=10)
+    for expert_id in stability_expert_ids:
+        run_one_expert_stability_test(session, expert_id=expert_id, repeats=10)
 
     print("\n" + "=" * 80)
     print("[suite] top8 reference compare")
-    run_top8_reference_compare_test(session)
+    run_top8_reference_compare_test(session, layer_id=layer_id)
 
     print("\n" + "=" * 80)
     print("[suite] real router demo + stability")

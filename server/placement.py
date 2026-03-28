@@ -26,12 +26,12 @@ def build_balanced_placement(
         g = dict(gpu)
         g["capacity_bytes"] = capacity_bytes
         g["remaining_mem_bytes"] = capacity_bytes
-        g["assigned_expert_ids"] = []
+        g["assigned_slot_ids"] = []
         gpus.append(g)
 
     placements: List[Dict[str, Any]] = []
 
-    for expert_id in range(num_experts):
+    for placement_index in range(num_experts):
         chosen = None
         chosen_key = None
 
@@ -41,7 +41,7 @@ def build_balanced_placement(
 
             after_bytes = gpu["remaining_mem_bytes"] - expert_mem_bytes
             util_after = 1.0 - (after_bytes / max(gpu["capacity_bytes"], 1))
-            assigned_count = len(gpu["assigned_expert_ids"])
+            assigned_count = len(gpu["assigned_slot_ids"])
 
             key = (assigned_count, util_after)
 
@@ -52,17 +52,17 @@ def build_balanced_placement(
         if chosen is None:
             max_remaining = max((gpu["remaining_mem_bytes"] for gpu in gpus), default=0)
             raise PlacementError(
-                f"unable to place expert {expert_id}: "
+                f"unable to place slot {placement_index}: "
                 f"need {expert_mem_bytes} bytes, "
                 f"max remaining across GPUs is {max_remaining} bytes"
             )
 
         chosen["remaining_mem_bytes"] -= expert_mem_bytes
-        chosen["assigned_expert_ids"].append(expert_id)
+        chosen["assigned_slot_ids"].append(placement_index)
 
         placements.append(
             {
-                "expert_id": expert_id,
+                "expert_id": placement_index,
                 "node_instance_id": chosen["node_instance_id"],
                 "reported_node_id": chosen["reported_node_id"],
                 "host": chosen["host"],

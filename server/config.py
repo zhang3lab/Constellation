@@ -48,11 +48,26 @@ def load_config(path: str) -> Dict[str, Any]:
 
     if not isinstance(run_cfg.get("mode"), str) or not run_cfg["mode"]:
         raise ValueError("run.mode must be a non-empty string")
-    if run_cfg["mode"] not in ("validation", "demo"):
-        raise ValueError("run.mode must be either 'validation' or 'demo'")
+    if run_cfg["mode"] not in ("validation", "demo", "partial_61layer_debug"):
+        raise ValueError(
+            "run.mode must be one of: validation, demo, partial_61layer_debug"
+        )
+
     if not isinstance(run_cfg.get("layer_id"), int):
         raise ValueError("run.layer_id must be an integer")
     if not isinstance(run_cfg.get("num_experts"), int):
         raise ValueError("run.num_experts must be an integer")
+
+    restricted = run_cfg.get("restricted_expert_ids")
+    if restricted is not None:
+        if not isinstance(restricted, list):
+            raise ValueError("run.restricted_expert_ids must be a list when provided")
+        for i, x in enumerate(restricted):
+            if not isinstance(x, int):
+                raise ValueError(f"run.restricted_expert_ids[{i}] must be an integer")
+            if x < 0:
+                raise ValueError(
+                    f"run.restricted_expert_ids[{i}] must be >= 0, got {x}"
+                )
 
     return obj

@@ -157,14 +157,17 @@ def route_token_real(
 
     scores_for_choice = scores + e_score_correction_bias
 
-    if resident_expert_ids is not None:
+    if resident_expert_ids is None:
+        resident_mask = torch.ones(num_experts, dtype=torch.bool)
+    else:
         resident_mask = torch.zeros(num_experts, dtype=torch.bool)
         for eid in resident_expert_ids:
             eid = int(eid)
             if 0 <= eid < num_experts:
                 resident_mask[eid] = True
 
-        if int(resident_mask.sum().item()) == 0:
+        allowed = int(resident_mask.sum().item())
+        if allowed == 0:
             raise RuntimeError("resident_expert_ids produced an empty resident mask")
 
     scores_for_choice = scores_for_choice.masked_fill(~resident_mask, float("-inf"))
@@ -182,12 +185,13 @@ def route_token_real(
     expert_mask = group_mask.unsqueeze(-1).expand(n_group, experts_per_group).reshape(num_experts)
 
     masked_scores_for_choice = scores_for_choice.masked_fill(~expert_mask, float("-inf"))
-    topk_choice_vals, topk_idx = torch.topk(masked_scores_for_choice, k=top_k, dim=-1)
 
-    # final weights come from original scores, not scores_for_choice
+    effective_top_k = min(top_k, int(resident_mask.sum().item()))
+    topk_choice_vals, topk_idx = torch.topk(masked_scores_for_choice, k=effective_top_k, dim=-1)
+
     topk_weight = scores.gather(0, topk_idx)
 
-    if norm_topk_prob and top_k > 1:
+    if norm_topk_prob and effective_top_k > 1:
         denom = topk_weight.sum() + 1e-20
         topk_weight = topk_weight / denom
 

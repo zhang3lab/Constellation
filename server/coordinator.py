@@ -180,7 +180,7 @@ class Coordinator:
 
         target = None
         for p in self.placements:
-            if p["expert_id"] == expert_id:
+            if int(p["expert_id"]) == int(expert_id):
                 target = p
                 break
 
@@ -272,7 +272,10 @@ class Coordinator:
 
             print(f"resolved tensor_name={tensor_name}")
             print(f"resolved shard_path={shard_path}")
-            print(f"resolved shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}")
+            print(
+                f"resolved expert={expert_id} "
+                f"shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}"
+            )
 
             self.send_one_tensor_bytes(
                 expert_id=expert_id,

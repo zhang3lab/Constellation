@@ -1,9 +1,14 @@
+import ml_dtypes
 import numpy as np
 import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
 from common.protocol import ActivationDType
+from server.expert_id import (
+    make_global_expert_id,
+    allowed_local_expert_ids_for_layer,
+)
 from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.model_locator import resolve_deepseek_tensor_file
 from server.router_runtime import (
@@ -15,20 +20,22 @@ from server.test_utils import make_safe_input, print_stats, compare_arrays
 
 
 def _find_target_placement(coord, expert_id: int):
+    expert_id = int(expert_id)
     for p in coord.placements:
-        if int(p["expert_id"]) == int(expert_id):
+        if int(p["expert_id"]) == expert_id:
             return p
     raise RuntimeError(f"expert {expert_id} not found in placements")
 
 
 def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
+    expert_id = int(expert_id)
+
     coord = session.coord
     target = _find_target_placement(coord, expert_id)
     host = target["host"]
     port = target["worker_port"]
 
     pool = session.client_pool
-
     hidden_fp16 = hidden.astype(np.float16, copy=False)
 
     try:
@@ -192,6 +199,8 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
     if not hidden.flags["C_CONTIGUOUS"]:
         hidden = np.ascontiguousarray(hidden)
 
+    layer_id = int(layer_id)
+
     router_cfg = get_router_config(session)
     gate_weight, e_score_correction_bias = get_router_tensors(session, layer_id)
 
@@ -201,9 +210,27 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
             f"hidden size mismatch: got={hidden.shape[0]} expected={hidden_size}"
         )
 
-    resident_expert_ids = sorted({int(p["expert_id"]) for p in session.coord.placements})
-    if not resident_expert_ids:
-        raise RuntimeError("no resident experts found in current placement")
+    experts_per_layer = int(session.cfg["run"].get("experts_per_layer", 256))
+
+    restricted_local_ids = session.cfg["run"].get("restricted_expert_ids")
+    if restricted_local_ids is not None:
+        resident_local_expert_ids = sorted({int(x) for x in restricted_local_ids})
+        max_local = int(router_cfg["n_routed_experts"])
+        for eid in resident_local_expert_ids:
+            if eid < 0 or eid >= max_local:
+                raise RuntimeError(
+                    f"restricted expert id out of range for layer {layer_id}: "
+                    f"{eid} not in [0, {max_local})"
+                )
+    else:
+        resident_local_expert_ids = allowed_local_expert_ids_for_layer(
+            [int(p["expert_id"]) for p in session.coord.placements],
+            layer_id=layer_id,
+            experts_per_layer=experts_per_layer,
+        )
+
+    if not resident_local_expert_ids:
+        raise RuntimeError(f"no resident experts found for layer {layer_id}")
 
     routes, aux = route_token_real(
         hidden,
@@ -211,29 +238,42 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         e_score_correction_bias,
         n_group=int(router_cfg["n_group"]),
         topk_group=int(router_cfg["topk_group"]),
-        top_k=min(int(router_cfg["top_k"]), len(resident_expert_ids)),
+        top_k=min(int(router_cfg["top_k"]), len(resident_local_expert_ids)),
         norm_topk_prob=bool(router_cfg["norm_topk_prob"]),
         routed_scaling_factor=float(router_cfg["routed_scaling_factor"]),
         scoring_func=str(router_cfg["scoring_func"]),
         topk_method=str(router_cfg["topk_method"]),
         n_routed_experts=int(router_cfg["n_routed_experts"]),
         hidden_size=int(router_cfg["hidden_size"]),
-        resident_expert_ids=resident_expert_ids,
+        resident_expert_ids=resident_local_expert_ids,
     )
 
-    combined, weighted_outputs = run_topk_moe_layer(session, hidden, routes)
+    global_routes = [
+        (
+            make_global_expert_id(
+                layer_id,
+                local_expert_id,
+                experts_per_layer=experts_per_layer,
+            ),
+            weight,
+        )
+        for local_expert_id, weight in routes
+    ]
+
+    combined, weighted_outputs = run_topk_moe_layer(session, hidden, global_routes)
 
     if return_aux:
         return {
             "output": combined,
-            "routes": routes,
+            "routes": global_routes,
+            "local_routes": routes,
             "weighted_outputs": weighted_outputs,
             "aux": aux,
         }
 
     return {
         "output": combined,
-        "routes": routes,
+        "routes": global_routes,
     }
 
 
