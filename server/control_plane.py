@@ -1,48 +1,7 @@
 from server.expert_placement import make_global_expert_id, split_global_expert_id
-from server.model_locator import (
-    resolve_and_load_deepseek_tensor,
-    resolve_and_load_deepseek_scale_tensor,
-)
+from server.model_locator import DeepseekModelLocator
 from server.router_runtime import load_router_config
 
-
-def build_tensor_loader(cfg):
-    model = cfg["model"]
-    model_root = str(model["root"])
-    experts_per_layer = int(cfg["run"].get("experts_per_layer", 256))
-
-    scale_base = {
-        "w_up_scale": "w_up",
-        "w_gate_scale": "w_gate",
-        "w_down_scale": "w_down",
-    }
-
-    def tensor_loader(expert_id: int, tensor_kind_name: str):
-        layer_id, local_expert_id = split_global_expert_id(
-            int(expert_id),
-            experts_per_layer=experts_per_layer,
-        )
-        tensor_kind_name = str(tensor_kind_name)
-
-        if tensor_kind_name in ("w_up", "w_gate", "w_down"):
-            return resolve_and_load_deepseek_tensor(
-                model_root=model_root,
-                layer_id=layer_id,
-                expert_id=local_expert_id,
-                tensor_kind=tensor_kind_name,
-            )
-
-        if tensor_kind_name in scale_base:
-            return resolve_and_load_deepseek_scale_tensor(
-                model_root=model_root,
-                layer_id=layer_id,
-                expert_id=local_expert_id,
-                tensor_kind=scale_base[tensor_kind_name],
-            )
-
-        raise RuntimeError(f"unsupported tensor_kind_name: {tensor_kind_name}")
-
-    return tensor_loader
 
 
 def build_restricted_global_expert_ids(run_cfg):
@@ -124,8 +83,9 @@ def setup_control_plane(coord, cfg):
     coord.print_placement()
     coord.send_placement_plan()
 
-    tensor_loader = build_tensor_loader(cfg)
+    locator = DeepseekModelLocator(model_root)
     coord.preload_all_placed_experts(
-        tensor_loader=tensor_loader,
+        locator=locator,
         chunk_size=chunk_size,
+        experts_per_layer=int(run_cfg.get("experts_per_layer", 256)),
     )

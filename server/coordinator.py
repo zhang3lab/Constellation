@@ -258,98 +258,191 @@ class Coordinator:
             )
 
 
-    def send_one_expert_sixpack(
-        self,
-        expert_id: int,
-        tensor_loader,
-        chunk_size: int,
-        *,
-        client,
-        target,
-        verbose: bool = False,
-    ) -> None:
-        if client is None:
-            raise ValueError("client must not be None")
-        if target is None:
-            raise ValueError("target must not be None")
-
+    def build_preload_manifest(self, locator, experts_per_layer: int = 256):
         order = [
-            ("w_up", TensorKind.WUp),
-            ("w_up_scale", TensorKind.WUpScale),
-            ("w_gate", TensorKind.WGate),
-            ("w_gate_scale", TensorKind.WGateScale),
-            ("w_down", TensorKind.WDown),
-            ("w_down_scale", TensorKind.WDownScale),
+            ("w_up", TensorKind.WUp, 0),
+            ("w_up_scale", TensorKind.WUpScale, 1),
+            ("w_gate", TensorKind.WGate, 2),
+            ("w_gate_scale", TensorKind.WGateScale, 3),
+            ("w_down", TensorKind.WDown, 4),
+            ("w_down_scale", TensorKind.WDownScale, 5),
         ]
 
-        expert_id = int(expert_id)
+        manifest = []
 
-        for tensor_kind_name, tensor_kind_enum in order:
-            tensor_name, shard_path, tensor_bytes, shape, dtype, row_block, col_block = tensor_loader(
-                expert_id,
-                tensor_kind_name,
-            )
+        for target in self.placements:
+            expert_id = int(target["expert_id"])
+            layer_id = expert_id // experts_per_layer
+            local_expert_id = expert_id % experts_per_layer
 
-            if verbose:
-                print(f"resolved tensor_name={tensor_name}")
-                print(f"resolved shard_path={shard_path}")
-                print(
-                    f"resolved expert={expert_id} "
-                    f"shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}"
+            for tensor_kind_name, tensor_kind_enum, tensor_order in order:
+                if tensor_kind_name in ("w_up", "w_gate", "w_down"):
+                    tensor_name, shard_path = locator.resolve_deepseek_tensor(
+                        layer_id=layer_id,
+                        expert_id=local_expert_id,
+                        tensor_kind=tensor_kind_name,
+                    )
+                else:
+                    base_kind = {
+                        "w_up_scale": "w_up",
+                        "w_gate_scale": "w_gate",
+                        "w_down_scale": "w_down",
+                    }[tensor_kind_name]
+                    tensor_name, shard_path = locator.resolve_deepseek_scale_tensor(
+                        layer_id=layer_id,
+                        expert_id=local_expert_id,
+                        tensor_kind=base_kind,
+                    )
+    
+                manifest.append(
+                    {
+                        "expert_id": expert_id,
+                        "target": target,
+                        "tensor_kind_name": tensor_kind_name,
+                        "tensor_kind_enum": tensor_kind_enum,
+                        "tensor_order": tensor_order,
+                        "tensor_name": tensor_name,
+                        "shard_path": shard_path,
+                    }
                 )
 
-            self.send_one_tensor_bytes(
-                expert_id=expert_id,
-                tensor_kind=tensor_kind_enum,
-                tensor_bytes=tensor_bytes,
-                chunk_size=chunk_size,
-                shape=shape,
-                dtype=str(dtype),
-                row_block=row_block,
-                col_block=col_block,
-                client=client,
-                target=target,
-                verbose=verbose,
-            )
+        return manifest
 
 
-    def preload_all_placed_experts(self, tensor_loader, chunk_size: int):
-        groups = group_placements_by_control_endpoint(self.placements)
-
-        total_experts = sum(len(items) for items in groups.values())
-        print(
-            f"preloading all placed experts: count={total_experts} "
-            f"nodes={len(groups)}"
+    def sort_preload_manifest(self, manifest):
+        return sorted(
+            manifest,
+            key=lambda x: (
+                str(x["target"]["host"]),
+                int(x["target"]["control_port"]),
+                str(x["shard_path"]),
+                int(x["expert_id"]),
+                int(x["tensor_order"]),
+            ),
         )
 
-        done = 0
-        all_expert_ids = []
 
-        for (host, control_port), targets in sorted(groups.items()):
-            node_instance_id = targets[0]["node_instance_id"]
-            print(
-                f"[preload] opening control connection "
-                f"node={node_instance_id} host={host} port={control_port} "
-                f"experts={len(targets)}"
-            )
+    def send_one_tensor_from_open_shard(
+        self,
+        *,
+        shard_file,
+        item,
+        chunk_size: int,
+        client,
+    ) -> None:
+        tensor_name = item["tensor_name"]
+        target = item["target"]
+        tensor_kind = item["tensor_kind_enum"]
+        expert_id = int(item["expert_id"])
 
-            client = NodeClient(host, control_port)
-            with client:
-                for target in targets:
-                    expert_id = int(target["expert_id"])
-                    all_expert_ids.append(expert_id)
-                    done += 1
-    
-                    if done == 1 or done % 8 == 0 or done == total_experts:
-                        print(f"[preload] {done}/{total_experts} expert={expert_id}")
+        tensor_bytes, shape, dtype = DeepseekModelLocator.load_tensor_from_open_shard(
+            shard_file,
+            tensor_name,
+        )
 
-                    self.send_one_expert_sixpack(
-                        expert_id=expert_id,
-                        tensor_loader=tensor_loader,
-                        chunk_size=chunk_size,
-                        client=client,
-                        target=target,
-                        verbose=False,
+        row_block = 128
+        col_block = 128
+
+        self.send_one_tensor_bytes(
+            expert_id=expert_id,
+            tensor_kind=tensor_kind,
+            tensor_bytes=tensor_bytes,
+            chunk_size=chunk_size,
+            shape=shape,
+            dtype=dtype,
+            row_block=row_block,
+            col_block=col_block,
+            client=client,
+            target=target,
+            verbose=False,
+        )
+
+
+    def preload_all_placed_experts(
+        self,
+        locator,
+        chunk_size: int,
+        experts_per_layer: int = 256,
+    ):
+        manifest = self.build_preload_manifest(
+            locator=locator,
+            experts_per_layer=experts_per_layer,
+        )
+        manifest = self.sort_preload_manifest(manifest)
+
+        total_entries = len(manifest)
+        total_experts = len({int(x["expert_id"]) for x in manifest})
+
+        print(
+            f"preloading all placed experts: experts={total_experts} "
+            f"tensor_entries={total_entries}"
+        )
+
+        current_node_key = None
+        current_shard_path = None
+        client = None
+        shard_file = None
+
+        done_entries = 0
+        all_expert_ids = sorted({int(x["expert_id"]) for x in manifest})
+
+        try:
+            for item in manifest:
+                target = item["target"]
+                node_key = (str(target["host"]), int(target["control_port"]))
+                shard_path = str(item["shard_path"])
+
+                if node_key != current_node_key:
+                    if shard_file is not None:
+                        shard_file.__exit__(None, None, None)
+                        shard_file = None
+                    if client is not None:
+                        client.__exit__(None, None, None)
+                        client = None
+
+                    client = NodeClient(target["host"], target["control_port"])
+                    client.__enter__()
+                    current_node_key = node_key
+                    current_shard_path = None
+
+                    print(
+                        f"[preload] open control "
+                        f"node={target['node_instance_id']} "
+                        f"host={target['host']} port={target['control_port']}"
                     )
 
-        return sorted(all_expert_ids)
+                if shard_path != current_shard_path:
+                    if shard_file is not None:
+                        shard_file.__exit__(None, None, None)
+
+                    shard_file = locator.open_shard(shard_path)
+                    shard_file.__enter__()
+                    current_shard_path = shard_path
+
+                    print(
+                        f"[preload] open shard "
+                        f"node={target['node_instance_id']} "
+                        f"path={shard_path}"
+                    )
+
+                self.send_one_tensor_from_open_shard(
+                    shard_file=shard_file,
+                    item=item,
+                    chunk_size=chunk_size,
+                    client=client,
+                )
+
+                done_entries += 1
+                if done_entries == 1 or done_entries % 32 == 0 or done_entries == total_entries:
+                    print(
+                        f"[preload] {done_entries}/{total_entries} "
+                        f"expert={item['expert_id']} tensor={item['tensor_kind_name']}"
+                    )
+
+        finally:
+            if shard_file is not None:
+                shard_file.__exit__(None, None, None)
+            if client is not None:
+                client.__exit__(None, None, None)
+
+        return all_expert_ids
