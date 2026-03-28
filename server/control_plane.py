@@ -1,4 +1,4 @@
-from server.expert_id import make_global_expert_id, split_global_expert_id
+from server.expert_placement import make_global_expert_id, split_global_expert_id
 from server.model_locator import (
     resolve_and_load_deepseek_tensor,
     resolve_and_load_deepseek_scale_tensor,

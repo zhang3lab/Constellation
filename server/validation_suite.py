@@ -1,6 +1,6 @@
 import numpy as np
 
-from server.expert_id import make_global_expert_id
+from server.expert_placement import make_global_expert_id
 from server.expert_inference_validation import (
     run_multi_expert_correctness_test,
     run_one_expert_stability_test,

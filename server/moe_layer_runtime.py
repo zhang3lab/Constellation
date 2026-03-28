@@ -5,11 +5,12 @@ import torch.nn.functional as F
 from safetensors import safe_open
 
 from common.protocol import ActivationDType
-from server.expert_id import (
+from server.expert_placement import (
     make_global_expert_id,
+    split_global_expert_id,
     allowed_local_expert_ids_for_layer,
+    find_expert_placement,
 )
-from server.expert_id import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.model_locator import resolve_deepseek_tensor_file
 from server.router_runtime import (
@@ -20,19 +21,11 @@ from server.router_runtime import (
 from server.test_utils import make_safe_input, print_stats, compare_arrays
 
 
-def _find_target_placement(coord, expert_id: int):
-    expert_id = int(expert_id)
-    for p in coord.placements:
-        if int(p["expert_id"]) == expert_id:
-            return p
-    raise RuntimeError(f"expert {expert_id} not found in placements")
-
-
 def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
     expert_id = int(expert_id)
 
     coord = session.coord
-    target = _find_target_placement(coord, expert_id)
+    target = find_expert_placement(coord.placements, expert_id)
     host = target["host"]
     port = target["worker_port"]
 

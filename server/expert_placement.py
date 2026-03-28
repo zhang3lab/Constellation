@@ -57,3 +57,23 @@ def allowed_local_expert_ids_for_layer(
             out.append(gid_local)
 
     return sorted(set(out))
+
+
+def find_expert_placement(placements, expert_id: int):
+    expert_id = int(expert_id)
+    for p in placements:
+        if int(p["expert_id"]) == expert_id:
+            return p
+    raise RuntimeError(f"expert {expert_id} not found in placements")
+
+
+def group_placements_by_control_endpoint(placements):
+    groups = {}
+    for p in placements:
+        key = (str(p["host"]), int(p["control_port"]))
+        groups.setdefault(key, []).append(p)
+
+    for key in groups:
+        groups[key].sort(key=lambda p: int(p["expert_id"]))
+
+    return groups

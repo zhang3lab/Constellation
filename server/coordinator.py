@@ -3,6 +3,10 @@ from typing import Any, Dict, List, Sequence
 
 from common.protocol import TensorKind
 from server.client import NodeClient
+from server.expert_placement import (
+    find_expert_placement,
+    group_placements_by_control_endpoint,
+)
 from server.placement import build_balanced_placement
 
 
@@ -174,18 +178,19 @@ class Coordinator:
         dtype: str,
         row_block: int,
         col_block: int,
+        *,
+        client,
+        target,
+        verbose: bool = False,
     ) -> None:
+        if client is None:
+            raise ValueError("client must not be None")
+        if target is None:
+            raise ValueError("target must not be None")
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
 
-        target = None
-        for p in self.placements:
-            if int(p["expert_id"]) == int(expert_id):
-                target = p
-                break
-
-        if target is None:
-            raise RuntimeError(f"expert {expert_id} not found in placements")
+        expert_id = int(expert_id)
 
         shape_list = [int(x) for x in shape]
         for d in shape_list:
@@ -201,52 +206,56 @@ class Coordinator:
         dtype = dtype_map.get(str(dtype), str(dtype))
         if not dtype:
             raise ValueError("dtype must be non-empty")
+
+        row_block = int(row_block)
+        col_block = int(col_block)
         if row_block <= 0 or col_block <= 0:
-            raise ValueError(f"row_block/col_block must be > 0, got {row_block}/{col_block}")
+            raise ValueError(
+                f"row_block/col_block must be > 0, got {row_block}/{col_block}"
+            )
 
         begin_msg = {
-             "expert_id": expert_id,
-             "worker_id": target["worker_id"],
-             "tensor_kind": tensor_kind,
-             "total_bytes": len(tensor_bytes),
-             "meta": {
-                 "shape": shape_list,
-                 "dtype": dtype,
-                 "row_block": int(row_block),
-                 "col_block": int(col_block),
-             },
+            "expert_id": expert_id,
+            "worker_id": int(target["worker_id"]),
+            "tensor_kind": tensor_kind,
+            "total_bytes": len(tensor_bytes),
+            "meta": {
+                "shape": shape_list,
+                "dtype": dtype,
+                "row_block": row_block,
+                "col_block": col_block,
+            },
         }
 
-        client = NodeClient(target["host"], target["control_port"])
-        with client:
-            client.send_load_weights_begin(begin_msg)
+        client.send_load_weights_begin(begin_msg)
 
-            offset = 0
-            while offset < len(tensor_bytes):
-                chunk = tensor_bytes[offset : offset + chunk_size]
-                chunk_msg = {
-                    "expert_id": expert_id,
-                    "worker_id": target["worker_id"],
-                    "tensor_kind": tensor_kind,
-                    "chunk_offset": offset,
-                    "chunk_data": chunk,
-                }
-                client.send_load_weights_chunk(chunk_msg)
-                offset += len(chunk)
-
-            end_msg = {
+        offset = 0
+        while offset < len(tensor_bytes):
+            chunk = tensor_bytes[offset : offset + chunk_size]
+            chunk_msg = {
                 "expert_id": expert_id,
-                "worker_id": target["worker_id"],
+                "worker_id": int(target["worker_id"]),
                 "tensor_kind": tensor_kind,
+                "chunk_offset": offset,
+                "chunk_data": chunk,
             }
-            client.send_load_weights_end(end_msg)
+            client.send_load_weights_chunk(chunk_msg)
+            offset += len(chunk)
 
-        print(
-            f"sent tensor bytes to {target['node_instance_id']} "
-            f"expert={expert_id} worker_id={target['worker_id']} "
-            f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)} "
-            f"shape={tuple(shape_list)} dtype={dtype}"
-        )
+        end_msg = {
+            "expert_id": expert_id,
+            "worker_id": int(target["worker_id"]),
+            "tensor_kind": tensor_kind,
+        }
+        client.send_load_weights_end(end_msg)
+
+        if verbose:
+            print(
+                f"sent tensor bytes to {target['node_instance_id']} "
+                f"expert={expert_id} worker_id={target['worker_id']} "
+                f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)} "
+                f"shape={tuple(shape_list)} dtype={dtype}"
+            )
 
 
     def send_one_expert_sixpack(
@@ -254,7 +263,16 @@ class Coordinator:
         expert_id: int,
         tensor_loader,
         chunk_size: int,
+        *,
+        client,
+        target,
+        verbose: bool = False,
     ) -> None:
+        if client is None:
+            raise ValueError("client must not be None")
+        if target is None:
+            raise ValueError("target must not be None")
+
         order = [
             ("w_up", TensorKind.WUp),
             ("w_up_scale", TensorKind.WUpScale),
@@ -264,18 +282,21 @@ class Coordinator:
             ("w_down_scale", TensorKind.WDownScale),
         ]
 
+        expert_id = int(expert_id)
+
         for tensor_kind_name, tensor_kind_enum in order:
             tensor_name, shard_path, tensor_bytes, shape, dtype, row_block, col_block = tensor_loader(
                 expert_id,
                 tensor_kind_name,
             )
 
-            print(f"resolved tensor_name={tensor_name}")
-            print(f"resolved shard_path={shard_path}")
-            print(
-                f"resolved expert={expert_id} "
-                f"shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}"
-            )
+            if verbose:
+                print(f"resolved tensor_name={tensor_name}")
+                print(f"resolved shard_path={shard_path}")
+                print(
+                    f"resolved expert={expert_id} "
+                    f"shape={shape} dtype={dtype} total_bytes={len(tensor_bytes)}"
+                )
 
             self.send_one_tensor_bytes(
                 expert_id=expert_id,
@@ -286,19 +307,49 @@ class Coordinator:
                 dtype=str(dtype),
                 row_block=row_block,
                 col_block=col_block,
+                client=client,
+                target=target,
+                verbose=verbose,
             )
 
 
     def preload_all_placed_experts(self, tensor_loader, chunk_size: int):
-        expert_ids = sorted({int(p["expert_id"]) for p in self.placements})
-        print(f"preloading all placed experts: {expert_ids}")
+        groups = group_placements_by_control_endpoint(self.placements)
 
-        for expert_id in expert_ids:
-            print(f"preloading expert={expert_id}")
-            self.send_one_expert_sixpack(
-                expert_id=expert_id,
-                tensor_loader=tensor_loader,
-                chunk_size=chunk_size,
+        total_experts = sum(len(items) for items in groups.values())
+        print(
+            f"preloading all placed experts: count={total_experts} "
+            f"nodes={len(groups)}"
+        )
+
+        done = 0
+        all_expert_ids = []
+
+        for (host, control_port), targets in sorted(groups.items()):
+            node_instance_id = targets[0]["node_instance_id"]
+            print(
+                f"[preload] opening control connection "
+                f"node={node_instance_id} host={host} port={control_port} "
+                f"experts={len(targets)}"
             )
 
-        return expert_ids
+            client = NodeClient(host, control_port)
+            with client:
+                for target in targets:
+                    expert_id = int(target["expert_id"])
+                    all_expert_ids.append(expert_id)
+                    done += 1
+    
+                    if done == 1 or done % 8 == 0 or done == total_experts:
+                        print(f"[preload] {done}/{total_experts} expert={expert_id}")
+
+                    self.send_one_expert_sixpack(
+                        expert_id=expert_id,
+                        tensor_loader=tensor_loader,
+                        chunk_size=chunk_size,
+                        client=client,
+                        target=target,
+                        verbose=False,
+                    )
+
+        return sorted(all_expert_ids)
