@@ -11,8 +11,9 @@ from server.expert_placement import (
     allowed_local_expert_ids_for_layer,
     find_expert_placement,
 )
+from server.expert_placement import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
-from server.model_locator import resolve_deepseek_tensor_file
+from server.model_locator import DeepseekModelLocator
 from server.router_runtime import (
     get_router_config,
     get_router_tensors,
@@ -78,24 +79,49 @@ def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
     }
 
 
-def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tensor_kind: str):
-    tensor_name, shard_path = resolve_deepseek_tensor_file(
-        model_root=model_root,
+def _load_one_weight_tensor(session, expert_id: int, tensor_kind: str):
+    expert_id = int(expert_id)
+    tensor_kind = str(tensor_kind)
+
+    cache_key = (expert_id, tensor_kind)
+    cached = session.reference_weight_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    model_root = str(session.cfg["model"]["root"])
+    experts_per_layer = int(session.cfg["run"].get("experts_per_layer", 256))
+
+    locator = session.model_locator
+    if locator is None:
+        locator = DeepseekModelLocator(model_root)
+        session.model_locator = locator
+
+    layer_id, local_expert_id = split_global_expert_id(
+        expert_id,
+        experts_per_layer=experts_per_layer,
+    )
+
+    tensor_name, shard_path = locator.resolve_deepseek_tensor(
         layer_id=layer_id,
-        expert_id=expert_id,
+        expert_id=local_expert_id,
+        tensor_kind=tensor_kind,
+    )
+    scale_name, scale_shard_path = locator.resolve_deepseek_scale_tensor(
+        layer_id=layer_id,
+        expert_id=local_expert_id,
         tensor_kind=tensor_kind,
     )
 
-    scale_name = tensor_name + "_scale_inv"
+    if scale_shard_path != shard_path:
+        raise RuntimeError(
+            f"scale shard mismatch for expert={expert_id} tensor_kind={tensor_kind}: "
+            f"{scale_shard_path} vs {shard_path}"
+        )
 
-    with safe_open(shard_path, framework="pt", device="cpu") as f:
+    with locator.open_shard(shard_path) as f:
         t = f.get_tensor(tensor_name)
 
         if t.dtype == torch.float8_e4m3fn:
-            keys = set(f.keys())
-            if scale_name not in keys:
-                raise RuntimeError(f"missing scale tensor for fp8 weight: {scale_name}")
-
             scale_inv = f.get_tensor(scale_name).to(torch.float32).contiguous()
             t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
 
@@ -112,6 +138,7 @@ def _load_one_weight_tensor(model_root: str, layer_id: int, expert_id: int, tens
                 f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype}"
             )
 
+    session.reference_weight_cache[cache_key] = t
     return t
 
 
@@ -273,18 +300,11 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
 
 def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
     hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
+    expert_id = int(expert_id)
 
-    model_root = str(session.cfg["model"]["root"])
-    experts_per_layer = int(session.cfg["run"].get("experts_per_layer", 256))
-
-    layer_id, local_expert_id = split_global_expert_id(
-        int(expert_id),
-        experts_per_layer=experts_per_layer,
-    )
-
-    w_up = _load_one_weight_tensor(model_root, layer_id, local_expert_id, "w_up")
-    w_gate = _load_one_weight_tensor(model_root, layer_id, local_expert_id, "w_gate")
-    w_down = _load_one_weight_tensor(model_root, layer_id, local_expert_id, "w_down")
+    w_up = _load_one_weight_tensor(session, expert_id, "w_up")
+    w_gate = _load_one_weight_tensor(session, expert_id, "w_gate")
+    w_down = _load_one_weight_tensor(session, expert_id, "w_down")
 
     w_up_np = w_up.numpy()
     w_gate_np = w_gate.numpy()
