@@ -1,6 +1,6 @@
 {
   "nodes": [
-    { "host": "192.168.0.10", "control_port": 40000 }
+    { "host": "10.60.14.10", "control_port": 40000 }
   ],
   "model": {
     "family": "deepseek_v3",
@@ -11,11 +11,11 @@
   },
   "run": {
     "mode": "partial_61layer_debug",
-    "num_experts": 16,
+    "num_experts": 464,
     "restricted_expert_ids": [0, 1, 2, 3, 4, 5, 6, 7],
     "experts_per_layer": 256,
     "sparse_layer_start": 3,
-    "sparse_layer_end": 4,
+    "sparse_layer_end": 60,
     "layer_id": 3
   }
 }
