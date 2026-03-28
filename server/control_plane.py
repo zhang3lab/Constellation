@@ -49,6 +49,7 @@ def setup_control_plane(coord, cfg):
     model = cfg["model"]
     run_cfg = cfg["run"]
 
+    model_root = str(model["root"])
     chunk_size = int(model["chunk_size"])
     expert_mem_bytes = int(model["expert_mem_bytes"])
     memory_utilization = float(model["memory_utilization"])
