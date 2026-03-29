@@ -159,8 +159,16 @@ def main():
             .unsqueeze(0)
         )
 
+        seq_len = int(x_prefix_t.shape[1])
+        freq_cis = wrapper.freq_cis[:seq_len]
+
         with torch.no_grad():
-            y_prefix = wrapper.forward(x_prefix_t, start_pos=0, mask=None)
+            y_prefix = wrapper.mla(
+                x_prefix_t,
+                start_pos=0,
+                freq_cis=freq_cis,
+                mask=None,
+            )
 
         y_shallow = (
             y_prefix[0, -1]
