@@ -188,6 +188,7 @@ def route_token_real(
     if e_score_correction_bias.shape[0] != num_experts:
         raise RuntimeError(
             f"bias shape {tuple(e_score_correction_bias.shape)} incompatible with num_experts={num_experts}"
+        )
 
 
 def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: bool = False):
