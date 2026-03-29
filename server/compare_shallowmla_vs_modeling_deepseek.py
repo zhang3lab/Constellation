@@ -155,7 +155,7 @@ def main():
 
         x_prefix_t = (
             torch.from_numpy(x_prefix)
-            .to(device=args.device, dtype=torch.float32)
+            .to(device=args.device, dtype=torch.float16)
             .unsqueeze(0)
         )
 
