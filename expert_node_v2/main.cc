@@ -7,6 +7,10 @@
 #include <thread>
 #include <vector>
 
+#include "expert_node_v2/control.h"
+#include "expert_node_v2/node_info.h"
+#include "expert_node_v2/worker.h"
+
 namespace {
 
 struct MainOptions {
