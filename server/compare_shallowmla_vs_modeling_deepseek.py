@@ -70,10 +70,20 @@ def main():
 
     captured = {}
 
-    def hook_attn_input(module_, inputs, output):
-        captured["attn_input"] = output.detach()
+    def hook_attn_input(module_, args, kwargs):
+        captured["attn_hidden"] = kwargs["hidden_states"].detach()
 
-    def hook_attn_output(module_, inputs, output):
+        attention_mask = kwargs.get("attention_mask")
+        position_ids = kwargs.get("position_ids")
+        past_key_value = kwargs.get("past_key_value")
+        use_cache = kwargs.get("use_cache")
+
+        captured["attention_mask"] = attention_mask.detach().cpu() if attention_mask is not None else None
+        captured["position_ids"] = position_ids.detach().cpu() if position_ids is not None else None
+        captured["past_key_value_is_none"] = past_key_value is None
+        captured["use_cache"] = bool(use_cache) if use_cache is not None else None
+
+    def hook_attn_output(module_, args, kwargs, output):
         if isinstance(output, tuple):
             captured["attn_output"] = output[0].detach()
         else:
@@ -82,9 +92,8 @@ def main():
 
     layers = get_layers_root(model)
     layer = layers[layer_id]
-
-    h1 = layer.input_layernorm.register_forward_hook(hook_attn_input)
-    h2 = layer.self_attn.register_forward_hook(hook_attn_output)
+    h1 = layer.self_attn.register_forward_pre_hook(hook_attn_input, with_kwargs=True)
+    h2 = layer.self_attn.register_forward_hook(hook_attn_output, with_kwargs=True)
 
     enc = tokenizer(args.prompt, return_tensors="pt")
     enc = {k: v.to(args.device) for k, v in enc.items()}
@@ -183,6 +192,21 @@ def main():
     compare_arrays("modeling_deepseek_vs_shallowmla", y_ref, y_shallow)
     print("[ref     ] y[:8] =", y_ref[:8])
     print("[shallow ] y[:8] =", y_shallow[:8])
+
+    print("[capture] attn_hidden shape =", tuple(captured["attn_hidden"].shape))
+
+    pm = captured["position_ids"]
+    print("[capture] position_ids =", None if pm is None else pm.tolist())
+
+    am = captured["attention_mask"]
+    print("[capture] attention_mask shape =", None if am is None else tuple(am.shape))
+    if am is not None:
+        print("[capture] attention_mask dtype =", am.dtype)
+        flat = am.reshape(-1)
+        print("[capture] attention_mask min/max =", flat.min().item(), flat.max().item())
+
+    print("[capture] past_key_value_is_none =", captured["past_key_value_is_none"])
+    print("[capture] use_cache =", captured["use_cache"])
 
 
 if __name__ == "__main__":
