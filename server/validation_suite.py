@@ -10,7 +10,6 @@ from server.moe_layer_runtime import (
     run_topk_reference,
     run_moe_layer,
 )
-from server.router_runtime import get_router_config
 from server.test_utils import make_safe_input, print_stats, compare_arrays, compare_stability
 
 
@@ -35,7 +34,7 @@ def _make_global_expert_ids_for_layer(session, layer_id: int, local_expert_ids):
 
 
 def run_real_router_demo(session, layer_id: int, repeats: int = 10):
-    hidden_size = int(get_router_config(session)["hidden_size"])
+    hidden_size = int(session.get_router_config()["hidden_size"])
     hidden = make_safe_input(hidden_size)
 
     result = run_moe_layer(session, hidden, layer_id, return_aux=True)
@@ -65,7 +64,7 @@ def run_real_router_demo(session, layer_id: int, repeats: int = 10):
 
 
 def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
-    hidden_size = int(get_router_config(session)["hidden_size"])
+    hidden_size = int(session.get_router_config()["hidden_size"])
     hidden = make_safe_input(hidden_size)
 
     outputs = []
@@ -138,7 +137,7 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
 
 
 def run_top8_reference_compare_test(session, layer_id: int):
-    hidden_size = int(get_router_config(session)["hidden_size"])
+    hidden_size = int(session.get_router_config()["hidden_size"])
     x = make_safe_input(hidden_size)
 
     global_expert_ids = _make_global_expert_ids_for_layer(

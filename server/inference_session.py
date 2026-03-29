@@ -53,11 +53,6 @@ class InferenceSession:
         self.cfg = cfg
         self.client_pool = SessionClientPool()
 
-        # router-related caches
-        self.router_cfg = None
-        self.router_tensors_by_layer = {}
-
-        self.reference_weight_cache = {}
         self.deepseek_model_loader = None
         self.full_model_ref = None
 
@@ -67,10 +62,14 @@ class InferenceSession:
             self.deepseek_model_loader = DeepseekModelLoader(model_root)
         return self.deepseek_model_loader
 
+    def get_router_config(self) -> dict:
+        return self.get_deepseek_model_loader().router_config()
+
+    def get_mla_config(self) -> dict:
+        return self.get_deepseek_model_loader().mla_config()
+
     def close(self) -> None:
         self.client_pool.close_all()
-        self.router_tensors_by_layer.clear()
-        self.reference_weight_cache.clear()
         self.deepseek_model_loader = None
         self.full_model_ref = None
 

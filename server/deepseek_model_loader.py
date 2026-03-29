@@ -32,6 +32,65 @@ class DeepseekModelLoader:
         self._weight_map = self._load_safetensors_index(self.model_root)
         self._tensor_cache: dict[str, torch.Tensor] = {}
 
+    def _load_config_json(self) -> dict:
+        config_path = Path(self.model_root) / "config.json"
+        if not config_path.exists():
+            raise RuntimeError(f"config.json not found: {config_path}")
+
+        with config_path.open("r", encoding="utf-8") as f:
+            obj = json.load(f)
+
+        if not isinstance(obj, dict):
+            raise ValueError("config.json must decode to dict")
+        return obj
+
+    def config(self) -> dict:
+        cached = getattr(self, "_config", None)
+        if cached is None:
+            cached = self._load_config_json()
+            self._config = cached
+        return cached
+
+    def router_config(self) -> dict:
+        cfg = self.config()
+
+        router_cfg = {
+            "n_group": int(cfg["n_group"]),
+            "topk_group": int(cfg["topk_group"]),
+            "top_k": int(cfg["num_experts_per_tok"]),
+            "norm_topk_prob": bool(cfg["norm_topk_prob"]),
+            "routed_scaling_factor": float(cfg["routed_scaling_factor"]),
+            "scoring_func": str(cfg["scoring_func"]),
+            "topk_method": str(cfg["topk_method"]),
+            "n_routed_experts": int(cfg["n_routed_experts"]),
+            "hidden_size": int(cfg["hidden_size"]),
+        }
+
+        return router_cfg
+
+    def mla_config(self) -> dict:
+        cfg = self.config()
+
+        rope_scaling = cfg.get("rope_scaling")
+        if not isinstance(rope_scaling, dict):
+            raise ValueError("config.json missing rope_scaling")
+
+        return {
+            "dim": int(cfg["hidden_size"]),
+            "num_heads": int(cfg["num_attention_heads"]),
+            "kv_latent_rank": int(cfg["kv_lora_rank"]),
+            "q_latent_rank": int(cfg["q_lora_rank"]),
+            "qk_nrope_head_dim": int(cfg["qk_nope_head_dim"]),
+            "qk_rope_head_dim": int(cfg["qk_rope_head_dim"]),
+            "v_head_dim": int(cfg["v_head_dim"]),
+            "max_seq_len": int(cfg["max_position_embeddings"]),
+            "max_seq_len_train": int(rope_scaling["original_max_position_embeddings"]),
+            "beta_fast": int(rope_scaling.get("beta_fast", 32)),
+            "beta_slow": int(rope_scaling.get("beta_slow", 1)),
+            "rope_theta": float(cfg.get("rope_theta", 10000.0)),
+            "rope_factor": float(rope_scaling.get("factor", 40.0)),
+        }
+
     @staticmethod
     def _load_safetensors_index(model_root: str) -> Dict[str, str]:
         index_path = Path(model_root) / "model.safetensors.index.json"
@@ -176,3 +235,43 @@ class DeepseekModelLoader:
         return self.load_tensor_fp32_by_name(
             f"model.layers.{layer_id}.post_attention_layernorm.weight"
         )
+
+    def load_router_tensors_fp32(self, layer_id: int):
+        layer_id = int(layer_id)
+
+        gate_weight = self.load_tensor_fp32_by_name(
+            f"model.layers.{layer_id}.mlp.gate.weight"
+        )
+        e_score_correction_bias = self.load_tensor_fp32_by_name(
+            f"model.layers.{layer_id}.mlp.gate.e_score_correction_bias"
+        )
+        return gate_weight, e_score_correction_bias
+
+    def load_attention_block_weights_fp32(self, layer_id: int):
+        layer_id = int(layer_id)
+        return {
+            "input_layernorm": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.input_layernorm.weight"
+            ),
+            "q_a_proj": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.q_a_proj.weight"
+            ),
+            "q_a_layernorm": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.q_a_layernorm.weight"
+            ),
+            "q_b_proj": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.q_b_proj.weight"
+            ),
+            "kv_a_proj_with_mqa": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.kv_a_proj_with_mqa.weight"
+            ),
+            "kv_a_layernorm": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.kv_a_layernorm.weight"
+            ),
+            "kv_b_proj": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.kv_b_proj.weight"
+            ),
+            "o_proj": self.load_tensor_fp32_by_name(
+                f"model.layers.{layer_id}.self_attn.o_proj.weight"
+            ),
+        }

@@ -12,6 +12,7 @@ from server.full_model_ref import (
     FullModelRefBase,
     ModelExecResult,
 )
+from server.shallowmla_adapter import ShallowMLAAttentionWrapper
 
 
 def _rms_norm(hidden: np.ndarray, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -231,16 +232,39 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
         kv_cache=None,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        hidden_in = as_f32_1d(hidden_in, "placeholder_attention.hidden_in")
-        out = np.zeros_like(hidden_in, dtype=np.float32)
+        hidden_in = as_f32_1d(hidden_in, "attention.hidden_in")
+        layer_id = int(layer_id)
+     
+        if not hasattr(self, "_shallowmla_by_layer"):
+            self._shallowmla_by_layer = {}
+     
+        wrapper = self._shallowmla_by_layer.get(layer_id)
+        if wrapper is None:
+            model_loader = self.session.get_deepseek_model_loader()
+            wrapper = ShallowMLAAttentionWrapper(
+                model_loader=model_loader,
+                layer_id=layer_id,
+                dtype=torch.float32,
+                device="cuda",
+                max_batch_size=4,
+            )
+            self._shallowmla_by_layer[layer_id] = wrapper
+     
+        x = torch.from_numpy(hidden_in).to(torch.float32, device="cuda").view(1, 1, -1)
+        y = wrapper.forward(x, start_pos=0, mask=None)
+     
+        out_np = y[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
+        out_np = as_f32_1d(out_np, f"attention.layer{layer_id}.output")
+     
         aux = {}
         if return_aux:
             aux = {
                 "kind": "attention_block",
-                "impl": "placeholder",
-                "layer_id": int(layer_id),
+                "impl": "shallowmla",
+                "layer_id": layer_id,
             }
-        return ModelExecResult(output=out, aux=aux)
+     
+        return ModelExecResult(output=out_np, aux=aux)
 
     def run_dense_ffn_block(
         self,

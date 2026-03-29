@@ -13,11 +13,6 @@ from server.expert_placement import (
 )
 from server.expert_placement import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
-from server.router_runtime import (
-    get_router_config,
-    get_router_tensors,
-    route_token_real,
-)
 from server.test_utils import make_safe_input, print_stats, compare_arrays
 
 
@@ -143,6 +138,58 @@ def run_topk_moe_layer(session, hidden: np.ndarray, routes):
     return combined, weighted_outputs
 
 
+def route_token_real(
+    hidden: np.ndarray,
+    gate_weight: torch.Tensor,
+    e_score_correction_bias: torch.Tensor,
+    *,
+    n_group: int,
+    topk_group: int,
+    top_k: int,
+    norm_topk_prob: bool,
+    routed_scaling_factor: float,
+    scoring_func: str,
+    topk_method: str,
+    n_routed_experts: int,
+    hidden_size: int,
+    resident_expert_ids=None,
+):
+    if scoring_func != "sigmoid":
+        raise RuntimeError(f"unsupported scoring_func={scoring_func}")
+    if topk_method != "noaux_tc":
+        raise RuntimeError(f"unsupported topk_method={topk_method}")
+
+    h = torch.from_numpy(hidden.astype(np.float32))
+
+    if gate_weight.ndim != 2:
+        raise RuntimeError(f"gate_weight must be 2D, got shape={tuple(gate_weight.shape)}")
+    if e_score_correction_bias.ndim != 1:
+        raise RuntimeError(
+            f"e_score_correction_bias must be 1D, got shape={tuple(e_score_correction_bias.shape)}"
+        )
+
+    num_experts, gate_hidden = gate_weight.shape
+    if topk_group <= 0 or topk_group > n_group:
+        raise RuntimeError(f"invalid topk_group={topk_group} for n_group={n_group}")
+    if top_k <= 0 or top_k > num_experts:
+        raise RuntimeError(f"invalid top_k={top_k} for num_experts={num_experts}")
+    if num_experts != n_routed_experts:
+        raise RuntimeError(
+            f"gate_weight shape {tuple(gate_weight.shape)} inconsistent with n_routed_experts={n_routed_experts}"
+        )
+    if gate_hidden != hidden_size:
+        raise RuntimeError(
+            f"gate_weight shape {tuple(gate_weight.shape)} inconsistent with hidden_size={hidden_size}"
+        )
+    if h.shape[0] != hidden_size:
+        raise RuntimeError(
+            f"hidden dim {h.shape[0]} inconsistent with hidden_size={hidden_size}"
+        )
+    if e_score_correction_bias.shape[0] != num_experts:
+        raise RuntimeError(
+            f"bias shape {tuple(e_score_correction_bias.shape)} incompatible with num_experts={num_experts}"
+
+
 def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: bool = False):
     if not isinstance(hidden, np.ndarray):
         raise TypeError(f"hidden must be a numpy.ndarray, got {type(hidden)}")
@@ -158,8 +205,10 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
 
     layer_id = int(layer_id)
 
-    router_cfg = get_router_config(session)
-    gate_weight, e_score_correction_bias = get_router_tensors(session, layer_id)
+    router_cfg = session.get_router_config()
+    gate_weight, e_score_correction_bias = (
+        session.get_deepseek_model_loader().load_router_tensors_fp32(layer_id)
+    )
 
     hidden_size = int(router_cfg["hidden_size"])
     if hidden.shape[0] != hidden_size:
