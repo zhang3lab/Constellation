@@ -7,7 +7,7 @@ from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.inference_session import InferenceSession
-from server.partial_model_loader import (
+from server.capture_layer3_hidden_partial import (
     build_partial_config,
     build_config_object,
     import_deepseek_modules,
