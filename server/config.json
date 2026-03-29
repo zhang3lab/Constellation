@@ -10,12 +10,16 @@
     "memory_utilization": 0.9
   },
   "run": {
-    "mode": "partial_61layer_debug",
+    "mode": "full_model_debug",
     "num_experts": 464,
     "restricted_expert_ids": [0, 1, 2, 3, 4, 5, 6, 7],
     "experts_per_layer": 256,
     "sparse_layer_start": 3,
-    "sparse_layer_end": 4,
+    "sparse_layer_end": 60,
+    "dense_layer_count": 3,
+    "start_layer": 0,
+    "end_layer": 3,
+    "collect_per_layer": true,
     "layer_id": 3
   }
 }

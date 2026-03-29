@@ -29,6 +29,46 @@ def run_runtime_demo(coord, cfg):
         print("[demo] output[:8] =", result["output"][:8])
 
 
+def run_full_model_debug(coord, cfg):
+    run_cfg = cfg["run"]
+    model_root = str(cfg["model"]["root"])
+
+    router_cfg = load_router_config(model_root)
+    hidden_size = int(router_cfg["hidden_size"])
+
+    start_layer = int(run_cfg.get("start_layer", 0))
+    end_layer = int(run_cfg.get("end_layer", 3))
+    collect_per_layer = bool(run_cfg.get("collect_per_layer", True))
+    prompt = "Hello world"
+
+    with InferenceSession(coord, cfg) as session:
+        session.full_model_ref = PlaceholderDeepseekFullModelRef()
+
+        print(f"[full-model] prompt={prompt!r}")
+        print(
+            f"[full-model] start_layer={start_layer} "
+            f"end_layer={end_layer} hidden_size={hidden_size}"
+        )
+
+        # Temporary placeholder until prompt->embedding path is wired in.
+        hidden = make_safe_input(hidden_size)
+
+        result = run_full_model(
+            session,
+            hidden,
+            start_layer=start_layer,
+            end_layer=end_layer,
+            position_ids=None,
+            attention_mask=None,
+            kv_cache=None,
+            collect_per_layer=collect_per_layer,
+        )
+
+        print("[full-model] output[:8] =", result["output"][:8])
+        if collect_per_layer:
+            print(f"[full-model] collected_layers={len(result['per_layer'])}")
+
+
 def main():
     cfg = load_config("server/config.json")
 
@@ -42,6 +82,8 @@ def main():
         run_runtime_demo(coord, cfg)
     elif mode == "partial_61layer_debug":
         run_runtime_validation(coord, cfg)
+    elif mode == "full_model_debug":
+        run_full_model_debug(coord, cfg)
     else:
         raise RuntimeError(f"unknown mode={mode}")
 
