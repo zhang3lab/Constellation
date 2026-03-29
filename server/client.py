@@ -151,7 +151,7 @@ class NodeClient:
 
     def send_placement_plan(self, assignments, request_id=None) -> bytes:
         body = encode_placement_plan(assignments)
-            resp_body = self.request(
+        resp_body = self.request(
             req_type=MsgType.PlacementPlan,
             resp_type=MsgType.PlacementAck,
             body=body,
