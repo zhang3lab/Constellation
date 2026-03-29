@@ -98,6 +98,10 @@ def main():
     enc = tokenizer(args.prompt, return_tensors="pt")
     enc = {k: v.to(args.device) for k, v in enc.items()}
 
+    print("[attn] impl =", config._attn_implementation)
+    print("[attn] class =", type(layers[layer_id].self_attn))
+    print("[attn] class_name =", layers[layer_id].self_attn.__class__.__name__)
+
     try:
         with torch.no_grad():
             _ = model(**enc)
