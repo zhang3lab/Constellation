@@ -250,7 +250,7 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
             )
             self._shallowmla_by_layer[layer_id] = wrapper
      
-        x = torch.from_numpy(hidden_in).to(torch.float32, device="cuda").view(1, 1, -1)
+        x = torch.from_numpy(hidden_in).to(device="cuda", dtype=torch.float32).view(1, 1, -1)
         y = wrapper.forward(x, start_pos=0, mask=None)
      
         out_np = y[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
