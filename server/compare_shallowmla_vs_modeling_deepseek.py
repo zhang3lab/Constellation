@@ -70,8 +70,8 @@ def main():
 
     captured = {}
 
-    def hook_attn_input(module_, inputs):
-        captured["attn_input"] = inputs[0].detach()
+    def hook_attn_input(module_, inputs, output):
+        captured["attn_input"] = output.detach()
 
     def hook_attn_output(module_, inputs, output):
         if isinstance(output, tuple):
@@ -81,9 +81,10 @@ def main():
         raise CaptureDone
 
     layers = get_layers_root(model)
-    attn_mod = layers[layer_id].self_attn
-    h1 = attn_mod.register_forward_pre_hook(hook_attn_input)
-    h2 = attn_mod.register_forward_hook(hook_attn_output)
+    layer = layers[layer_id]
+
+    h1 = layer.input_layernorm.register_forward_hook(hook_attn_input)
+    h2 = layer.self_attn.register_forward_hook(hook_attn_output)
 
     enc = tokenizer(args.prompt, return_tensors="pt")
     enc = {k: v.to(args.device) for k, v in enc.items()}
