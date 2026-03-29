@@ -86,9 +86,11 @@ class ShallowMLAAttentionWrapper:
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         x = self.rms_norm_input(x)
+        seq_len = int(x.shape[1])
+        freq_cis = self.freq_cis[start_pos:start_pos + seq_len]
         return self.mla(
             x,
             start_pos=start_pos,
-            freq_cis=self.freq_cis,
+            freq_cis=freq_cis,
             mask=mask,
         )
