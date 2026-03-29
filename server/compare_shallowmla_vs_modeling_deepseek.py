@@ -147,7 +147,7 @@ def main():
         wrapper = ShallowMLAAttentionWrapper(
             model_loader=model_loader,
             layer_id=layer_id,
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=args.device,
             max_batch_size=1,
             optim_type="triton",
