@@ -2,6 +2,7 @@ from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_ref import PlaceholderDeepseekFullModelRef
+from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 from server.moe_layer_runtime import run_moe_layer
 from server.router_runtime import load_router_config
