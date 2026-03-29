@@ -67,10 +67,6 @@ def main():
     ]
 
     with torch.no_grad():
-        # reset caches explicitly
-        wrapper_torch.mla.reset_cache()
-        wrapper_triton.mla.reset_cache()
-
         # prefill
         y_prefill_torch = wrapper_torch.forward(prefill_x, start_pos=0, mask=None)
         y_prefill_triton = wrapper_triton.forward(prefill_x, start_pos=0, mask=None)
