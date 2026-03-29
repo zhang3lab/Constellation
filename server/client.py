@@ -13,6 +13,7 @@ from common.protocol import (
     encode_placement_plan,
     decode_infer_response,
     decode_inventory_reply,
+    decode_placement_ack,
     pack_header,
     unpack_header,
 )
@@ -150,12 +151,13 @@ class NodeClient:
 
     def send_placement_plan(self, assignments, request_id=None) -> bytes:
         body = encode_placement_plan(assignments)
-        return self.request(
+            resp_body = self.request(
             req_type=MsgType.PlacementPlan,
             resp_type=MsgType.PlacementAck,
             body=body,
             request_id=request_id,
         )
+        return decode_placement_ack(resp_body)
 
     def send_load_weights_begin(self, msg, request_id=None) -> bytes:
         body = encode_load_weights_begin(msg)

@@ -81,11 +81,12 @@ def setup_control_plane(coord, cfg):
             p["expert_id"] = int(eid)
 
     coord.print_placement()
-    coord.send_placement_plan()
+    placement_acks = coord.send_placement_plan()
 
     locator = DeepseekModelLocator(model_root)
     coord.preload_all_placed_experts(
         locator=locator,
         chunk_size=chunk_size,
         experts_per_layer=int(run_cfg.get("experts_per_layer", 256)),
+        placement_acks=placement_acks,
     )

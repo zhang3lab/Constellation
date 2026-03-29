@@ -81,6 +81,31 @@ bool SendEmptyAck(
     return common::SendMessage(fd, resp, std::string());
 }
 
+common::PlacementAck BuildPlacementAckForNode(
+    const ControlState& state,
+    const std::vector<common::PlacementAssignment>& assignments) {
+    common::PlacementAck ack{};
+    ack.status_code = 0;
+
+    for (const auto& a : assignments) {
+        if (a.node_id != state.static_info.node_id) {
+            continue;
+        }
+
+        ++ack.num_target_experts;
+
+        if (state.registry.FindDeviceStorage(
+                static_cast<int>(a.expert_id),
+                static_cast<int>(a.worker_id)) != nullptr) {
+            ++ack.num_ready_experts;
+        }
+    }
+
+    ack.all_ready = (ack.num_ready_experts == ack.num_target_experts);
+    ack.needs_reload = !ack.all_ready;
+    return ack;
+}
+
 bool HandleInventoryRequest(
     int fd,
     ControlState* state,
@@ -177,9 +202,17 @@ bool HandlePlacementPlan(
 
     std::vector<common::PlacementAssignment> assignments;
     if (!common::DecodePlacementPlanBody(req_body, &assignments)) {
-        std::fprintf(stderr, "[%s] failed to decode PlacementPlan\n",
+        std::fprintf(stderr,
+                     "[%s] failed to decode PlacementPlan\n",
                      state->static_info.node_id.c_str());
-        return false;
+
+        common::PlacementAck ack{};
+        ack.status_code = 1;
+        ack.needs_reload = true;
+        ack.all_ready = false;
+        ack.num_target_experts = 0;
+        ack.num_ready_experts = 0;
+        return SendPlacementAck(fd, req.request_id, ack);
     }
 
     for (const auto& a : assignments) {
@@ -188,7 +221,14 @@ bool HandlePlacementPlan(
                          "[%s] invalid expert_id=%d in PlacementPlan\n",
                          state->static_info.node_id.c_str(),
                          a.expert_id);
-            return false;
+
+            common::PlacementAck ack{};
+            ack.status_code = 1;
+            ack.needs_reload = true;
+            ack.all_ready = false;
+            ack.num_target_experts = 0;
+            ack.num_ready_experts = 0;
+            return SendPlacementAck(fd, req.request_id, ack);
         }
 
         if (a.worker_id < 0 ||
@@ -198,7 +238,14 @@ bool HandlePlacementPlan(
                          state->static_info.node_id.c_str(),
                          a.worker_id,
                          a.expert_id);
-            return false;
+
+            common::PlacementAck ack{};
+            ack.status_code = 1;
+            ack.needs_reload = true;
+            ack.all_ready = false;
+            ack.num_target_experts = 0;
+            ack.num_ready_experts = 0;
+            return SendPlacementAck(fd, req.request_id, ack);
         }
     }
 
@@ -207,15 +254,36 @@ bool HandlePlacementPlan(
                 req.request_id,
                 assignments.size());
 
-    state->registry.clear();
-    state->active_load = ActiveLoad{};
+    common::PlacementAck ack{};
+    ack.status_code = 0;
 
-    const bool ok =
-        SendEmptyAck(fd, common::MsgType::PlacementAck, req.request_id);
+    for (const auto& a : assignments) {
+        ++ack.num_target_experts;
+
+        if (state->registry.FindDeviceStorage(
+                static_cast<int>(a.expert_id),
+                static_cast<int>(a.worker_id)) != nullptr) {
+            ++ack.num_ready_experts;
+        }
+    }
+
+    ack.all_ready = (ack.num_ready_experts == ack.num_target_experts);
+    ack.needs_reload = !ack.all_ready;
+
+    if (ack.needs_reload) {
+        state->registry.clear();
+        state->active_load = ActiveLoad{};
+    }
+
+    const bool ok = SendPlacementAck(fd, req.request_id, ack);
     if (ok) {
-        std::printf("[%s] sent PlacementAck rid=%u\n",
+        std::printf("[%s] sent PlacementAck rid=%u needs_reload=%d all_ready=%d target=%u ready=%u\n",
                     state->static_info.node_id.c_str(),
-                    req.request_id);
+                    req.request_id,
+                    static_cast<int>(ack.needs_reload),
+                    static_cast<int>(ack.all_ready),
+                    ack.num_target_experts,
+                    ack.num_ready_experts);
     }
     return ok;
 }

@@ -259,6 +259,25 @@ def decode_placement_plan(body: bytes):
     return assignments
 
 
+def decode_placement_ack(body: bytes) -> dict:
+    if len(body) != 16:
+        raise ValueError(f"bad PlacementAck body size: {len(body)}")
+
+    status_code = int.from_bytes(body[0:4], "little")
+    needs_reload = body[4] != 0
+    all_ready = body[5] != 0
+    num_target_experts = int.from_bytes(body[8:12], "little")
+    num_ready_experts = int.from_bytes(body[12:16], "little")
+
+    return {
+        "status_code": status_code,
+        "needs_reload": needs_reload,
+        "all_ready": all_ready,
+        "num_target_experts": num_target_experts,
+        "num_ready_experts": num_ready_experts,
+    }
+
+
 def encode_load_weights_begin(msg):
     meta = msg.get("meta", {})
     shape = meta.get("shape", [])

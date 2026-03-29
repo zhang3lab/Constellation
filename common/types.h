@@ -87,4 +87,17 @@ struct DynamicNodeInfo {
     std::vector<DynamicGpuInfo> gpus;
 };
 
+struct PlacementAssignment {
+    std::int32_t expert_id = -1;
+    std::int32_t worker_id = -1;
+};
+
+struct PlacementAck {
+    std::uint32_t status_code = 0;
+    bool needs_reload = false;
+    bool all_ready = false;
+    std::uint32_t num_target_experts = 0;
+    std::uint32_t num_ready_experts = 0;
+};
+
 }  // namespace common

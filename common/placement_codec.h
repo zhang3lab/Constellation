@@ -4,12 +4,9 @@
 #include <string>
 #include <vector>
 
-namespace common {
+#include "common/types.h"
 
-struct PlacementAssignment {
-    std::int32_t expert_id = -1;
-    std::int32_t worker_id = -1;
-};
+namespace common {
 
 std::string EncodePlacementPlanBody(
     const std::vector<PlacementAssignment>& assignments);
@@ -17,5 +14,9 @@ std::string EncodePlacementPlanBody(
 bool DecodePlacementPlanBody(
     const std::string& body,
     std::vector<PlacementAssignment>* out);
+
+bool EncodePlacementAck(const PlacementAck& msg, std::string* out);
+
+bool DecodePlacementAck(const void* data, std::size_t len, PlacementAck* out);
 
 }  // namespace common
