@@ -37,6 +37,9 @@ def main():
         {"batch_size": 1, "seq_len": 1, "start_pos": 0},
         {"batch_size": 1, "seq_len": 16, "start_pos": 0},
         {"batch_size": 1, "seq_len": 1, "start_pos": 32},
+        {"batch_size": 1, "seq_len": 512, "start_pos": 0},
+        {"batch_size": 1, "seq_len": 2048, "start_pos": 0},
+        {"batch_size": 1, "seq_len": 1, "start_pos": 2048},
     ]
 
     for case in cases:
