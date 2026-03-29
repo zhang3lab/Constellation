@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Sequence
 
 from common.protocol import TensorKind
 from server.client import NodeClient
+from server.deepseek_model_loader import DeepseekModelLoader
 from server.expert_placement import (
     find_expert_placement,
     group_placements_by_control_endpoint,
@@ -358,9 +359,9 @@ class Coordinator:
         tensor_kind = item["tensor_kind_enum"]
         expert_id = int(item["expert_id"])
 
-        tensor_bytes, shape, dtype = DeepseekModelLocator.load_tensor_from_open_shard(
+        tensor_bytes, shape, dtype = DeepseekModelLoader.load_tensor_from_open_shard(
             shard_file,
-            tensor_name,
+            item["tensor_name"],
         )
 
         row_block = 128
