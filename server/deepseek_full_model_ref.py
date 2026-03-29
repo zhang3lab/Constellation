@@ -247,6 +247,7 @@ class DeepseekFullModelRef(DeepseekFullModelRefBase):
                 dtype=torch.float32,
                 device="cuda",
                 max_batch_size=4,
+                optim_type="triton",
             )
             self._shallowmla_by_layer[layer_id] = wrapper
      
