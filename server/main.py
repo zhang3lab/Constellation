@@ -1,7 +1,7 @@
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
-from server.deepseek_full_model_ref import PlaceholderDeepseekFullModelRef
+from server.deepseek_full_model_ref import DeepseekFullModelRef
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 from server.moe_layer_runtime import run_moe_layer
@@ -37,7 +37,7 @@ def run_full_model_debug(coord, cfg):
     prompt = "Hello world"
 
     with InferenceSession(coord, cfg) as session:
-        session.full_model_ref = PlaceholderDeepseekFullModelRef(session)
+        session.full_model_ref = DeepseekFullModelRef(session)
 
         hidden_size = int(session.get_router_config()["hidden_size"])
 

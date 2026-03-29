@@ -218,7 +218,7 @@ class DeepseekFullModelRefBase(FullModelRefBase):
         return ModelExecResult(output=cur, aux=aux)
 
 
-class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
+class DeepseekFullModelRef(DeepseekFullModelRefBase):
     def __init__(self, session):
         self.session = session
 
@@ -251,7 +251,8 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
             self._shallowmla_by_layer[layer_id] = wrapper
      
         x = torch.from_numpy(hidden_in).to(device="cuda", dtype=torch.float32).view(1, 1, -1)
-        y = wrapper.forward(x, start_pos=0, mask=None)
+        start_pos = 0 if position_ids is None else int(np.asarray(position_ids).reshape(-1)[0])
+        y = wrapper.forward(x, start_pos=start_pos, mask=None)
      
         out_np = y[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
         out_np = as_f32_1d(out_np, f"attention.layer{layer_id}.output")
