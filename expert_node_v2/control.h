@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -21,11 +22,10 @@ struct ActiveLoad {
 
 struct ControlState {
     common::NodeStatus node_status = common::NodeStatus::Booting;
-
     common::StaticNodeInfo static_info;
-
     ActiveLoad active_load;
     expert_node_v2::ExpertRegistryV2 registry;
+    std::shared_mutex mu;
 };
 
 void RunControlLoop(ControlState* state);

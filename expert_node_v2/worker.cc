@@ -1,12 +1,13 @@
 #include "worker.h"
 
 #include <cstdio>
+#include <cstring>
+#include <shared_mutex>
 #include <string>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#include <cstring>
 
 #include "common/header_codec.h"
 #include "common/protocol.h"
@@ -114,28 +115,20 @@ bool HandleInferRequest(
     resp_msg.output_dtype = msg.output_dtype;
     resp_msg.output.clear();
 
-    const ExpertDeviceStorageV2* storage =
-        ctx->state->registry.FindDeviceStorage(msg.expert_id, ctx->worker_id);
-    if (storage == nullptr) {
-        const expert_node_v2::ExpertEntryV2* entry =
-            ctx->state->registry.FindEntry(msg.expert_id);
-        resp_msg.status_code = (entry == nullptr) ? 1 : 2;
-        return SendInferResponse(
-            fd,
-            ctx->state->static_info.node_id,
-            req.request_id,
-            resp_msg);
-    }
+    {
+        std::shared_lock<std::shared_mutex> lock(ctx->state->mu);
 
-    if (!ctx->workspace->RunExpertRequest(*storage, msg, &resp_msg)) {
-        resp_msg.status_code = 4;
-        resp_msg.output.clear();
-        resp_msg.output_dtype = msg.output_dtype;
-        return SendInferResponse(
-            fd,
-            ctx->state->static_info.node_id,
-            req.request_id,
-            resp_msg);
+        const ExpertDeviceStorageV2* storage =
+            ctx->state->registry.FindDeviceStorage(msg.expert_id, ctx->worker_id);
+        if (storage == nullptr) {
+            const expert_node_v2::ExpertEntryV2* entry =
+                ctx->state->registry.FindEntry(msg.expert_id);
+            resp_msg.status_code = (entry == nullptr) ? 1 : 2;
+        } else if (!ctx->workspace->RunExpertRequest(*storage, msg, &resp_msg)) {
+            resp_msg.status_code = 4;
+            resp_msg.output.clear();
+            resp_msg.output_dtype = msg.output_dtype;
+        }
     }
 
     return SendInferResponse(

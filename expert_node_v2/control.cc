@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -110,7 +111,15 @@ bool SendPlacementAck(
     if (!common::EncodePlacementAck(ack, &body)) {
         return false;
     }
-    return SendMessage(fd, common::MsgType::PlacementAck, request_id, body);
+
+    common::MsgHeader hdr{};
+    hdr.magic = common::kMagic;
+    hdr.version = common::kVersion;
+    hdr.msg_type = static_cast<std::uint16_t>(common::MsgType::PlacementAck);
+    hdr.request_id = request_id;
+    hdr.body_len = static_cast<std::uint32_t>(body.size());
+
+    return common::SendMessage(fd, hdr, body);
 }
 
 bool SendPlacementAckError(
@@ -255,7 +264,7 @@ bool HandlePlacementPlan(
 
     common::PlacementAck ack{};
     {
-        std::lock_guard<std::mutex> lock(state->mu);
+        std::unique_lock<std::shared_mutex> lock(state->mu);
         ack = BuildPlacementAck(*state, assignments);
 
         if (ack.needs_reload) {
@@ -474,117 +483,133 @@ bool HandleLoadWeightsEnd(
         return false;
     }
 
-    if (!state->active_load.active) {
-        std::fprintf(stderr, "[%s] LoadWeightsEnd with no active load\n",
-                     state->static_info.node_id.c_str());
-        return false;
-    }
+    std::uint64_t total_bytes = 0;
+    std::size_t final_buffer_size = 0;
+    common::GpuVendor vendor = static_cast<common::GpuVendor>(0);
+    bool incoming_ready = false;
+    bool resident_ready = false;
 
-    if (state->active_load.expert_id != msg.expert_id) {
-        std::fprintf(stderr,
-                     "[%s] LoadWeightsEnd expert mismatch: got=%d expected=%d\n",
-                     state->static_info.node_id.c_str(),
-                     msg.expert_id,
-                     state->active_load.expert_id);
-        return false;
-    }
+    {
+        std::unique_lock<std::shared_mutex> lock(state->mu);
 
-    if (state->active_load.worker_id != msg.worker_id) {
-        std::fprintf(stderr,
-                     "[%s] LoadWeightsEnd worker mismatch: got=%d expected=%d\n",
-                     state->static_info.node_id.c_str(),
-                     msg.worker_id,
-                     state->active_load.worker_id);
-        return false;
-    }
-
-    if (state->active_load.tensor_kind != msg.tensor_kind) {
-        std::fprintf(stderr,
-                     "[%s] LoadWeightsEnd tensor_kind mismatch: got=%s expected=%s\n",
-                     state->static_info.node_id.c_str(),
-                     TensorKindName(msg.tensor_kind),
-                     TensorKindName(state->active_load.tensor_kind));
-        return false;
-    }
-
-    if (state->active_load.received_bytes != state->active_load.total_bytes) {
-        std::fprintf(stderr,
-                     "[%s] LoadWeightsEnd byte mismatch: received=%llu expected=%llu\n",
-                     state->static_info.node_id.c_str(),
-                     static_cast<unsigned long long>(state->active_load.received_bytes),
-                     static_cast<unsigned long long>(state->active_load.total_bytes));
-        return false;
-    }
-
-    if (state->active_load.buffer.size() !=
-        static_cast<std::size_t>(state->active_load.total_bytes)) {
-        std::fprintf(stderr,
-                     "[%s] LoadWeightsEnd buffer size mismatch: buffer=%zu expected=%llu\n",
-                     state->static_info.node_id.c_str(),
-                     state->active_load.buffer.size(),
-                     static_cast<unsigned long long>(state->active_load.total_bytes));
-        return false;
-    }
-
-    if (msg.worker_id < 0 ||
-        static_cast<std::size_t>(msg.worker_id) >= state->static_info.gpus.size()) {
-        std::fprintf(stderr,
-                     "[%s] LoadWeightsEnd invalid worker_id=%d, gpus.size()=%zu\n",
-                     state->static_info.node_id.c_str(),
-                     msg.worker_id,
-                     state->static_info.gpus.size());
-        return false;
-    }
-
-    const common::StaticGpuInfo& gpu =
-        state->static_info.gpus[static_cast<std::size_t>(msg.worker_id)];
-    const common::GpuVendor vendor = gpu.gpu_vendor;
-
-    const std::size_t final_buffer_size = state->active_load.buffer.size();
-    const std::uint64_t total_bytes = state->active_load.total_bytes;
-
-    if (!state->registry.StoreIncomingTensor(
-            msg.expert_id,
-            msg.tensor_kind,
-            total_bytes,
-            std::move(state->active_load.buffer),
-            std::move(state->active_load.meta))) {
-        std::fprintf(stderr,
-                     "[%s] failed to store incoming tensor for expert=%d tensor_kind=%s\n",
-                     state->static_info.node_id.c_str(),
-                     msg.expert_id,
-                     TensorKindName(msg.tensor_kind));
-        return false;
-    }
-
-    const expert_node_v2::ExpertEntryV2* entry =
-        state->registry.FindEntry(msg.expert_id);
-    if (entry == nullptr) {
-        std::fprintf(stderr,
-                     "[%s] missing entry after StoreIncomingTensor for expert=%d\n",
-                     state->static_info.node_id.c_str(),
-                     msg.expert_id);
-        return false;
-    }
-
-    if (entry->incoming_ready) {
-        if (!state->registry.Update(
-                msg.expert_id,
-                msg.worker_id,
-                vendor,
-                state->static_info.vendor_spans)) {
-            std::fprintf(stderr,
-                         "[%s] failed to update resident storage for expert=%d worker=%d vendor=%u\n",
-                         state->static_info.node_id.c_str(),
-                         msg.expert_id,
-                         msg.worker_id,
-                         static_cast<unsigned>(vendor));
+        if (!state->active_load.active) {
+            std::fprintf(stderr, "[%s] LoadWeightsEnd with no active load\n",
+                         state->static_info.node_id.c_str());
             return false;
         }
-    }
 
-    const ExpertDeviceStorageV2* storage =
-        state->registry.FindDeviceStorage(msg.expert_id, msg.worker_id);
+        if (state->active_load.expert_id != msg.expert_id) {
+            std::fprintf(stderr,
+                         "[%s] LoadWeightsEnd expert mismatch: got=%d expected=%d\n",
+                         state->static_info.node_id.c_str(),
+                         msg.expert_id,
+                         state->active_load.expert_id);
+            return false;
+        }
+
+        if (state->active_load.worker_id != msg.worker_id) {
+            std::fprintf(stderr,
+                         "[%s] LoadWeightsEnd worker mismatch: got=%d expected=%d\n",
+                         state->static_info.node_id.c_str(),
+                         msg.worker_id,
+                         state->active_load.worker_id);
+            return false;
+        }
+
+        if (state->active_load.tensor_kind != msg.tensor_kind) {
+            std::fprintf(stderr,
+                         "[%s] LoadWeightsEnd tensor_kind mismatch: got=%s expected=%s\n",
+                         state->static_info.node_id.c_str(),
+                         TensorKindName(msg.tensor_kind),
+                         TensorKindName(state->active_load.tensor_kind));
+            return false;
+        }
+
+        if (state->active_load.received_bytes != state->active_load.total_bytes) {
+            std::fprintf(stderr,
+                         "[%s] LoadWeightsEnd byte mismatch: received=%llu expected=%llu\n",
+                         state->static_info.node_id.c_str(),
+                         static_cast<unsigned long long>(state->active_load.received_bytes),
+                         static_cast<unsigned long long>(state->active_load.total_bytes));
+            return false;
+        }
+
+        if (state->active_load.buffer.size() !=
+            static_cast<std::size_t>(state->active_load.total_bytes)) {
+            std::fprintf(stderr,
+                         "[%s] LoadWeightsEnd buffer size mismatch: buffer=%zu expected=%llu\n",
+                         state->static_info.node_id.c_str(),
+                         state->active_load.buffer.size(),
+                         static_cast<unsigned long long>(state->active_load.total_bytes));
+            return false;
+        }
+
+        if (msg.worker_id < 0 ||
+            static_cast<std::size_t>(msg.worker_id) >= state->static_info.gpus.size()) {
+            std::fprintf(stderr,
+                         "[%s] LoadWeightsEnd invalid worker_id=%d, gpus.size()=%zu\n",
+                         state->static_info.node_id.c_str(),
+                         msg.worker_id,
+                         state->static_info.gpus.size());
+            return false;
+        }
+
+        const common::StaticGpuInfo& gpu =
+            state->static_info.gpus[static_cast<std::size_t>(msg.worker_id)];
+        vendor = gpu.gpu_vendor;
+
+        final_buffer_size = state->active_load.buffer.size();
+        total_bytes = state->active_load.total_bytes;
+
+        if (!state->registry.StoreIncomingTensor(
+                msg.expert_id,
+                msg.tensor_kind,
+                total_bytes,
+                std::move(state->active_load.buffer),
+                std::move(state->active_load.meta))) {
+            std::fprintf(stderr,
+                         "[%s] failed to store incoming tensor for expert=%d tensor_kind=%s\n",
+                         state->static_info.node_id.c_str(),
+                         msg.expert_id,
+                         TensorKindName(msg.tensor_kind));
+            return false;
+        }
+
+        const expert_node_v2::ExpertEntryV2* entry =
+            state->registry.FindEntry(msg.expert_id);
+        if (entry == nullptr) {
+            std::fprintf(stderr,
+                         "[%s] missing entry after StoreIncomingTensor for expert=%d\n",
+                         state->static_info.node_id.c_str(),
+                         msg.expert_id);
+            return false;
+        }
+
+        if (entry->incoming_ready) {
+            if (!state->registry.Update(
+                    msg.expert_id,
+                    msg.worker_id,
+                    vendor,
+                    state->static_info.vendor_spans)) {
+                std::fprintf(stderr,
+                             "[%s] failed to update resident storage for expert=%d worker=%d vendor=%u\n",
+                             state->static_info.node_id.c_str(),
+                             msg.expert_id,
+                             msg.worker_id,
+                             static_cast<unsigned>(vendor));
+                return false;
+            }
+        }
+
+        const ExpertDeviceStorageV2* storage =
+            state->registry.FindDeviceStorage(msg.expert_id, msg.worker_id);
+
+        incoming_ready = entry->incoming_ready;
+        resident_ready = (storage != nullptr);
+
+        state->registry.DebugPrint();
+        state->active_load = ActiveLoad{};
+    }
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
                 "expert=%d worker_id=%d vendor=%u tensor_kind=%s total_bytes=%llu buffer_size=%zu "
@@ -597,11 +622,8 @@ bool HandleLoadWeightsEnd(
                 TensorKindName(msg.tensor_kind),
                 static_cast<unsigned long long>(total_bytes),
                 final_buffer_size,
-                static_cast<int>(entry->incoming_ready),
-                storage != nullptr ? 1 : 0);
-
-    state->registry.DebugPrint();
-    state->active_load = ActiveLoad{};
+                static_cast<int>(incoming_ready),
+                static_cast<int>(resident_ready));
 
     const bool ok =
         SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
