@@ -1,30 +1,111 @@
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
-#include "expert_node_v2/control.h"
-#include "expert_node_v2/node_info.h"
-#include "expert_node_v2/worker.h"
+namespace {
+
+struct MainOptions {
+    std::string node_id = "node0";
+    std::string host = "127.0.0.1";
+    int control_port = 40000;
+    int worker_base_port = 50000;
+};
+
+bool ParseIntArg(const char* s, int* out) {
+    if (s == nullptr || out == nullptr || *s == '\0') return false;
+    char* end = nullptr;
+    long v = std::strtol(s, &end, 10);
+    if (end == s || *end != '\0') return false;
+    if (v <= 0 || v > 65535) return false;
+    *out = static_cast<int>(v);
+    return true;
+}
+
+void PrintUsage(const char* prog) {
+    std::fprintf(
+        stderr,
+        "Usage: %s [options]\n"
+        "\n"
+        "Options:\n"
+        "  --node-id <str>           Node id (default: node0)\n"
+        "  --host <str>              Advertised host (default: 127.0.0.1)\n"
+        "  --control-port <int>      Control port (default: 40000)\n"
+        "  --worker-base-port <int>  Worker base port (default: 50000)\n"
+        "  --help                    Show this message\n",
+        prog);
+}
+
+bool ParseMainOptions(int argc, char** argv, MainOptions* opt) {
+    if (opt == nullptr) return false;
+
+    for (int i = 1; i < argc; ++i) {
+        const char* a = argv[i];
+        if (std::strcmp(a, "--help") == 0) {
+            PrintUsage(argv[0]);
+            std::exit(0);
+        } else if (std::strcmp(a, "--node-id") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "missing value for --node-id\n");
+                return false;
+            }
+            opt->node_id = argv[++i];
+        } else if (std::strcmp(a, "--host") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "missing value for --host\n");
+                return false;
+            }
+            opt->host = argv[++i];
+        } else if (std::strcmp(a, "--control-port") == 0) {
+            if (i + 1 >= argc || !ParseIntArg(argv[i + 1], &opt->control_port)) {
+                std::fprintf(stderr, "invalid value for --control-port\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(a, "--worker-base-port") == 0) {
+            if (i + 1 >= argc || !ParseIntArg(argv[i + 1], &opt->worker_base_port)) {
+                std::fprintf(stderr, "invalid value for --worker-base-port\n");
+                return false;
+            }
+            ++i;
+        } else {
+            std::fprintf(stderr, "unknown argument: %s\n", a);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+    MainOptions opt;
+    if (!ParseMainOptions(argc, argv, &opt)) {
+        PrintUsage(argv[0]);
+        return 1;
+    }
 
     ControlState state;
     if (!BuildStaticNodeInfo(
-            "node0",
-            "127.0.0.1",
-            40000,
-            50000,
+            opt.node_id,
+            opt.host,
+            opt.control_port,
+            opt.worker_base_port,
             &state.static_info)) {
         std::fprintf(stderr, "BuildStaticNodeInfo failed\n");
         return 1;
     }
 
-    std::printf("[main] node_id=%s control_port=%d num_gpus=%zu\n",
+    std::printf("[main] node_id=%s host=%s control_port=%d worker_base_port=%d num_gpus=%zu\n",
                 state.static_info.node_id.c_str(),
+                opt.host.c_str(),
                 state.static_info.control_port,
+                opt.worker_base_port,
                 state.static_info.gpus.size());
 
     std::thread control_thread([&state]() {
