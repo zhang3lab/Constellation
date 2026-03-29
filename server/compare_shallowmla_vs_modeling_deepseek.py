@@ -174,15 +174,25 @@ def main():
         freq_cis = wrapper.freq_cis[:seq_len]
 
         with torch.no_grad():
-            y_prefix = wrapper.mla(
-                x_prefix_t,
-                start_pos=0,
-                freq_cis=freq_cis,
-                mask=mask_for_shallow,
-            )
-
+            last_y = None
+            seq_len = int(x_prefix_t.shape[1])
+         
+            for step in range(seq_len):
+                x_step = x_prefix_t[:, step:step + 1, :]
+                freq_step = wrapper.freq_cis[step:step + 1]
+         
+                last_y = wrapper.mla(
+                    x_step,
+                    start_pos=step,
+                    freq_cis=freq_step,
+                    mask=None,
+                )
+     
+        if last_y is None:
+            raise RuntimeError("last_y is None")
+     
         y_shallow = (
-            y_prefix[0, -1]
+            last_y[0, 0]
             .detach()
             .cpu()
             .float()
