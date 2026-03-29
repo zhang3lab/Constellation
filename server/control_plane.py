@@ -1,6 +1,5 @@
 from server.expert_placement import make_global_expert_id, split_global_expert_id
-from server.model_locator import DeepseekModelLocator
-from server.router_runtime import load_router_config
+from server.deepseek_model_loader import DeepseekModelLoader
 
 
 def build_restricted_global_expert_ids(run_cfg):
@@ -83,9 +82,9 @@ def setup_control_plane(coord, cfg):
     coord.print_placement()
     placement_acks = coord.send_placement_plan()
 
-    locator = DeepseekModelLocator(model_root)
+    model_loader = DeepseekModelLoader(model_root)
     coord.preload_all_placed_experts(
-        locator=locator,
+        model_loader=model_loader,
         chunk_size=chunk_size,
         experts_per_layer=int(run_cfg.get("experts_per_layer", 256)),
         placement_acks=placement_acks,

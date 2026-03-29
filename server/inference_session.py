@@ -4,6 +4,7 @@ import threading
 from typing import Dict, Tuple
 
 from server.client import NodeClient
+from server.deepseek_model_loader import DeepseekModelLoader
 
 
 class SessionClientPool:
@@ -57,11 +58,21 @@ class InferenceSession:
         self.router_tensors_by_layer = {}
 
         self.reference_weight_cache = {}
-        self.model_locator = None
+        self.deepseek_model_loader = None
+        self.full_model_ref = None
+
+    def get_deepseek_model_loader(self) -> DeepseekModelLoader:
+        if self.deepseek_model_loader is None:
+            model_root = str(self.cfg["model"]["root"])
+            self.deepseek_model_loader = DeepseekModelLoader(model_root)
+        return self.deepseek_model_loader
 
     def close(self) -> None:
         self.client_pool.close_all()
         self.router_tensors_by_layer.clear()
+        self.reference_weight_cache.clear()
+        self.deepseek_model_loader = None
+        self.full_model_ref = None
 
     def __enter__(self) -> "InferenceSession":
         return self

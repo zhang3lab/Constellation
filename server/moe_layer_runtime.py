@@ -13,7 +13,6 @@ from server.expert_placement import (
 )
 from server.expert_placement import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
-from server.model_locator import DeepseekModelLocator
 from server.router_runtime import (
     get_router_config,
     get_router_tensors,
@@ -77,69 +76,6 @@ def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
         "output": resp["output"],
         "array": y,
     }
-
-
-def _load_one_weight_tensor(session, expert_id: int, tensor_kind: str):
-    expert_id = int(expert_id)
-    tensor_kind = str(tensor_kind)
-
-    cache_key = (expert_id, tensor_kind)
-    cached = session.reference_weight_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    model_root = str(session.cfg["model"]["root"])
-    experts_per_layer = int(session.cfg["run"].get("experts_per_layer", 256))
-
-    locator = session.model_locator
-    if locator is None:
-        locator = DeepseekModelLocator(model_root)
-        session.model_locator = locator
-
-    layer_id, local_expert_id = split_global_expert_id(
-        expert_id,
-        experts_per_layer=experts_per_layer,
-    )
-
-    tensor_name, shard_path = locator.resolve_deepseek_tensor(
-        layer_id=layer_id,
-        expert_id=local_expert_id,
-        tensor_kind=tensor_kind,
-    )
-    scale_name, scale_shard_path = locator.resolve_deepseek_scale_tensor(
-        layer_id=layer_id,
-        expert_id=local_expert_id,
-        tensor_kind=tensor_kind,
-    )
-
-    if scale_shard_path != shard_path:
-        raise RuntimeError(
-            f"scale shard mismatch for expert={expert_id} tensor_kind={tensor_kind}: "
-            f"{scale_shard_path} vs {shard_path}"
-        )
-
-    with locator.open_shard(shard_path) as f:
-        t = f.get_tensor(tensor_name)
-
-        if t.dtype == torch.float8_e4m3fn:
-            scale_inv = f.get_tensor(scale_name).to(torch.float32).contiguous()
-            t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
-
-            print(
-                f"[top8-ref] loaded {tensor_kind}: "
-                f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype} "
-                f"(dequant from torch.float8_e4m3fn using {scale_name})"
-            )
-        else:
-            t = t.to(torch.float32).contiguous()
-
-            print(
-                f"[top8-ref] loaded {tensor_kind}: "
-                f"name={tensor_name} shape={tuple(t.shape)} dtype={t.dtype}"
-            )
-
-    session.reference_weight_cache[cache_key] = t
-    return t
 
 
 def validate_routes(routes):

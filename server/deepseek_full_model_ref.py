@@ -1,8 +1,12 @@
 from typing import Any
 
 import numpy as np
+import torch
+import torch.nn.functional as F
+from safetensors import safe_open
 
 from server.array_utils import as_f32_1d
+from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.full_model_ref import (
     AttentionSharedSegmentResult,
     FullModelRefBase,
@@ -187,6 +191,9 @@ class DeepseekFullModelRefBase(FullModelRefBase):
 
 
 class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
+    def __init__(self, session):
+        self.session = session
+
     def run_attention_block(
         self,
         hidden_in: np.ndarray,
@@ -215,16 +222,31 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
         *,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        hidden_in = as_f32_1d(hidden_in, "placeholder_dense_ffn.hidden_in")
-        out = np.zeros_like(hidden_in, dtype=np.float32)
+        hidden_in = as_f32_1d(hidden_in, "dense_ffn.hidden_in")
+        layer_id = int(layer_id)
+     
+        model_loader = self.session.get_deepseek_model_loader()
+        w_up, w_gate, w_down = model_loader.load_dense_ffn_triplet_fp32(layer_id)
+     
+        x_t = torch.from_numpy(hidden_in)
+        up = w_up @ x_t
+        gate = w_gate @ x_t
+        fused = up * F.silu(gate)
+        out = w_down @ fused
+     
+        out_np = out.to(torch.float32).cpu().numpy()
+        out_np = as_f32_1d(out_np, f"dense_ffn.layer{layer_id}.output")
+     
         aux = {}
         if return_aux:
             aux = {
                 "kind": "dense_ffn_block",
-                "impl": "placeholder",
-                "layer_id": int(layer_id),
+                "impl": "torch_ref",
+                "layer_id": layer_id,
             }
-        return ModelExecResult(output=out, aux=aux)
+     
+        return ModelExecResult(output=out_np, aux=aux)
+
 
     def run_shared_expert_block(
         self,
@@ -233,13 +255,27 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
         *,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        hidden_in = as_f32_1d(hidden_in, "placeholder_shared_expert.hidden_in")
-        out = np.zeros_like(hidden_in, dtype=np.float32)
+        hidden_in = as_f32_1d(hidden_in, "shared_expert.hidden_in")
+        layer_id = int(layer_id)
+     
+        model_loader = self.session.get_deepseek_model_loader()
+        w_up, w_gate, w_down = model_loader.load_shared_expert_triplet_fp32(layer_id)
+     
+        x_t = torch.from_numpy(hidden_in)
+        up = w_up @ x_t
+        gate = w_gate @ x_t
+        fused = up * F.silu(gate)
+        out = w_down @ fused
+     
+        out_np = out.to(torch.float32).cpu().numpy()
+        out_np = as_f32_1d(out_np, f"shared_expert.layer{layer_id}.output")
+     
         aux = {}
         if return_aux:
             aux = {
                 "kind": "shared_expert_block",
-                "impl": "placeholder",
-                "layer_id": int(layer_id),
+                "impl": "torch_ref",
+                "layer_id": layer_id,
             }
-        return ModelExecResult(output=out, aux=aux)
+     
+        return ModelExecResult(output=out_np, aux=aux)

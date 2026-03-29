@@ -5,7 +5,7 @@ from server.deepseek_full_model_ref import PlaceholderDeepseekFullModelRef
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 from server.moe_layer_runtime import run_moe_layer
-from server.router_runtime import load_router_config
+from server.router_runtime import get_router_config
 from server.test_utils import make_safe_input
 from server.validation_suite import run_validation_suite
 
@@ -18,12 +18,11 @@ def run_runtime_validation(coord, cfg):
 def run_runtime_demo(coord, cfg):
     run_cfg = cfg["run"]
     layer_id = int(run_cfg["layer_id"])
-    model_root = str(cfg["model"]["root"])
-
-    router_cfg = load_router_config(model_root)
-    hidden_size = int(router_cfg["hidden_size"])
 
     with InferenceSession(coord, cfg) as session:
+        router_cfg = get_router_config(session)
+        hidden_size = int(router_cfg["hidden_size"])
+
         hidden = make_safe_input(hidden_size)
         result = run_moe_layer(session, hidden, layer_id)
 
@@ -33,10 +32,6 @@ def run_runtime_demo(coord, cfg):
 
 def run_full_model_debug(coord, cfg):
     run_cfg = cfg["run"]
-    model_root = str(cfg["model"]["root"])
-
-    router_cfg = load_router_config(model_root)
-    hidden_size = int(router_cfg["hidden_size"])
 
     start_layer = int(run_cfg.get("start_layer", 0))
     end_layer = int(run_cfg.get("end_layer", 3))
@@ -44,7 +39,10 @@ def run_full_model_debug(coord, cfg):
     prompt = "Hello world"
 
     with InferenceSession(coord, cfg) as session:
-        session.full_model_ref = PlaceholderDeepseekFullModelRef()
+        session.full_model_ref = PlaceholderDeepseekFullModelRef(session)
+
+        router_cfg = get_router_config(session)
+        hidden_size = int(router_cfg["hidden_size"])
 
         print(f"[full-model] prompt={prompt!r}")
         print(

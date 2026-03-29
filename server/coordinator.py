@@ -7,7 +7,6 @@ from server.expert_placement import (
     find_expert_placement,
     group_placements_by_control_endpoint,
 )
-from server.model_locator import DeepseekModelLocator
 from server.placement import build_balanced_placement
 
 
@@ -276,7 +275,7 @@ class Coordinator:
 
     def build_preload_manifest(
         self,
-        locator,
+        model_loader,
         experts_per_layer: int = 256,
         placements=None,
     ):
@@ -301,7 +300,7 @@ class Coordinator:
      
             for tensor_kind_name, tensor_kind_enum, tensor_order in order:
                 if tensor_kind_name in ("w_up", "w_gate", "w_down"):
-                    tensor_name, shard_path = locator.resolve_deepseek_tensor(
+                    tensor_name, shard_path = model_loader.resolve_deepseek_tensor(
                         layer_id=layer_id,
                         expert_id=local_expert_id,
                         tensor_kind=tensor_kind_name,
@@ -312,7 +311,7 @@ class Coordinator:
                         "w_gate_scale": "w_gate",
                         "w_down_scale": "w_down",
                     }[tensor_kind_name]
-                    tensor_name, shard_path = locator.resolve_deepseek_scale_tensor(
+                    tensor_name, shard_path = model_loader.resolve_deepseek_scale_tensor(
                         layer_id=layer_id,
                         expert_id=local_expert_id,
                         tensor_kind=base_kind,
@@ -384,7 +383,7 @@ class Coordinator:
 
     def preload_all_placed_experts(
         self,
-        locator,
+        model_loader,
         chunk_size: int,
         experts_per_layer: int = 256,
         placement_acks=None,
@@ -418,7 +417,7 @@ class Coordinator:
             return all_expert_ids
      
         manifest = self.build_preload_manifest(
-            locator=locator,
+            model_loader=model_loader,
             experts_per_layer=experts_per_layer,
             placements=placements_for_preload,
         )
@@ -473,7 +472,7 @@ class Coordinator:
                     if shard_file is not None:
                         shard_file.__exit__(None, None, None)
      
-                    shard_file = locator.open_shard(shard_path)
+                    shard_file = model_loader.open_shard(shard_path)
                     shard_file.__enter__()
                     current_shard_path = shard_path
      

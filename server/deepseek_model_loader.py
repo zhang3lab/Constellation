@@ -5,6 +5,8 @@ from typing import Dict, Tuple
 import torch
 from safetensors import safe_open
 
+from server.fp8_utils import dequant_fp8_weight_blockwise
+
 
 def deepseek_tensor_name(layer_id: int, expert_id: int, tensor_kind: str) -> str:
     layer_id = int(layer_id)
@@ -24,10 +26,11 @@ def deepseek_tensor_name(layer_id: int, expert_id: int, tensor_kind: str) -> str
     return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{proj_name}.weight"
 
 
-class DeepseekModelLocator:
+class DeepseekModelLoader:
     def __init__(self, model_root: str):
         self.model_root = str(model_root)
         self._weight_map = self._load_safetensors_index(self.model_root)
+        self._tensor_cache: dict[str, torch.Tensor] = {}
 
     @staticmethod
     def _load_safetensors_index(model_root: str) -> Dict[str, str]:
@@ -47,6 +50,9 @@ class DeepseekModelLocator:
                 raise ValueError(f"invalid shard path for tensor {tensor_name}")
             out[tensor_name] = str(Path(model_root) / shard_relpath)
         return out
+
+    def weight_map(self) -> Dict[str, str]:
+        return self._weight_map
 
     def resolve_tensor(self, tensor_name: str) -> Tuple[str, str]:
         tensor_name = str(tensor_name)
@@ -105,16 +111,56 @@ class DeepseekModelLocator:
     def open_shard(self, shard_path: str):
         return safe_open(shard_path, framework="pt", device="cpu")
 
+    def load_tensor_fp32_by_name(self, tensor_name: str) -> torch.Tensor:
+        tensor_name = str(tensor_name)
 
-def resolve_deepseek_tensor_file(
-    model_root: str,
-    layer_id: int,
-    expert_id: int,
-    tensor_kind: str,
-) -> Tuple[str, str]:
-    locator = DeepseekModelLocator(model_root)
-    return locator.resolve_deepseek_tensor(
-        layer_id=layer_id,
-        expert_id=expert_id,
-        tensor_kind=tensor_kind,
-    )
+        cached = self._tensor_cache.get(tensor_name)
+        if cached is not None:
+            return cached
+
+        _, shard_path = self.resolve_tensor(tensor_name)
+
+        with safe_open(shard_path, framework="pt", device="cpu") as f:
+            t = f.get_tensor(tensor_name)
+
+            if t.dtype == torch.float8_e4m3fn:
+                scale_name = tensor_name + "_scale_inv"
+                keys = set(f.keys())
+                if scale_name not in keys:
+                    raise RuntimeError(f"missing scale tensor for fp8 weight: {scale_name}")
+
+                scale_inv = f.get_tensor(scale_name).to(torch.float32).contiguous()
+                t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
+            else:
+                t = t.to(torch.float32).contiguous()
+
+        self._tensor_cache[tensor_name] = t
+        return t
+
+    def load_routed_expert_triplet_fp32(self, layer_id: int, expert_id: int):
+        layer_id = int(layer_id)
+        expert_id = int(expert_id)
+
+        base = f"model.layers.{layer_id}.mlp.experts.{expert_id}"
+        w_up = self.load_tensor_fp32_by_name(f"{base}.up_proj.weight")
+        w_gate = self.load_tensor_fp32_by_name(f"{base}.gate_proj.weight")
+        w_down = self.load_tensor_fp32_by_name(f"{base}.down_proj.weight")
+        return w_up, w_gate, w_down
+
+    def load_shared_expert_triplet_fp32(self, layer_id: int):
+        layer_id = int(layer_id)
+
+        base = f"model.layers.{layer_id}.mlp.shared_experts"
+        w_up = self.load_tensor_fp32_by_name(f"{base}.up_proj.weight")
+        w_gate = self.load_tensor_fp32_by_name(f"{base}.gate_proj.weight")
+        w_down = self.load_tensor_fp32_by_name(f"{base}.down_proj.weight")
+        return w_up, w_gate, w_down
+
+    def load_dense_ffn_triplet_fp32(self, layer_id: int):
+        layer_id = int(layer_id)
+
+        base = f"model.layers.{layer_id}.mlp"
+        w_up = self.load_tensor_fp32_by_name(f"{base}.up_proj.weight")
+        w_gate = self.load_tensor_fp32_by_name(f"{base}.gate_proj.weight")
+        w_down = self.load_tensor_fp32_by_name(f"{base}.down_proj.weight")
+        return w_up, w_gate, w_down
