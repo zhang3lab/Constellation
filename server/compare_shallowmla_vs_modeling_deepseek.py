@@ -107,10 +107,10 @@ def main():
         h1.remove()
         h2.remove()
 
-    if "attn_input" not in captured or "attn_output" not in captured:
+    if "attn_hidden" not in captured or "attn_output" not in captured:
         raise RuntimeError("failed to capture attention input/output")
 
-    attn_in = captured["attn_input"]      # [B, S, H]
+    attn_in = captured["attn_hidden"]      # [B, S, H]
     attn_out = captured["attn_output"]    # [B, S, H]
 
     if attn_in.ndim != 3 or attn_in.shape[0] != 1:
