@@ -197,3 +197,101 @@ def run_sparse_layer(
         result["ffn_hidden"] = ffn_hidden.copy()
         result["ffn_total"] = ffn_total.copy()
     return result
+
+
+def run_full_model(
+    session,
+    hidden_in: np.ndarray,
+    *,
+    start_layer: int,
+    end_layer: int,
+    position_ids=None,
+    attention_mask=None,
+    kv_cache=None,
+    collect_per_layer: bool = False,
+):
+    ref = _get_full_model_ref(session)
+    hidden_in = as_f32_1d(hidden_in, "full_model.input")
+
+    start_layer = int(start_layer)
+    end_layer = int(end_layer)
+    if end_layer < start_layer:
+        raise RuntimeError(
+            f"invalid layer range: start_layer={start_layer}, end_layer={end_layer}"
+        )
+
+    cur = hidden_in
+    per_layer = []
+
+    dense_prefix_end = min(end_layer, ref.dense_layer_count())
+
+    if start_layer < dense_prefix_end:
+        prefix = ref.run_prefix_segment(
+            cur,
+            start_layer=start_layer,
+            end_layer=dense_prefix_end - 1,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            kv_cache=kv_cache,
+            return_aux=collect_per_layer,
+        )
+        prefix = _normalize_model_exec_result(prefix, "full_model.prefix_segment")
+        cur = prefix.output
+        print_stats(f"layer{dense_prefix_end - 1}_output", cur)
+
+        if collect_per_layer:
+            per_layer.append(
+                {
+                    "segment_type": "prefix",
+                    "start_layer": int(start_layer),
+                    "end_layer": int(dense_prefix_end - 1),
+                    "output": cur.copy(),
+                    "aux": prefix.aux,
+                }
+            )
+
+        next_layer = dense_prefix_end
+    else:
+        next_layer = start_layer
+
+    for layer_id in range(next_layer, end_layer + 1):
+        if ref.is_sparse_layer(layer_id):
+            layer_result = run_sparse_layer(
+                session,
+                cur,
+                layer_id,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                kv_cache=kv_cache,
+                return_aux=collect_per_layer,
+            )
+        else:
+            layer_result = run_dense_layer(
+                session,
+                cur,
+                layer_id,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                kv_cache=kv_cache,
+                return_aux=collect_per_layer,
+            )
+
+        cur = as_f32_1d(
+            layer_result["output"],
+            f"full_model.layer{layer_id}.output",
+        )
+        print_stats(f"layer{layer_id}_output", cur)
+
+        if collect_per_layer:
+            saved = dict(layer_result)
+            saved["output"] = cur.copy()
+            per_layer.append(saved)
+
+    result = {
+        "output": cur,
+        "start_layer": int(start_layer),
+        "end_layer": int(end_layer),
+    }
+    if collect_per_layer:
+        result["per_layer"] = per_layer
+    return result
