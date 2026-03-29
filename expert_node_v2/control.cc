@@ -81,17 +81,13 @@ bool SendEmptyAck(
     return common::SendMessage(fd, resp, std::string());
 }
 
-common::PlacementAck BuildPlacementAckForNode(
+common::PlacementAck BuildPlacementAck(
     const ControlState& state,
     const std::vector<common::PlacementAssignment>& assignments) {
     common::PlacementAck ack{};
     ack.status_code = 0;
 
     for (const auto& a : assignments) {
-        if (a.node_id != state.static_info.node_id) {
-            continue;
-        }
-
         ++ack.num_target_experts;
 
         if (state.registry.FindDeviceStorage(
@@ -104,6 +100,30 @@ common::PlacementAck BuildPlacementAckForNode(
     ack.all_ready = (ack.num_ready_experts == ack.num_target_experts);
     ack.needs_reload = !ack.all_ready;
     return ack;
+}
+
+bool SendPlacementAck(
+    int fd,
+    std::uint32_t request_id,
+    const common::PlacementAck& ack) {
+    std::string body;
+    if (!common::EncodePlacementAck(ack, &body)) {
+        return false;
+    }
+    return SendMessage(fd, common::MsgType::PlacementAck, request_id, body);
+}
+
+bool SendPlacementAckError(
+    int fd,
+    std::uint32_t request_id,
+    std::uint32_t status_code = 1) {
+    common::PlacementAck ack{};
+    ack.status_code = status_code;
+    ack.needs_reload = true;
+    ack.all_ready = false;
+    ack.num_target_experts = 0;
+    ack.num_ready_experts = 0;
+    return SendPlacementAck(fd, request_id, ack);
 }
 
 bool HandleInventoryRequest(
@@ -205,14 +225,7 @@ bool HandlePlacementPlan(
         std::fprintf(stderr,
                      "[%s] failed to decode PlacementPlan\n",
                      state->static_info.node_id.c_str());
-
-        common::PlacementAck ack{};
-        ack.status_code = 1;
-        ack.needs_reload = true;
-        ack.all_ready = false;
-        ack.num_target_experts = 0;
-        ack.num_ready_experts = 0;
-        return SendPlacementAck(fd, req.request_id, ack);
+        return SendPlacementAckError(fd, req.request_id);
     }
 
     for (const auto& a : assignments) {
@@ -221,14 +234,7 @@ bool HandlePlacementPlan(
                          "[%s] invalid expert_id=%d in PlacementPlan\n",
                          state->static_info.node_id.c_str(),
                          a.expert_id);
-
-            common::PlacementAck ack{};
-            ack.status_code = 1;
-            ack.needs_reload = true;
-            ack.all_ready = false;
-            ack.num_target_experts = 0;
-            ack.num_ready_experts = 0;
-            return SendPlacementAck(fd, req.request_id, ack);
+            return SendPlacementAckError(fd, req.request_id);
         }
 
         if (a.worker_id < 0 ||
@@ -238,14 +244,7 @@ bool HandlePlacementPlan(
                          state->static_info.node_id.c_str(),
                          a.worker_id,
                          a.expert_id);
-
-            common::PlacementAck ack{};
-            ack.status_code = 1;
-            ack.needs_reload = true;
-            ack.all_ready = false;
-            ack.num_target_experts = 0;
-            ack.num_ready_experts = 0;
-            return SendPlacementAck(fd, req.request_id, ack);
+            return SendPlacementAckError(fd, req.request_id);
         }
     }
 
@@ -255,24 +254,14 @@ bool HandlePlacementPlan(
                 assignments.size());
 
     common::PlacementAck ack{};
-    ack.status_code = 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        ack = BuildPlacementAck(*state, assignments);
 
-    for (const auto& a : assignments) {
-        ++ack.num_target_experts;
-
-        if (state->registry.FindDeviceStorage(
-                static_cast<int>(a.expert_id),
-                static_cast<int>(a.worker_id)) != nullptr) {
-            ++ack.num_ready_experts;
+        if (ack.needs_reload) {
+            state->registry.clear();
+            state->active_load = ActiveLoad{};
         }
-    }
-
-    ack.all_ready = (ack.num_ready_experts == ack.num_target_experts);
-    ack.needs_reload = !ack.all_ready;
-
-    if (ack.needs_reload) {
-        state->registry.clear();
-        state->active_load = ActiveLoad{};
     }
 
     const bool ok = SendPlacementAck(fd, req.request_id, ack);
