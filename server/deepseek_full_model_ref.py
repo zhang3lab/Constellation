@@ -14,6 +14,16 @@ from server.full_model_ref import (
 )
 
 
+def _rms_norm(hidden: np.ndarray, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    x = as_f32_1d(hidden, "rms_norm.hidden")
+    x_t = torch.from_numpy(x)
+
+    rms = torch.rsqrt(torch.mean(x_t * x_t) + eps)
+    y = x_t * rms
+    y = y * weight
+    return y.to(torch.float32)
+
+
 class DeepseekFullModelRefBase(FullModelRefBase):
     """
     DeepSeek-specific model-structure helpers and default composed segments.
@@ -226,9 +236,10 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
         layer_id = int(layer_id)
      
         model_loader = self.session.get_deepseek_model_loader()
+        norm_weight = model_loader.load_post_attention_layernorm_weight_fp32(layer_id)
         w_up, w_gate, w_down = model_loader.load_dense_ffn_triplet_fp32(layer_id)
      
-        x_t = torch.from_numpy(hidden_in)
+        x_t = _rms_norm(hidden_in, norm_weight)
         up = w_up @ x_t
         gate = w_gate @ x_t
         fused = up * F.silu(gate)
@@ -257,19 +268,20 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
     ) -> ModelExecResult:
         hidden_in = as_f32_1d(hidden_in, "shared_expert.hidden_in")
         layer_id = int(layer_id)
-     
+
         model_loader = self.session.get_deepseek_model_loader()
+        norm_weight = model_loader.load_post_attention_layernorm_weight_fp32(layer_id)
         w_up, w_gate, w_down = model_loader.load_shared_expert_triplet_fp32(layer_id)
-     
-        x_t = torch.from_numpy(hidden_in)
+
+        x_t = _rms_norm(hidden_in, norm_weight)
         up = w_up @ x_t
         gate = w_gate @ x_t
         fused = up * F.silu(gate)
         out = w_down @ fused
-     
+
         out_np = out.to(torch.float32).cpu().numpy()
         out_np = as_f32_1d(out_np, f"shared_expert.layer{layer_id}.output")
-     
+
         aux = {}
         if return_aux:
             aux = {
@@ -277,5 +289,5 @@ class PlaceholderDeepseekFullModelRef(DeepseekFullModelRefBase):
                 "impl": "torch_ref",
                 "layer_id": layer_id,
             }
-     
+
         return ModelExecResult(output=out_np, aux=aux)

@@ -164,3 +164,15 @@ class DeepseekModelLoader:
         w_gate = self.load_tensor_fp32_by_name(f"{base}.gate_proj.weight")
         w_down = self.load_tensor_fp32_by_name(f"{base}.down_proj.weight")
         return w_up, w_gate, w_down
+
+    def load_input_layernorm_weight_fp32(self, layer_id: int):
+        layer_id = int(layer_id)
+        return self.load_tensor_fp32_by_name(
+            f"model.layers.{layer_id}.input_layernorm.weight"
+        )
+
+    def load_post_attention_layernorm_weight_fp32(self, layer_id: int):
+        layer_id = int(layer_id)
+        return self.load_tensor_fp32_by_name(
+            f"model.layers.{layer_id}.post_attention_layernorm.weight"
+        )
