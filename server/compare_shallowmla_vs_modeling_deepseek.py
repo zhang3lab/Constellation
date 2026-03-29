@@ -143,7 +143,6 @@ def main():
         .astype(np.float32, copy=False)
     )
     mask_ref = captured["attention_mask"]   # [1,1,3,3]
-    mask_for_shallow = mask_ref[0, 0].to(device=args.device, dtype=x_prefix_t.dtype)
 
     print(f"[capture] layer_id={layer_id} token_index={tok_idx} seq_len={seq_len}")
     print(f"[capture] x_prefix shape={x_prefix.shape} dtype={x_prefix.dtype}")
@@ -169,6 +168,7 @@ def main():
             .to(device=args.device, dtype=torch.float16)
             .unsqueeze(0)
         )
+        mask_for_shallow = mask_ref[0, 0].to(device=args.device, dtype=x_prefix_t.dtype)
 
         seq_len = int(x_prefix_t.shape[1])
         freq_cis = wrapper.freq_cis[:seq_len]
