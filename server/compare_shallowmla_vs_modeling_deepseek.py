@@ -142,6 +142,8 @@ def main():
         .reshape(-1)
         .astype(np.float32, copy=False)
     )
+    mask_ref = captured["attention_mask"]   # [1,1,3,3]
+    mask_for_shallow = mask_ref[0, 0].to(device=args.device, dtype=x_prefix_t.dtype)
 
     print(f"[capture] layer_id={layer_id} token_index={tok_idx} seq_len={seq_len}")
     print(f"[capture] x_prefix shape={x_prefix.shape} dtype={x_prefix.dtype}")
@@ -176,7 +178,7 @@ def main():
                 x_prefix_t,
                 start_pos=0,
                 freq_cis=freq_cis,
-                mask=None,
+                mask=mask_for_shallow,
             )
 
         y_shallow = (
