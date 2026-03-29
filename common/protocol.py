@@ -264,8 +264,8 @@ def decode_placement_ack(body: bytes) -> dict:
         raise ValueError(f"bad PlacementAck body size: {len(body)}")
 
     status_code = int.from_bytes(body[0:4], "little")
-    needs_reload = body[4] != 0
-    all_ready = body[5] != 0
+    needs_reload = int.from_bytes(body[4:6], "little") != 0
+    all_ready = int.from_bytes(body[6:8], "little") != 0
     num_target_experts = int.from_bytes(body[8:12], "little")
     num_ready_experts = int.from_bytes(body[12:16], "little")
 
