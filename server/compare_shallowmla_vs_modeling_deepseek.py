@@ -1,0 +1,180 @@
+import argparse
+import numpy as np
+import torch
+from pathlib import Path
+
+from server.config import load_config
+from server.control_plane import setup_control_plane
+from server.coordinator import Coordinator
+from server.inference_session import InferenceSession
+from server.partial_model_loader import (
+    build_partial_config,
+    build_config_object,
+    import_deepseek_modules,
+    load_partial_state_dict,
+    strip_model_prefix_for_base_model,
+    get_layers_root,
+)
+from server.shallowmla_adapter import ShallowMLAAttentionWrapper
+from server.test_utils import compare_arrays
+
+
+class CaptureDone(Exception):
+    pass
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--server-config", type=str, required=True)
+    p.add_argument("--prompt", type=str, default="Hello world")
+    p.add_argument("--token-index", type=int, default=-1)
+    p.add_argument("--device", type=str, default="cuda")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    server_cfg = load_config(args.server_config)
+
+    model_root = Path(server_cfg["model"]["root"])
+    layer_id = int(server_cfg["run"]["layer_id"])
+
+    pkg_root = "/root/Constellation/tmp"
+    package_name = "DeepSeek_V3_1"
+
+    config_module, modeling_module = import_deepseek_modules(pkg_root, package_name)
+
+    cfg_dict = build_partial_config(model_root, max_layer_id=layer_id)
+    config = build_config_object(config_module, cfg_dict)
+
+    if not hasattr(modeling_module, "DeepseekV3Model"):
+        raise RuntimeError("DeepseekV3Model not found in modeling_deepseek.py")
+    ModelCls = modeling_module.DeepseekV3Model
+
+    with torch.device("meta"):
+        model = ModelCls(config)
+    model.eval()
+
+    raw_state = load_partial_state_dict(model_root, max_layer_id=layer_id, device=args.device)
+    state = strip_model_prefix_for_base_model(raw_state)
+
+    missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
+    print(f"[partial-load] missing={len(missing)} unexpected={len(unexpected)}")
+    if missing:
+        print("[partial-load] first missing keys:", missing[:20])
+    if unexpected:
+        print("[partial-load] first unexpected keys:", unexpected[:20])
+
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(str(model_root), trust_remote_code=True)
+
+    captured = {}
+
+    def hook_attn_input(module_, inputs):
+        captured["attn_input"] = inputs[0].detach()
+
+    def hook_attn_output(module_, inputs, output):
+        if isinstance(output, tuple):
+            captured["attn_output"] = output[0].detach()
+        else:
+            captured["attn_output"] = output.detach()
+        raise CaptureDone
+
+    layers = get_layers_root(model)
+    attn_mod = layers[layer_id].self_attn
+    h1 = attn_mod.register_forward_pre_hook(hook_attn_input)
+    h2 = attn_mod.register_forward_hook(hook_attn_output)
+
+    enc = tokenizer(args.prompt, return_tensors="pt")
+    enc = {k: v.to(args.device) for k, v in enc.items()}
+
+    try:
+        with torch.no_grad():
+            _ = model(**enc)
+    except CaptureDone:
+        pass
+    finally:
+        h1.remove()
+        h2.remove()
+
+    if "attn_input" not in captured or "attn_output" not in captured:
+        raise RuntimeError("failed to capture attention input/output")
+
+    attn_in = captured["attn_input"]      # [B, S, H]
+    attn_out = captured["attn_output"]    # [B, S, H]
+
+    if attn_in.ndim != 3 or attn_in.shape[0] != 1:
+        raise RuntimeError(f"unexpected attn_input shape: {tuple(attn_in.shape)}")
+    if attn_out.ndim != 3 or attn_out.shape[0] != 1:
+        raise RuntimeError(f"unexpected attn_output shape: {tuple(attn_out.shape)}")
+
+    seq_len = int(attn_in.shape[1])
+    tok_idx = int(args.token_index)
+    if tok_idx < 0:
+        tok_idx = seq_len + tok_idx
+    if tok_idx < 0 or tok_idx >= seq_len:
+        raise RuntimeError(f"token_index out of range: {tok_idx}, seq_len={seq_len}")
+
+    x_prefix = (
+        attn_in[0, : tok_idx + 1]
+        .detach()
+        .cpu()
+        .float()
+        .numpy()
+        .astype(np.float32, copy=False)
+    )
+    y_ref = (
+        attn_out[0, tok_idx]
+        .detach()
+        .cpu()
+        .float()
+        .numpy()
+        .reshape(-1)
+        .astype(np.float32, copy=False)
+    )
+
+    print(f"[capture] layer_id={layer_id} token_index={tok_idx} seq_len={seq_len}")
+    print(f"[capture] x_prefix shape={x_prefix.shape} dtype={x_prefix.dtype}")
+    print(f"[capture] y_ref shape={y_ref.shape} dtype={y_ref.dtype}")
+    print(f"[capture] y_ref[:8]={y_ref[:8]}")
+
+    coord = Coordinator(server_cfg["nodes"])
+    setup_control_plane(coord, server_cfg)
+
+    with InferenceSession(coord, server_cfg) as session:
+        model_loader = session.get_deepseek_model_loader()
+        wrapper = ShallowMLAAttentionWrapper(
+            model_loader=model_loader,
+            layer_id=layer_id,
+            dtype=torch.float32,
+            device=args.device,
+            max_batch_size=1,
+            optim_type="triton",
+        )
+
+        x_prefix_t = (
+            torch.from_numpy(x_prefix)
+            .to(device=args.device, dtype=torch.float32)
+            .unsqueeze(0)
+        )
+
+        with torch.no_grad():
+            y_prefix = wrapper.forward(x_prefix_t, start_pos=0, mask=None)
+
+        y_shallow = (
+            y_prefix[0, -1]
+            .detach()
+            .cpu()
+            .float()
+            .numpy()
+            .reshape(-1)
+            .astype(np.float32, copy=False)
+        )
+
+    compare_arrays("modeling_deepseek_vs_shallowmla", y_ref, y_shallow)
+    print("[ref     ] y[:8] =", y_ref[:8])
+    print("[shallow ] y[:8] =", y_shallow[:8])
+
+
+if __name__ == "__main__":
+    main()
