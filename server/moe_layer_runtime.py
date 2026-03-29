@@ -189,6 +189,70 @@ def route_token_real(
         raise RuntimeError(
             f"bias shape {tuple(e_score_correction_bias.shape)} incompatible with num_experts={num_experts}"
         )
+    if num_experts % n_group != 0:
+        raise RuntimeError(f"num_experts={num_experts} not divisible by n_group={n_group}")
+
+    experts_per_group = num_experts // n_group
+
+    with torch.no_grad():
+        logits = gate_weight @ h
+        scores = torch.sigmoid(logits)
+
+    scores_for_choice = scores + e_score_correction_bias
+
+    if resident_expert_ids is None:
+        resident_mask = torch.ones(num_experts, dtype=torch.bool)
+    else:
+        resident_mask = torch.zeros(num_experts, dtype=torch.bool)
+        for eid in resident_expert_ids:
+            eid = int(eid)
+            if 0 <= eid < num_experts:
+                resident_mask[eid] = True
+
+        allowed = int(resident_mask.sum().item())
+        if allowed == 0:
+            raise RuntimeError("resident_expert_ids produced an empty resident mask")
+
+    scores_for_choice = scores_for_choice.masked_fill(~resident_mask, float("-inf"))
+    scores = scores.masked_fill(~resident_mask, 0.0)
+
+    grouped = scores_for_choice.view(n_group, experts_per_group)
+    top2_per_group = torch.topk(grouped, k=2, dim=-1).values
+    group_scores = top2_per_group.sum(dim=-1)
+
+    selected_group_idx = torch.topk(group_scores, k=topk_group, dim=-1).indices
+
+    group_mask = torch.zeros(n_group, dtype=torch.bool)
+    group_mask[selected_group_idx] = True
+
+    expert_mask = group_mask.unsqueeze(-1).expand(n_group, experts_per_group).reshape(num_experts)
+
+    masked_scores_for_choice = scores_for_choice.masked_fill(~expert_mask, float("-inf"))
+
+    effective_top_k = min(top_k, int(resident_mask.sum().item()))
+    topk_choice_vals, topk_idx = torch.topk(masked_scores_for_choice, k=effective_top_k, dim=-1)
+
+    topk_weight = scores.gather(0, topk_idx)
+
+    if norm_topk_prob and effective_top_k > 1:
+        denom = topk_weight.sum() + 1e-20
+        topk_weight = topk_weight / denom
+
+    topk_weight = topk_weight * routed_scaling_factor
+
+    routes = [(int(eid), float(w)) for eid, w in zip(topk_idx.tolist(), topk_weight.tolist())]
+
+    aux = {
+        "logits": logits.detach().cpu().numpy(),
+        "scores": scores.detach().cpu().numpy(),
+        "scores_for_choice": scores_for_choice.detach().cpu().numpy(),
+        "group_scores": group_scores.detach().cpu().numpy(),
+        "selected_group_idx": selected_group_idx.detach().cpu().numpy(),
+        "topk_idx": topk_idx.detach().cpu().numpy(),
+        "topk_weight": topk_weight.detach().cpu().numpy(),
+        "topk_choice_vals": topk_choice_vals.detach().cpu().numpy(),
+    }
+    return routes, aux
 
 
 def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: bool = False):
