@@ -20,10 +20,12 @@ class ShallowMLAAttentionWrapper:
         max_batch_size: int = 4,
         dtype: torch.dtype = torch.float32,
         device: str = "cuda",
+        optim_type: str = "torch",
     ):
         self.layer_id = int(layer_id)
         self.device = torch.device(device)
         self.dtype = dtype
+        self.optim_type = str(optim_type)
 
         mla_cfg = model_loader.mla_config()
 
@@ -38,7 +40,7 @@ class ShallowMLAAttentionWrapper:
             max_batch_size=max_batch_size,
             max_seq_len=mla_cfg["max_seq_len"],
             dtype=dtype,
-            optim_type="torch",
+            optim_type=self.optim_type,
             eps=1e-6,
             use_page_cache=False,
             use_page_cache_triton=False,
