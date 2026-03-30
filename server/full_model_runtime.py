@@ -188,11 +188,7 @@ def run_sparse_layer(
     if return_aux:
         result["attention_aux"] = attn.aux
         result["shared_expert_aux"] = shared.aux
-        result["routed_aux"] = {
-            "routes": routed.get("routes"),
-            "local_routes": routed.get("local_routes"),
-            "aux": routed.get("aux"),
-        }
+        result["routed_aux"] = routed.get("aux")
         result["post_attention_hidden"] = post_attn_hidden.copy()
         result["ffn_hidden"] = ffn_hidden.copy()
         result["ffn_total"] = ffn_total.copy()

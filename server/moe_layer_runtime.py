@@ -336,15 +336,18 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
     if return_aux:
         return {
             "output": combined,
-            "routes": global_routes,
-            "local_routes": routes,
-            "weighted_outputs": weighted_outputs,
-            "aux": aux,
+            "aux": {
+                **aux,
+                "layer_id": layer_id,
+                "resident_local_expert_ids": resident_local_expert_ids,
+                "routes": global_routes,
+                "local_routes": routes,
+                "weighted_outputs": weighted_outputs,
+            },
         }
 
     return {
         "output": combined,
-        "routes": global_routes,
     }
 
 
