@@ -53,8 +53,6 @@ def load_config(path: str) -> Dict[str, Any]:
             "run.mode must be one of: validation, demo, partial_61layer_debug, full_model_debug"
         )
 
-    if not isinstance(run_cfg.get("layer_id"), int):
-        raise ValueError("run.layer_id must be an integer")
     if not isinstance(run_cfg.get("num_experts"), int):
         raise ValueError("run.num_experts must be an integer")
 
