@@ -1,3 +1,7 @@
+"""
+Compare extracted absorbed-latent reference against ShallowMLA.
+This validates ShallowMLA's absorbed-latent MLA implementation.
+"""
 import argparse
 import numpy as np
 import torch
