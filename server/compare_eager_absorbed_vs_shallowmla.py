@@ -134,9 +134,9 @@ def main():
             ref_state["q_rope"],
             cache_latent,
             cache_k_rope,
-            qk_nope_head_dim=qk_nope_head_dim,
+            kv_lora_rank=kv_lora_rank,
             qk_rope_head_dim=qk_rope_head_dim,
-        ).unsqueeze(1)  # [1,1,H,kv]
+        ).unsqueeze(1)
 
         y_ref_hidden = latent_to_final_hidden(
             y_ref_latent[:, 0],

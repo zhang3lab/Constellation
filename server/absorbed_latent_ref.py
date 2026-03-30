@@ -77,7 +77,7 @@ def eager_absorbed_latent_attention(
     cache_latent: torch.Tensor,
     cache_k_rope: torch.Tensor,
     *,
-    qk_nope_head_dim: int,
+    kv_lora_rank: int,
     qk_rope_head_dim: int,
 ) -> torch.Tensor:
     """
@@ -97,7 +97,7 @@ def eager_absorbed_latent_attention(
         "bhr,tr->bht", q_rope.float(), cache_k_rope.float()
     )
     scores = (scores_latent + scores_rope) / math.sqrt(
-        qk_nope_head_dim + qk_rope_head_dim
+        kv_lora_rank + qk_rope_head_dim
     )
 
     probs = torch.softmax(scores, dim=-1, dtype=torch.float32)
