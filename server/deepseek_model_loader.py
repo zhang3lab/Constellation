@@ -151,21 +151,13 @@ class DeepseekModelLoader:
         expert_id: int,
         tensor_kind: str,
     ) -> Tuple[str, str]:
-        weight_name, shard_path = self.resolve_deepseek_tensor(
+        weight_name, _shard_path = self.resolve_deepseek_tensor(
             layer_id=layer_id,
             expert_id=expert_id,
             tensor_kind=tensor_kind,
         )
         scale_name = weight_name + "_scale_inv"
-        resolved_name, resolved_shard_path = self.resolve_tensor(scale_name)
-
-        if resolved_shard_path != shard_path:
-            raise RuntimeError(
-                f"scale tensor shard mismatch for {scale_name}: "
-                f"{resolved_shard_path} vs {shard_path}"
-            )
-
-        return resolved_name, resolved_shard_path
+        return self.resolve_tensor(scale_name)
 
     @staticmethod
     def load_tensor_from_open_shard(
@@ -196,12 +188,13 @@ class DeepseekModelLoader:
 
             if t.dtype == torch.float8_e4m3fn:
                 scale_name = tensor_name + "_scale_inv"
-                keys = set(f.keys())
-                if scale_name not in keys:
+                if scale_name in self._weight_map:
+                    _, scale_shard_path = self.resolve_tensor(scale_name)
+                    with safe_open(scale_shard_path, framework="pt", device="cpu") as sf:
+                        scale_inv = sf.get_tensor(scale_name).to(torch.float32).contiguous()
+                    t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
+                else:
                     raise RuntimeError(f"missing scale tensor for fp8 weight: {scale_name}")
-
-                scale_inv = f.get_tensor(scale_name).to(torch.float32).contiguous()
-                t = dequant_fp8_weight_blockwise(t, scale_inv).to(torch.float32).contiguous()
             else:
                 t = t.to(torch.float32).contiguous()
 
