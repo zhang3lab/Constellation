@@ -166,11 +166,15 @@ The current implementation is intentionally narrow:
 - `server/expert_inference_validation.py`
 - `server/validation_suite.py`
 - `server/test_utils.py`
+- `server/absorbed_latent_ref.py`: extracted absorbed-latent MLA reference
+- `server/compare_absorbed_ref_vs_shallowmla.py`: reference vs ShallowMLA
+- `server/compare_absorbed_ref_vs_flashmla.py`: reference vs FlashMLA
 
 ### Model utilities
 - `server/model_locator.py`
 - `server/make_model_pkg.py`
 - `server/bootstrap_env.py`
+- `server/shallowmla_adapter.py`
 
 ### Node runtime
 - `expert_node_v2/`
@@ -178,9 +182,14 @@ The current implementation is intentionally narrow:
 ## Environment/bootstrap
 
 A one-shot bootstrap script can:
-- install the flash-attn wheel based on local Python / torch / CUDA version
+- initialize git submodules
+- apply local patches under `third_party/patches/`
 - install `requirements.txt`
 - generate a writable package shell for the model directory
+
+Third-party layout currently includes:
+- `third_party/ShallowMLA/`: git submodule
+- `third_party/patches/ShallowMLA/0001-fix-absorbed-softmax-scale.patch`: local fix for absorbed-latent attention scaling
 
 The generated package is typically placed under:
 - `tmp/DeepSeek_V3_1`
@@ -222,6 +231,8 @@ This version reflects the main cleanup decisions:
 - control and data planes are separated by port
 - tensor metadata is explicit and carried over protocol
 - node-side tensor interpretation uses normalized metadata only
+- MLA comparison scripts were reduced to two reference-based checks only
+- ShallowMLA is treated as a third-party submodule with a small local patch
 - documentation is reduced to one concise runtime note
 
 ## Next likely work

@@ -4,7 +4,13 @@ from typing import Optional
 
 import torch
 
-_SHALLOWMLA_ROOT = Path("/root/ShallowMLA")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SHALLOWMLA_ROOT = _REPO_ROOT / "third_party" / "ShallowMLA"
+_MLA_PY = _SHALLOWMLA_ROOT / "mla.py"
+
+if not _MLA_PY.exists():
+    raise RuntimeError(f"ShallowMLA mla.py not found at {_MLA_PY}")
+
 if str(_SHALLOWMLA_ROOT) not in sys.path:
     sys.path.append(str(_SHALLOWMLA_ROOT))
 
