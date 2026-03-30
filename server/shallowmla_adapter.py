@@ -96,3 +96,20 @@ class ShallowMLAAttentionWrapper:
             freq_cis=freq_cis,
             mask=mask,
         )
+
+    def forward_debug(
+        self,
+        x: torch.Tensor,
+        start_pos: int = 0,
+        mask: Optional[torch.Tensor] = None,
+    ):
+        x = self.rms_norm_input(x)
+        seq_len = int(x.shape[1])
+        freq_cis = self.freq_cis[start_pos:start_pos + seq_len]
+        return self.mla(
+            x,
+            start_pos=start_pos,
+            freq_cis=freq_cis,
+            mask=mask,
+            return_debug=True,
+        )
