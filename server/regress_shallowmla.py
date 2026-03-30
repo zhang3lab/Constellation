@@ -87,7 +87,7 @@ def main():
             dtype=args.dtype,
         )
 
-    if args.include-cache-regression:
+    if args.include_cache_regression:
         run_cache_case(
             model_root=args.model_root,
             layer_id=args.layer_id,
