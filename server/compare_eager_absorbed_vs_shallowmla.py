@@ -227,6 +227,11 @@ def main():
                 y_ref_hidden,
                 y_shallow_hidden,
             )
+            compare_one_debug_tensor(
+                "debug_step0_logits_ref_vs_shallow",
+                ref_logits.unsqueeze(1),         # [1,1,H,T]
+                out_shallow["attn_logits"],      # [1,1,H,T]
+            )
 
         ys_ref_latent.append(y_ref_latent)
         ys_shallow_latent.append(y_shallow_latent)
