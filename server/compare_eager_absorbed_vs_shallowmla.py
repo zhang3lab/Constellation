@@ -22,17 +22,9 @@ class RefAbsorbedLatentCache:
         self.cache_k_rope_list.append(ref_state["cache_k_rope_1tok"].float())
 
     def materialize(self):
-        cache_latent = torch.stack(self.cache_latent_list, dim=0)   # [T, kv]
-        cache_k_rope = torch.stack(self.cache_k_rope_list, dim=0)   # [T, rope]
+        cache_latent = torch.stack(self.cache_latent_list, dim=0)
+        cache_k_rope = torch.stack(self.cache_k_rope_list, dim=0)
         return cache_latent, cache_k_rope
-
-
-def compare_one_debug_tensor(name, a, b):
-    compare_arrays(
-        name,
-        a.detach().float().cpu().numpy(),
-        b.detach().float().cpu().numpy(),
-    )
 
 
 def main():
@@ -53,11 +45,6 @@ def main():
         type=str,
         default="triton",
         choices=["torch", "triton"],
-    )
-    parser.add_argument(
-        "--debug-first-step",
-        action="store_true",
-        help="compare intermediate tensors for decode step 0",
     )
     args = parser.parse_args()
 
@@ -100,7 +87,7 @@ def main():
 
     ref_cache = RefAbsorbedLatentCache()
 
-    # prefill
+    # prefill: populate both ref cache and shallow cache
     for t in range(args.prefill_len):
         x_t = x_all[:, t:t + 1, :]
         freq_t = shallow.freq_cis[t:t + 1].to(device=device, dtype=dtype)
@@ -142,26 +129,14 @@ def main():
         ref_cache.append_from_ref_state(ref_state)
         cache_latent, cache_k_rope = ref_cache.materialize()
 
-        ref_logits = (
-            torch.einsum(
-                "bhk,tk->bht",
-                ref_state["q_nope_absorb"].float(),
-                cache_latent.float(),
-            )
-            + torch.einsum(
-                "bhr,tr->bht",
-                ref_state["q_rope"].float(),
-                cache_k_rope.float(),
-            )
-        ) / ((kv_lora_rank + qk_rope_head_dim) ** 0.5)
-
-        ref_probs = torch.softmax(ref_logits, dim=-1)
-
-        y_ref_latent = torch.einsum(
-            "bht,tk->bhk",
-            ref_probs,
-            cache_latent.float(),
-        ).to(dtype).unsqueeze(1)  # [1,1,H,kv]
+        y_ref_latent = eager_absorbed_latent_attention(
+            ref_state["q_nope_absorb"],
+            ref_state["q_rope"],
+            cache_latent,
+            cache_k_rope,
+            qk_nope_head_dim=qk_nope_head_dim,
+            qk_rope_head_dim=qk_rope_head_dim,
+        ).unsqueeze(1)  # [1,1,H,kv]
 
         y_ref_hidden = latent_to_final_hidden(
             y_ref_latent[:, 0],
@@ -175,63 +150,6 @@ def main():
         out_shallow = shallow.forward_debug(x_step, start_pos=pos)
         y_shallow_latent = out_shallow["latent"]  # [1,1,H,kv]
         y_shallow_hidden = out_shallow["hidden"]  # [1,1,hidden]
-
-        if args.debug_first_step and i == 0:
-            compare_one_debug_tensor(
-                "debug_step0_q_nrope_absorb_ref_vs_shallow",
-                ref_state["q_nope_absorb"].unsqueeze(1),
-                out_shallow["q_nrope_absorb"],
-            )
-            compare_one_debug_tensor(
-                "debug_step0_q_rope_ref_vs_shallow",
-                ref_state["q_rope"].unsqueeze(1),
-                out_shallow["q_rope"],
-            )
-            compare_one_debug_tensor(
-                "debug_step0_kv_latent_curtok_ref_vs_shallow",
-                ref_state["cache_latent_1tok"].view(1, 1, -1),
-                out_shallow["normalized_kv_latent"],
-            )
-            compare_one_debug_tensor(
-                "debug_step0_k_rope_curtok_ref_vs_shallow",
-                ref_state["cache_k_rope_1tok"].view(1, 1, -1),
-                out_shallow["k_rope"],
-            )
-
-            compare_one_debug_tensor(
-                "debug_step0_probs_ref_vs_shallow",
-                ref_probs.unsqueeze(1),      # [1,1,H,T]
-                out_shallow["scores"],       # [1,1,H,T]  (actually probs)
-            )
-
-            if "stacked_kv_latent" in out_shallow:
-                compare_one_debug_tensor(
-                    "debug_step0_full_cache_latent_ref_vs_shallow",
-                    cache_latent.unsqueeze(0),          # [1,T,kv]
-                    out_shallow["stacked_kv_latent"],   # [1,T,kv]
-                )
-            if "stacked_k_rope" in out_shallow:
-                compare_one_debug_tensor(
-                    "debug_step0_full_cache_k_rope_ref_vs_shallow",
-                    cache_k_rope.unsqueeze(0),          # [1,T,rope]
-                    out_shallow["stacked_k_rope"],      # [1,T,rope]
-                )
-
-            compare_one_debug_tensor(
-                "debug_step0_latent_ref_vs_shallow",
-                y_ref_latent,
-                y_shallow_latent,
-            )
-            compare_one_debug_tensor(
-                "debug_step0_final_ref_vs_shallow",
-                y_ref_hidden,
-                y_shallow_hidden,
-            )
-            compare_one_debug_tensor(
-                "debug_step0_logits_ref_vs_shallow",
-                ref_logits.unsqueeze(1),         # [1,1,H,T]
-                out_shallow["attn_logits"],      # [1,1,H,T]
-            )
 
         ys_ref_latent.append(y_ref_latent)
         ys_shallow_latent.append(y_shallow_latent)
