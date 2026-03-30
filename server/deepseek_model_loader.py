@@ -4,6 +4,7 @@ from typing import Dict, Tuple
 
 import torch
 from safetensors import safe_open
+from transformers import AutoTokenizer
 
 from server.fp8_utils import dequant_fp8_weight_blockwise
 
@@ -31,6 +32,7 @@ class DeepseekModelLoader:
         self.model_root = str(model_root)
         self._weight_map = self._load_safetensors_index(self.model_root)
         self._tensor_cache: dict[str, torch.Tensor] = {}
+        self._tokenizer = None
 
     def _load_config_json(self) -> dict:
         config_path = Path(self.model_root) / "config.json"
@@ -49,6 +51,16 @@ class DeepseekModelLoader:
         if cached is None:
             cached = self._load_config_json()
             self._config = cached
+        return cached
+
+    def load_tokenizer(self):
+        cached = self._tokenizer
+        if cached is None:
+            cached = AutoTokenizer.from_pretrained(
+                self.model_root,
+                trust_remote_code=True,
+            )
+            self._tokenizer = cached
         return cached
 
     def router_config(self) -> dict:
@@ -275,3 +287,12 @@ class DeepseekModelLoader:
                 f"model.layers.{layer_id}.self_attn.o_proj.weight"
             ),
         }
+
+    def load_embed_tokens_weight_fp32(self):
+        return self.load_tensor_fp32_by_name("model.embed_tokens.weight")
+
+    def load_norm_weight_fp32(self):
+        return self.load_tensor_fp32_by_name("model.norm.weight")
+
+    def load_lm_head_weight_fp32(self):
+        return self.load_tensor_fp32_by_name("lm_head.weight")

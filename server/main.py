@@ -29,10 +29,12 @@ def run_runtime_demo(coord, cfg):
 
 
 def run_full_model_debug(coord, cfg):
+    import numpy as np
+
     run_cfg = cfg["run"]
 
     start_layer = int(run_cfg.get("start_layer", 0))
-    end_layer = int(run_cfg.get("end_layer", 3))
+    end_layer = int(run_cfg.get("end_layer", 60))
     collect_per_layer = bool(run_cfg.get("collect_per_layer", True))
     prompt = "Hello world"
 
@@ -41,29 +43,42 @@ def run_full_model_debug(coord, cfg):
 
         hidden_size = int(session.get_router_config()["hidden_size"])
 
+        prepared = session.full_model_ref.prepare_prompt_hidden_input(prompt)
+        hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+
+        if hidden.shape != (hidden_size,):
+            raise RuntimeError(
+                f"[full-model] hidden shape mismatch: "
+                f"got={hidden.shape} expected={(hidden_size,)}"
+            )
+
         print(f"[full-model] prompt={prompt!r}")
+        print(f"[full-model] input_ids={prepared['input_ids']}")
         print(
             f"[full-model] start_layer={start_layer} "
             f"end_layer={end_layer} hidden_size={hidden_size}"
         )
-
-        # Temporary placeholder until prompt->embedding path is wired in.
-        hidden = make_safe_input(hidden_size)
 
         result = run_full_model(
             session,
             hidden,
             start_layer=start_layer,
             end_layer=end_layer,
-            position_ids=None,
-            attention_mask=None,
-            kv_cache=None,
+            position_ids=prepared.get("position_ids"),
+            attention_mask=prepared.get("attention_mask"),
+            kv_cache=prepared.get("kv_cache"),
             collect_per_layer=collect_per_layer,
         )
 
-        print("[full-model] output[:8] =", result["output"][:8])
+        out = result["output"]
+        print("[full-model] output[:8] =", out[:8])
+
+        if not np.isfinite(out).all():
+            raise RuntimeError("[full-model] output contains non-finite values")
+
         if collect_per_layer:
-            print(f"[full-model] collected_layers={len(result['per_layer'])}")
+            per_layer = result["per_layer"]
+            print(f"[full-model] collected_layers={len(per_layer)}")
 
 
 def main():

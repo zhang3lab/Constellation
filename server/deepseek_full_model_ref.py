@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from safetensors import safe_open
+from transformers import AutoTokenizer
 
 from server.array_utils import as_f32_1d
 from server.fp8_utils import dequant_fp8_weight_blockwise
@@ -333,3 +334,52 @@ class DeepseekFullModelRef(DeepseekFullModelRefBase):
             }
      
         return ModelExecResult(output=out_np, aux=aux)
+
+
+    def tokenize(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = True,
+        return_tensors: str | None = None,
+    ):
+        model_loader = self.session.get_deepseek_model_loader()
+        tok = model_loader.load_tokenizer()
+        return tok(
+            text,
+            add_special_tokens=add_special_tokens,
+            return_tensors=return_tensors,
+        )
+
+
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = True,
+    ) -> list[int]:
+        model_loader = self.session.get_deepseek_model_loader()
+        tok = model_loader.load_tokenizer()
+        ids = tok.encode(text, add_special_tokens=add_special_tokens)
+        return [int(x) for x in ids]
+
+
+    def prepare_prompt_hidden_input(self, prompt: str) -> dict:
+        input_ids = self.encode(prompt)
+        if not input_ids:
+            raise RuntimeError("prompt encoded to empty input_ids")
+
+        model_loader = self.session.get_deepseek_model_loader()
+        embed = model_loader.load_embed_tokens_weight_fp32()
+
+        last_id = int(input_ids[-1])
+        hidden = embed[last_id].detach().cpu().numpy().astype(np.float32, copy=False)
+
+        return {
+            "prompt": prompt,
+            "input_ids": input_ids,
+            "hidden_in": hidden,
+            "position_ids": None,
+            "attention_mask": None,
+            "kv_cache": None,
+        }
