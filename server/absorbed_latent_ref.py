@@ -99,7 +99,7 @@ def eager_absorbed_latent_attention(
 
     probs = torch.softmax(scores, dim=-1, dtype=torch.float32)
     out = torch.einsum("bht,tk->bhk", probs, cache_latent.float())
-    return out
+    return out.to(q_nope_absorb.dtype)
 
 
 
