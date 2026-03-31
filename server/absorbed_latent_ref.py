@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import torch
 
-from server.full_model_ref import ModelExecResult
+from server.full_model_types import ModelExecResult
 
 
 def rms_norm_t(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:

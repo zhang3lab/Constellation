@@ -1,11 +1,11 @@
 import numpy as np
 
 from server.array_utils import as_f32_1d
-from server.deepseek_full_model_ref import (
+from server.deepseek_full_model_executor import (
     DeepseekFullModelExecutorBase,
     _post_attention_ffn_input,
 )
-from server.full_model_ref import AttentionSharedSegmentResult, ModelExecResult
+from server.full_model_types import AttentionSharedSegmentResult, ModelExecResult
 from server.moe_layer_runtime import run_moe_layer
 from server.test.utils import print_stats
 

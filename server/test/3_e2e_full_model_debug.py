@@ -8,7 +8,7 @@ import torch
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
-from server.deepseek_full_model_ref import DeepseekFullModelExecutor
+from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 from server.test.utils import print_stats

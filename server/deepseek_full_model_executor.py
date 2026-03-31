@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 
 from server.array_utils import as_f32_1d
 from server.fp8_utils import dequant_fp8_weight_blockwise
-from server.full_model_ref import (
+from server.full_model_types import (
     AttentionSharedSegmentResult,
     FullModelRefBase,
     ModelExecResult,
