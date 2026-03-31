@@ -305,8 +305,8 @@ def run_attention_block_ref(
             "layer_id": layer_id,
             "device": dev,
             "start_pos": start_pos,
-            "q_flash": state["q_flash"].detach().cpu().numpy(),
-            "blocked_k_token": state["blocked_k_token"].detach().cpu().numpy(),
+            "q_flash": state["q_flash"].detach().float().cpu().numpy(),
+            "blocked_k_token": state["blocked_k_token"].detach().float().cpu().numpy(),
         }
 
     return ModelExecResult(output=out_np, aux=aux)
