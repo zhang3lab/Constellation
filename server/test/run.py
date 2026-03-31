@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import runpy
+import sys
 from pathlib import Path
 
 
@@ -56,7 +57,12 @@ def main():
 
     for p in tests:
         print(f"=== running {p.name} ===")
-        runpy.run_path(str(p), run_name="__main__")
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = [str(p)]
+            runpy.run_path(str(p), run_name="__main__")
+        finally:
+            sys.argv = old_argv
         print(f"=== passed  {p.name} ===")
 
 
