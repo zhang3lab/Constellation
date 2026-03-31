@@ -13,7 +13,6 @@ from server.full_model_ref import (
     FullModelRefBase,
     ModelExecResult,
 )
-from server.shallowmla_adapter import ShallowMLAAttentionWrapper
 
 
 def _rms_norm(hidden: np.ndarray, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -219,9 +218,11 @@ class DeepseekFullModelRefBase(FullModelRefBase):
         return ModelExecResult(output=cur, aux=aux)
 
 
+
 class DeepseekFullModelRef(DeepseekFullModelRefBase):
     def __init__(self, session):
         self.session = session
+
 
     def run_attention_block(
         self,
@@ -236,38 +237,56 @@ class DeepseekFullModelRef(DeepseekFullModelRefBase):
         hidden_in = as_f32_1d(hidden_in, "attention.hidden_in")
         layer_id = int(layer_id)
      
-        if not hasattr(self, "_shallowmla_by_layer"):
-            self._shallowmla_by_layer = {}
+        if self.session.backbone_store is None:
+            raise RuntimeError("session.backbone_store is not initialized")
+        if self.session.attention_runtime is None:
+            raise RuntimeError("session.attention_runtime is not initialized")
+        if self.session.freq_cis_by_device is None:
+            raise RuntimeError("session.freq_cis_by_device is not initialized")
      
-        wrapper = self._shallowmla_by_layer.get(layer_id)
-        if wrapper is None:
-            model_loader = self.session.get_deepseek_model_loader()
-            wrapper = ShallowMLAAttentionWrapper(
-                model_loader=model_loader,
-                layer_id=layer_id,
-                dtype=torch.float32,
-                device="cuda",
-                max_batch_size=4,
-                optim_type="triton",
-            )
-            self._shallowmla_by_layer[layer_id] = wrapper
+        if kv_cache is None:
+            raise RuntimeError("kv_cache is required for run_attention_block")
      
-        x = torch.from_numpy(hidden_in).to(device="cuda", dtype=torch.float32).view(1, 1, -1)
+        cache_manager = kv_cache[layer_id]
+     
+        layer_entry = self.session.backbone_store.layer(layer_id)
+        dev = str(layer_entry["device"])
+        runtime_dtype = self.session.backbone_store.dtype
+        freq_cis_all = self.session.freq_cis_by_device[dev]
+     
+        x = (
+            torch.from_numpy(hidden_in)
+            .to(device=dev, dtype=runtime_dtype)
+            .view(1, 1, -1)
+        )
+     
         start_pos = 0 if position_ids is None else int(np.asarray(position_ids).reshape(-1)[0])
-        y = wrapper.forward(x, start_pos=start_pos, mask=None)
+        freq_cis = freq_cis_all[start_pos : start_pos + 1]
      
-        out_np = y[0, 0].detach().cpu().numpy().astype(np.float32, copy=False)
+        y = self.session.attention_runtime.forward(
+            x,
+            start_pos=start_pos,
+            freq_cis=freq_cis,
+            weights=layer_entry["attention"],
+            cache_manager=cache_manager,
+            mask=None if attention_mask is None else attention_mask,
+        )
+     
+        out_np = y[0, 0].detach().float().cpu().numpy().astype(np.float32, copy=False)
         out_np = as_f32_1d(out_np, f"attention.layer{layer_id}.output")
      
         aux = {}
         if return_aux:
             aux = {
                 "kind": "attention_block",
-                "impl": "shallowmla",
+                "impl": "mla_runtime_triton",
                 "layer_id": layer_id,
+                "device": dev,
+                "start_pos": start_pos,
             }
      
         return ModelExecResult(output=out_np, aux=aux)
+
 
     def run_dense_ffn_block(
         self,

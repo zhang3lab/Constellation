@@ -219,7 +219,7 @@ def run_full_model(
     cur = hidden_in
     per_layer = []
 
-    dense_prefix_end = min(end_layer, ref.dense_layer_count())
+    dense_prefix_end = min(end_layer + 1, ref.dense_layer_count())
 
     if start_layer < dense_prefix_end:
         prefix = ref.run_prefix_segment(

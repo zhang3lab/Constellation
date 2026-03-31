@@ -32,12 +32,6 @@ def run_full_model_debug(coord, cfg):
     import numpy as np
     import torch
 
-    from server.tensor_cache import MappedTensorStore
-    from server.backbone_store import (
-        TwoGpuLayerPartition,
-        preload_non_moe_backbone,
-    )
-
     run_cfg = cfg["run"]
 
     start_layer = int(run_cfg.get("start_layer", 0))
@@ -48,24 +42,20 @@ def run_full_model_debug(coord, cfg):
     with InferenceSession(coord, cfg) as session:
         session.full_model_ref = DeepseekFullModelRef(session)
 
-        mapped_store = MappedTensorStore("tmp/non_moe_backbone_cache")
-        partition = TwoGpuLayerPartition(split_layer=30)
-
-        session.backbone_store = preload_non_moe_backbone(
-            session,
-            dtype=torch.bfloat16,
-            partition=partition,
-            mapped_store=mapped_store,
+        session.ensure_full_model_runtime(
+            tensor_cache_dir="tmp/non_moe_backbone_cache",
+            split_layer=30,
+            backbone_dtype=torch.bfloat16,
         )
+        session.reset_full_model_kv_cache()
 
         print("cuda:0 allocated GB =", torch.cuda.memory_allocated("cuda:0") / 1024**3)
         print("cuda:1 allocated GB =", torch.cuda.memory_allocated("cuda:1") / 1024**3)
 
-        hidden_size = int(session.get_router_config()["hidden_size"])
-
         prepared = session.full_model_ref.prepare_prompt_hidden_input(prompt)
         hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
 
+        hidden_size = int(session.get_router_config()["hidden_size"])
         if hidden.shape != (hidden_size,):
             raise RuntimeError(
                 f"[full-model] hidden shape mismatch: "
@@ -86,7 +76,7 @@ def run_full_model_debug(coord, cfg):
             end_layer=end_layer,
             position_ids=prepared.get("position_ids"),
             attention_mask=prepared.get("attention_mask"),
-            kv_cache=prepared.get("kv_cache"),
+            kv_cache=session.page_attention_cache_managers,
             collect_per_layer=collect_per_layer,
         )
 
