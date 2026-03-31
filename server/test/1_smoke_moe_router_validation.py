@@ -200,14 +200,21 @@ def run_moe_router_validation(session):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
+    ap.add_argument("--layer-id", type=int, default=None)
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     coord = Coordinator(cfg["nodes"])
     setup_control_plane(coord, cfg)
 
+    layer_id = (
+        int(args.layer_id)
+        if args.layer_id is not None
+        else int(cfg["run"]["sparse_layer_start"])
+    )
+
     with InferenceSession(coord, cfg) as session:
-        run_moe_router_validation(session)
+        run_moe_router_validation(session, layer_id=layer_id)
 
 
 if __name__ == "__main__":
