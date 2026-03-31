@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    { "host": "192.168.0.10", "control_port": 40000 }
+  ],
+  "model": {
+    "family": "deepseek_v3",
+    "root": "/model/ModelScope/deepseek-ai/DeepSeek-V3.1",
+    "chunk_size": 16777216,
+    "expert_mem_bytes": 44050944,
+    "memory_utilization": 0.9
+  },
+  "run": {
+    "mode": "full_model_debug",
+    "num_experts": 464,
+    "restricted_expert_ids": [0, 1, 2, 3, 4, 5, 6, 7],
+    "experts_per_layer": 256,
+    "sparse_layer_start": 3,
+    "sparse_layer_end": 60,
+    "dense_layer_count": 3,
+    "start_layer": 0,
+    "end_layer": 60,
+    "collect_per_layer": true
+  },
+  "kv_cache": {
+    "max_batch_size": 1,
+    "max_seq_len": 256,
+    "page_size": 128,
+    "use_triton": true
+  }
+}
