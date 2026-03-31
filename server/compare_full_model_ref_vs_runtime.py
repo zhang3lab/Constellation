@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from server.config import load_config
+from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.absorbed_latent_ref import run_attention_block_ref
 from server.deepseek_full_model_ref import DeepseekFullModelExecutor
@@ -149,6 +150,7 @@ def main():
 
     cfg = load_config(args.config)
     coord = Coordinator(cfg["nodes"])
+    setup_control_plane(coord, cfg)
 
     with InferenceSession(coord, cfg) as runtime_sess:
         runtime_out = run_runtime_path(
