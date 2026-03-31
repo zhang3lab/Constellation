@@ -166,15 +166,11 @@ The current implementation is intentionally narrow:
 - `server/expert_inference_validation.py`
 - `server/validation_suite.py`
 - `server/test_utils.py`
-- `server/absorbed_latent_ref.py`: extracted absorbed-latent MLA reference
-- `server/compare_absorbed_ref_vs_shallowmla.py`: reference vs ShallowMLA
-- `server/compare_absorbed_ref_vs_flashmla.py`: reference vs FlashMLA
 
 ### Model utilities
 - `server/model_locator.py`
 - `server/make_model_pkg.py`
 - `server/bootstrap_env.py`
-- `server/shallowmla_adapter.py`
 
 ### Node runtime
 - `expert_node_v2/`
@@ -182,14 +178,9 @@ The current implementation is intentionally narrow:
 ## Environment/bootstrap
 
 A one-shot bootstrap script can:
-- initialize git submodules
-- apply local patches under `third_party/patches/`
+- install the flash-attn wheel based on local Python / torch / CUDA version
 - install `requirements.txt`
 - generate a writable package shell for the model directory
-
-Third-party layout currently includes:
-- `third_party/ShallowMLA/`: git submodule
-- `third_party/patches/ShallowMLA/0001-fix-absorbed-softmax-scale.patch`: local fix for absorbed-latent attention scaling
 
 The generated package is typically placed under:
 - `tmp/DeepSeek_V3_1`
@@ -204,6 +195,7 @@ The active config structure is:
 
 ```json
 {
+  "verbose": false,
   "nodes": [
     { "host": "192.168.1.10", "control_port": 40000 },
     { "host": "192.168.1.11", "control_port": 40000 }
@@ -217,11 +209,24 @@ The active config structure is:
   },
   "run": {
     "mode": "validation",
-    "layer_id": 3,
+    "start_layer": 0,
+    "end_layer": 60,
+    "collect_per_layer": true,
+    "experts_per_layer": 256,
+    "sparse_layer_start": 3,
+    "sparse_layer_end": 60,
     "num_experts": 8
+  },
+  "kv_cache": {
+    "max_batch_size": 1,
+    "max_seq_len": 256,
+    "page_size": 128,
+    "use_triton": true
   }
 }
 ```
+
+Tests use a separate config at `server/test/config.json`.
 
 ## What was cleaned up
 
@@ -231,8 +236,6 @@ This version reflects the main cleanup decisions:
 - control and data planes are separated by port
 - tensor metadata is explicit and carried over protocol
 - node-side tensor interpretation uses normalized metadata only
-- MLA comparison scripts were reduced to two reference-based checks only
-- ShallowMLA is treated as a third-party submodule with a small local patch
 - documentation is reduced to one concise runtime note
 
 ## Next likely work
