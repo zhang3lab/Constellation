@@ -402,3 +402,46 @@ class DeepseekFullModelRef(DeepseekFullModelRefBase):
             "attention_mask": None,
             "kv_cache": None,
         }
+
+    def run_final_norm_and_lm_head(
+        self,
+        hidden_in: np.ndarray,
+        *,
+        return_aux: bool = False,
+    ) -> ModelExecResult:
+        hidden_in = as_f32_1d(hidden_in, "final_head.hidden_in")
+     
+        if self.session.backbone_store is None:
+            raise RuntimeError("session.backbone_store is not initialized")
+     
+        norm_w = self.session.backbone_store.model_norm()
+        lm_head_w = self.session.backbone_store.lm_head()
+        dev = str(norm_w.device)
+        runtime_dtype = self.session.backbone_store.dtype
+     
+        x = torch.from_numpy(hidden_in).to(device=dev, dtype=runtime_dtype).view(1, -1)
+     
+        x = torch.nn.functional.rms_norm(
+            x,
+            (x.shape[-1],),
+            norm_w,
+            1e-6,
+        )
+        logits = torch.matmul(x, lm_head_w.t())
+     
+        out_np = logits[0].detach().float().cpu().numpy().astype(np.float32, copy=False)
+     
+        aux = {}
+        if return_aux:
+            aux = {
+                "kind": "final_norm_and_lm_head",
+                "device": dev,
+            }
+     
+        return ModelExecResult(output=out_np, aux=aux)
+
+    def decode_token_ids(self, token_ids) -> list[str]:
+        model_loader = self.session.get_deepseek_model_loader()
+        tokenizer = model_loader.load_tokenizer()
+        ids = [int(x) for x in token_ids]
+        return [tokenizer.decode([x]) for x in ids]

@@ -85,6 +85,23 @@ def run_full_model_debug(coord, cfg):
         out = result["output"]
         print("[full-model] output[:8] =", out[:8])
 
+        logits_result = session.full_model_ref.run_final_norm_and_lm_head(
+            out,
+            return_aux=collect_per_layer,
+        )
+        logits = np.asarray(logits_result.output, dtype=np.float32)
+
+        topk = 10
+        top_ids = np.argsort(logits)[-topk:][::-1]
+        top_vals = logits[top_ids]
+
+        print("[full-model] output[:8] =", out[:8])
+        print("[full-model] logits_top_ids =", top_ids.tolist())
+        print("[full-model] logits_top_vals =", top_vals.tolist())
+
+        top_tokens = session.full_model_ref.decode_token_ids(top_ids.tolist())
+        print("[full-model] logits_top_tokens =", top_tokens)
+
         if not np.isfinite(out).all():
             raise RuntimeError("[full-model] output contains non-finite values")
 
