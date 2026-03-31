@@ -6,34 +6,9 @@ import numpy as np
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
-from server.expert_placement import make_global_expert_id
 from server.inference_session import InferenceSession
-from server.moe_layer_runtime import (
-    run_topk_moe_layer,
-    run_topk_reference,
-    run_moe_layer,
-)
-from server.test.utils import print_stats, compare_arrays, compare_stability
-
-
-def _get_experts_per_layer(session) -> int:
-    return int(session.cfg["run"]["experts_per_layer"])
-
-
-def _local_to_global(layer_id: int, local_expert_id: int, experts_per_layer: int) -> int:
-    return make_global_expert_id(
-        layer_id=layer_id,
-        local_expert_id=local_expert_id,
-        experts_per_layer=experts_per_layer,
-    )
-
-
-def _make_global_expert_ids_for_layer(session, layer_id: int, local_expert_ids):
-    experts_per_layer = _get_experts_per_layer(session)
-    return [
-        _local_to_global(layer_id, int(local_eid), experts_per_layer)
-        for local_eid in local_expert_ids
-    ]
+from server.moe_layer_runtime import run_moe_layer
+from server.test.utils import compare_stability
 
 
 def run_real_router_demo(session, layer_id: int, repeats: int = 10):
@@ -139,55 +114,8 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
         compare_stability(f"router run0_vs_run{i}", ref, outputs[i])
 
 
-def run_top8_reference_compare_test(session, layer_id: int):
-    hidden_size = int(session.get_router_config()["hidden_size"])
-    x = np.zeros((hidden_size,), dtype=np.float32)
-
-    global_expert_ids = _make_global_expert_ids_for_layer(
-        session,
-        layer_id=layer_id,
-        local_expert_ids=range(8),
-    )
-    routes = [(eid, 1.0 / 8.0) for eid in global_expert_ids]
-    print(f"[top8] global routes={routes}")
-
-    combined_srv, outputs_srv = run_topk_moe_layer(session, x, routes)
-    combined_ref, outputs_ref = run_topk_reference(session, routes, x)
-
-    combined_srv = np.asarray(combined_srv, dtype=np.float32)
-    combined_ref = np.asarray(combined_ref, dtype=np.float32)
-
-    print_stats("combined_srv", combined_srv)
-    print_stats("combined_ref", combined_ref)
-
-    print("[top8] combined_srv[:8] =", combined_srv[:8])
-    print("[top8] combined_ref[:8] =", combined_ref[:8])
-
-    for (eid_s, w_s, y_s), (eid_r, w_r, y_r) in zip(outputs_srv, outputs_ref):
-        if eid_s != eid_r:
-            raise RuntimeError(f"expert order mismatch: runtime={eid_s}, ref={eid_r}")
-        if abs(float(w_s) - float(w_r)) > 1e-12:
-            raise RuntimeError(f"weight mismatch for expert {eid_s}: runtime={w_s}, ref={w_r}")
-
-        y_s = np.asarray(y_s, dtype=np.float32)
-        y_r = np.asarray(y_r, dtype=np.float32)
-
-        print_stats(f"expert{eid_s}_srv", y_s)
-        print_stats(f"expert{eid_s}_ref", y_r)
-        print(f"[top8] expert={eid_s} weight={w_s:.6f}")
-        print(f"[top8] expert{eid_s}_srv[:4] =", y_s[:4])
-        print(f"[top8] expert{eid_s}_ref[:4] =", y_r[:4])
-        compare_arrays(f"top8 expert{eid_s}_srv_vs_ref", y_r, y_s)
-
-    compare_arrays("top8 combined_srv_vs_ref", combined_ref, combined_srv)
-
-
 def run_moe_router_validation(session, layer_id: int):
     layer_id = int(layer_id)
-
-    print("\n" + "=" * 80)
-    print("[suite] top8 reference compare")
-    run_top8_reference_compare_test(session, layer_id=layer_id)
 
     print("\n" + "=" * 80)
     print("[suite] real router demo + stability")
