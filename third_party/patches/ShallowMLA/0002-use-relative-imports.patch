@@ -1,0 +1,42 @@
+diff --git a/cache_manager.py b/cache_manager.py
+index 3d6167b..c01a378 100644
+--- a/cache_manager.py
++++ b/cache_manager.py
+@@ -1,7 +1,7 @@
+ import torch
+ import numpy as np
+ from typing import Dict, List, Tuple, Optional, Set
+-from kernel import page_cache_update_kernel, page_cache_retrieve_kernel
++from .kernel import page_cache_update_kernel, page_cache_retrieve_kernel
+ 
+ 
+ class PageAttentionCacheManager:
+@@ -344,4 +344,4 @@ class PageAttentionCacheManager:
+     #     # Implement defragmentation here
+     #     # This is a placeholder for advanced page optimization logic
+         
+-    #     return pages_freed
+\ No newline at end of file
++    #     return pages_freed
+diff --git a/mla.py b/mla.py
+index e6c4d91..8f0204d 100644
+--- a/mla.py
++++ b/mla.py
+@@ -5,8 +5,8 @@ import torch.nn.functional as F
+ import triton.language as tl
+ 
+ from typing import Optional
+-from kernel import fused_qk_attention, fused_apply_rotary_emb, fused_rms_norm, fused_mask_softmax
+-from cache_manager import PageAttentionCacheManager
++from .kernel import fused_qk_attention, fused_apply_rotary_emb, fused_rms_norm, fused_mask_softmax
++from .cache_manager import PageAttentionCacheManager
+ 
+ 
+ def precompute_freqs_cis(
+@@ -540,4 +540,4 @@ if __name__ == "__main__":
+     print("Input shape:", tokens.shape)               # [2, 5]
+     print("Logits shape:", logits.shape)              # [2, vocab_size]
+     assert logits.shape == (batch_size, vocab_size), "Output shape mismatch"
+-    print("Test passed.")
+\ No newline at end of file
++    print("Test passed.")
