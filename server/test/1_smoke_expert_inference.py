@@ -4,7 +4,7 @@ from server.moe_layer_runtime import (
     infer_one_expert,
     run_one_expert_reference,
 )
-from server.test_utils import (
+from server.test.utils import (
     make_safe_input,
     print_stats,
     compare_arrays,

@@ -7,7 +7,7 @@ from server.deepseek_full_model_ref import (
 )
 from server.full_model_ref import AttentionSharedSegmentResult, ModelExecResult
 from server.moe_layer_runtime import run_moe_layer
-from server.test_utils import print_stats
+from server.test.utils import print_stats
 
 
 def _get_full_model_executor(session) -> DeepseekFullModelExecutorBase:

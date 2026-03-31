@@ -13,7 +13,6 @@ from server.expert_placement import (
 )
 from server.expert_placement import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
-from server.test_utils import make_safe_input, print_stats, compare_arrays
 
 
 def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
