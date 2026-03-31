@@ -246,6 +246,8 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
      
         if kv_cache is None:
             raise RuntimeError("kv_cache is required for run_attention_block")
+        if layer_id not in kv_cache:
+            raise RuntimeError(f"kv_cache missing layer {layer_id}")
      
         cache_manager = kv_cache[layer_id]
      
@@ -263,14 +265,27 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         start_pos = 0 if position_ids is None else int(np.asarray(position_ids).reshape(-1)[0])
         freq_cis = freq_cis_all[start_pos : start_pos + 1]
      
-        y = self.session.attention_runtime.forward(
-            x,
-            start_pos=start_pos,
-            freq_cis=freq_cis,
-            weights=layer_entry["attention"],
-            cache_manager=cache_manager,
-            mask=None if attention_mask is None else attention_mask,
-        )
+        if return_aux:
+            y, rt_aux = self.session.attention_runtime.forward(
+                x,
+                start_pos=start_pos,
+                freq_cis=freq_cis,
+                weights=layer_entry["attention"],
+                cache_manager=cache_manager,
+                mask=None if attention_mask is None else attention_mask,
+                return_aux=True,
+            )
+        else:
+            y = self.session.attention_runtime.forward(
+                x,
+                start_pos=start_pos,
+                freq_cis=freq_cis,
+                weights=layer_entry["attention"],
+                cache_manager=cache_manager,
+                mask=None if attention_mask is None else attention_mask,
+                return_aux=False,
+            )
+            rt_aux = {}
      
         out_np = y[0, 0].detach().float().cpu().numpy().astype(np.float32, copy=False)
         out_np = as_f32_1d(out_np, f"attention.layer{layer_id}.output")
@@ -284,6 +299,7 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
                 "device": dev,
                 "start_pos": start_pos,
             }
+            aux.update(rt_aux)
      
         return ModelExecResult(output=out_np, aux=aux)
 
