@@ -182,8 +182,8 @@ def run_top8_reference_compare_test(session, layer_id: int):
     compare_arrays("top8 combined_srv_vs_ref", combined_ref, combined_srv)
 
 
-def run_moe_router_validation(session):
-    layer_id = int(session.cfg["run"]["layer_id"])
+def run_moe_router_validation(session, layer_id: int):
+    layer_id = int(layer_id)
 
     print("\n" + "=" * 80)
     print("[suite] top8 reference compare")
