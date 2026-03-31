@@ -74,6 +74,10 @@ class MLARuntime:
         if cache_manager is None:
             raise RuntimeError("MLARuntime requires external cache_manager")
 
+        if x.device.type != "cuda":
+            raise RuntimeError(f"MLARuntime expects CUDA tensor input, got {x.device}")
+        torch.cuda.set_device(x.device)
+
         batch_size, seq_len, dim = x.shape
         if dim != self.dim:
             raise RuntimeError(f"x last dim mismatch: got={dim} expected={self.dim}")
