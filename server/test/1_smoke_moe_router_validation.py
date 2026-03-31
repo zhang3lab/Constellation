@@ -11,9 +11,13 @@ from server.moe_layer_runtime import run_moe_layer
 from server.test.utils import compare_stability
 
 
+def make_router_test_input(hidden_size: int) -> np.ndarray:
+    return np.linspace(-1e-2, 1e-2, hidden_size, dtype=np.float32)
+
+
 def run_real_router_demo(session, layer_id: int, repeats: int = 10):
     hidden_size = int(session.get_router_config()["hidden_size"])
-    hidden = np.zeros((hidden_size,), dtype=np.float32)
+    hidden = make_router_test_input(hidden_size)
 
     result = run_moe_layer(session, hidden, layer_id, return_aux=True)
     aux = result.get("aux") or {}
@@ -51,7 +55,7 @@ def run_real_router_demo(session, layer_id: int, repeats: int = 10):
 
 def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
     hidden_size = int(session.get_router_config()["hidden_size"])
-    hidden = np.zeros((hidden_size,), dtype=np.float32)
+    hidden = make_router_test_input(hidden_size)
 
     outputs = []
     routes_ref = None
