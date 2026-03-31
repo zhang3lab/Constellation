@@ -14,7 +14,7 @@ from server.test_utils import make_safe_input, print_stats, compare_arrays, comp
 
 
 def _get_experts_per_layer(session) -> int:
-    return int(session.cfg["run"].get("experts_per_layer", 256))
+    return int(session.cfg["run"]["experts_per_layer"])
 
 
 def _local_to_global(layer_id: int, local_expert_id: int, experts_per_layer: int) -> int:

@@ -90,15 +90,16 @@ class InferenceSession:
         tensor_cache_dir: str = "tmp/non_moe_backbone_cache",
         split_layer: int = 30,
         backbone_dtype: torch.dtype = torch.bfloat16,
-        max_batch_size: int = 4,
-        page_size: int = 128,
-        use_page_cache_triton: bool = False,
+        kv_cache_cfg: dict,
     ) -> None:
         if self.backbone_store is not None:
             return
-
+     
+        if not isinstance(kv_cache_cfg, dict):
+            raise RuntimeError("kv_cache_cfg must be a dict")
+     
         self.mapped_tensor_store = MappedTensorStore(tensor_cache_dir)
-
+     
         partition = TwoGpuLayerPartition(split_layer=split_layer)
         self.backbone_store = preload_non_moe_backbone(
             self,
@@ -106,7 +107,7 @@ class InferenceSession:
             partition=partition,
             mapped_store=self.mapped_tensor_store,
         )
-
+     
         mla_cfg = self.backbone_store.mla_cfg
         self.attention_runtime = MLARuntime(
             dim=int(mla_cfg["dim"]),
@@ -119,22 +120,26 @@ class InferenceSession:
             dtype=self.backbone_store.dtype,
             eps=1e-6,
         )
-
+     
         self.page_attention_cache_managers = {}
         self.freq_cis_by_device = {}
-
-        max_seq_len = int(mla_cfg["max_seq_len"])
+     
+        max_batch_size = int(kv_cache_cfg["max_batch_size"])
+        max_seq_len = int(kv_cache_cfg["max_seq_len"])
+        page_size = int(kv_cache_cfg["page_size"])
+        use_page_cache_triton = bool(kv_cache_cfg["use_triton"])
+     
         kv_latent_rank = int(mla_cfg["kv_latent_rank"])
         qk_rope_head_dim = int(mla_cfg["qk_rope_head_dim"])
-
+     
         devices = sorted(
             {str(self.backbone_store.layer(layer_id)["device"]) for layer_id in range(61)}
         )
-
+     
         for dev in devices:
             self.freq_cis_by_device[dev] = precompute_freqs_cis(
                 qk_rope_head_dim=int(mla_cfg["qk_rope_head_dim"]),
-                seq_len=int(mla_cfg["max_seq_len"]),
+                seq_len=max_seq_len,
                 seq_len_train=int(mla_cfg["max_seq_len_train"]),
                 beta_fast=float(mla_cfg["beta_fast"]),
                 beta_slow=float(mla_cfg["beta_slow"]),
@@ -142,12 +147,12 @@ class InferenceSession:
                 rope_factor=float(mla_cfg["rope_factor"]),
                 dtype=self.backbone_store.dtype,
             ).to(dev)
-
+     
         tokens_capacity = max_batch_size * max_seq_len
         num_pages = int(tokens_capacity * 1.1 / page_size)
         if num_pages * page_size < tokens_capacity:
             num_pages += 1
-
+     
         for layer_id in range(61):
             dev = str(self.backbone_store.layer(layer_id)["device"])
             self.page_attention_cache_managers[layer_id] = PageAttentionCacheManager(
@@ -165,24 +170,30 @@ class InferenceSession:
     def reset_full_model_kv_cache(
         self,
         *,
-        max_batch_size: int = 4,
-        page_size: int = 128,
-        use_page_cache_triton: bool = False,
+        kv_cache_cfg: dict,
     ) -> None:
         if self.backbone_store is None:
             self.page_attention_cache_managers = None
             return
-
+     
+        if not isinstance(kv_cache_cfg, dict):
+            raise RuntimeError("kv_cache_cfg must be a dict")
+     
         mla_cfg = self.backbone_store.mla_cfg
-        max_seq_len = int(mla_cfg["max_seq_len"])
+     
+        max_batch_size = int(kv_cache_cfg["max_batch_size"])
+        max_seq_len = int(kv_cache_cfg["max_seq_len"])
+        page_size = int(kv_cache_cfg["page_size"])
+        use_page_cache_triton = bool(kv_cache_cfg["use_triton"])
+     
         kv_latent_rank = int(mla_cfg["kv_latent_rank"])
         qk_rope_head_dim = int(mla_cfg["qk_rope_head_dim"])
-
+     
         tokens_capacity = max_batch_size * max_seq_len
         num_pages = int(tokens_capacity * 1.1 / page_size)
         if num_pages * page_size < tokens_capacity:
             num_pages += 1
-
+     
         self.page_attention_cache_managers = {}
         for layer_id in range(61):
             dev = str(self.backbone_store.layer(layer_id)["device"])

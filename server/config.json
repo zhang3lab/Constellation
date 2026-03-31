@@ -20,5 +20,11 @@
     "start_layer": 0,
     "end_layer": 60,
     "collect_per_layer": true
+  },
+  "kv_cache": {
+    "max_batch_size": 1,
+    "max_seq_len": 256,
+    "page_size": 128,
+    "use_triton": true
   }
 }

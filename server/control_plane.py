@@ -11,9 +11,9 @@ def build_restricted_global_expert_ids(run_cfg):
     if not restricted_local_ids:
         raise RuntimeError("restricted_expert_ids is provided but empty")
 
-    experts_per_layer = int(run_cfg.get("experts_per_layer", 256))
-    sparse_layer_start = int(run_cfg.get("sparse_layer_start", 3))
-    sparse_layer_end = int(run_cfg.get("sparse_layer_end", 60))
+    experts_per_layer = int(run_cfg["experts_per_layer"])
+    sparse_layer_start = int(run_cfg["sparse_layer_start"])
+    sparse_layer_end = int(run_cfg["sparse_layer_end"])
 
     if experts_per_layer <= 0:
         raise RuntimeError(
@@ -86,6 +86,6 @@ def setup_control_plane(coord, cfg):
     coord.preload_all_placed_experts(
         model_loader=model_loader,
         chunk_size=chunk_size,
-        experts_per_layer=int(run_cfg.get("experts_per_layer", 256)),
+        experts_per_layer=int(run_cfg["experts_per_layer"]),
         placement_acks=placement_acks,
     )

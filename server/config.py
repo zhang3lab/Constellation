@@ -3,6 +3,72 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+DEFAULT_RUN = {
+    "mode": "validation",
+    "start_layer": 0,
+    "end_layer": 60,
+    "collect_per_layer": True,
+    "experts_per_layer": 256,
+    "sparse_layer_start": 3,
+    "sparse_layer_end": 60,
+}
+
+DEFAULT_KV_CACHE = {
+    "max_batch_size": 1,
+    "max_seq_len": 256,
+    "page_size": 128,
+    "use_triton": True,
+}
+
+
+def _require_object(obj: dict, key: str) -> dict:
+    value = obj.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"config must contain an object field '{key}'")
+    return value
+
+
+def _require_list(obj: dict, key: str) -> list:
+    value = obj.get(key)
+    if not isinstance(value, list):
+        raise ValueError(f"config must contain a list field '{key}'")
+    return value
+
+
+def _require_nonempty_str(obj: dict, key: str, *, where: str) -> str:
+    value = obj.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{where}.{key} must be a non-empty string")
+    return value
+
+
+def _require_int(obj: dict, key: str, *, where: str) -> int:
+    value = obj.get(key)
+    if not isinstance(value, int):
+        raise ValueError(f"{where}.{key} must be an integer")
+    return value
+
+
+def _require_number(obj: dict, key: str, *, where: str) -> float | int:
+    value = obj.get(key)
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"{where}.{key} must be a number")
+    return value
+
+
+def _merge_defaults(obj: dict, key: str, defaults: dict) -> dict:
+    value = obj.get(key)
+    if value is None:
+        merged = dict(defaults)
+    else:
+        if not isinstance(value, dict):
+            raise ValueError(f"{key} must be an object when provided")
+        merged = dict(defaults)
+        merged.update(value)
+    obj[key] = merged
+    return merged
+
+
 def load_config(path: str) -> Dict[str, Any]:
     p = Path(path)
     with p.open("r", encoding="utf-8") as f:
@@ -11,50 +77,34 @@ def load_config(path: str) -> Dict[str, Any]:
     if not isinstance(obj, dict):
         raise ValueError("config root must be a JSON object")
 
-    nodes = obj.get("nodes")
-    if not isinstance(nodes, list):
-        raise ValueError("config must contain a list field 'nodes'")
-
+    nodes = _require_list(obj, "nodes")
     for i, node in enumerate(nodes):
         if not isinstance(node, dict):
             raise ValueError(f"nodes[{i}] must be an object")
+        _require_nonempty_str(node, "host", where=f"nodes[{i}]")
+        _require_int(node, "control_port", where=f"nodes[{i}]")
 
-        host = node.get("host")
-        control_port = node.get("control_port")
+    model = _require_object(obj, "model")
+    _require_nonempty_str(model, "family", where="model")
+    _require_nonempty_str(model, "root", where="model")
+    _require_int(model, "chunk_size", where="model")
+    _require_int(model, "expert_mem_bytes", where="model")
+    _require_number(model, "memory_utilization", where="model")
 
-        if not isinstance(host, str) or not host:
-            raise ValueError(f"nodes[{i}].host must be a non-empty string")
-        if not isinstance(control_port, int):
-            raise ValueError(f"nodes[{i}].control_port must be an integer")
-
-    model = obj.get("model")
-    if not isinstance(model, dict):
-        raise ValueError("config must contain an object field 'model'")
-
-    if not isinstance(model.get("family"), str) or not model["family"]:
-        raise ValueError("model.family must be a non-empty string")
-    if not isinstance(model.get("root"), str) or not model["root"]:
-        raise ValueError("model.root must be a non-empty string")
-    if not isinstance(model.get("chunk_size"), int):
-        raise ValueError("model.chunk_size must be an integer")
-    if not isinstance(model.get("expert_mem_bytes"), int):
-        raise ValueError("model.expert_mem_bytes must be an integer")
-    if not isinstance(model.get("memory_utilization"), (int, float)):
-        raise ValueError("model.memory_utilization must be a number")
-
-    run_cfg = obj.get("run")
-    if not isinstance(run_cfg, dict):
-        raise ValueError("config must contain an object field 'run'")
-
-    if not isinstance(run_cfg.get("mode"), str) or not run_cfg["mode"]:
-        raise ValueError("run.mode must be a non-empty string")
-    if run_cfg["mode"] not in ("validation", "demo", "partial_61layer_debug", "full_model_debug"):
+    run_cfg = _merge_defaults(obj, "run", DEFAULT_RUN)
+    mode = _require_nonempty_str(run_cfg, "mode", where="run")
+    allowed_modes = {
+        "validation",
+        "demo",
+        "partial_61layer_debug",
+        "full_model_debug",
+    }
+    if mode not in allowed_modes:
         raise ValueError(
             "run.mode must be one of: validation, demo, partial_61layer_debug, full_model_debug"
         )
 
-    if not isinstance(run_cfg.get("num_experts"), int):
-        raise ValueError("run.num_experts must be an integer")
+    _require_int(run_cfg, "num_experts", where="run")
 
     restricted = run_cfg.get("restricted_expert_ids")
     if restricted is not None:
@@ -68,32 +118,47 @@ def load_config(path: str) -> Dict[str, Any]:
                     f"run.restricted_expert_ids[{i}] must be >= 0, got {x}"
                 )
 
-    experts_per_layer = run_cfg.get("experts_per_layer")
-    if experts_per_layer is not None:
-        if not isinstance(experts_per_layer, int):
-            raise ValueError("run.experts_per_layer must be an integer when provided")
-        if experts_per_layer <= 0:
-            raise ValueError("run.experts_per_layer must be > 0")
+    experts_per_layer = _require_int(run_cfg, "experts_per_layer", where="run")
+    if experts_per_layer <= 0:
+        raise ValueError("run.experts_per_layer must be > 0")
 
-    sparse_layer_start = run_cfg.get("sparse_layer_start")
-    sparse_layer_end = run_cfg.get("sparse_layer_end")
+    sparse_layer_start = _require_int(run_cfg, "sparse_layer_start", where="run")
+    sparse_layer_end = _require_int(run_cfg, "sparse_layer_end", where="run")
 
-    if sparse_layer_start is not None:
-        if not isinstance(sparse_layer_start, int):
-            raise ValueError("run.sparse_layer_start must be an integer when provided")
-        if sparse_layer_start < 0:
-            raise ValueError("run.sparse_layer_start must be >= 0")
+    if sparse_layer_start < 0:
+        raise ValueError("run.sparse_layer_start must be >= 0")
+    if sparse_layer_end < 0:
+        raise ValueError("run.sparse_layer_end must be >= 0")
+    if sparse_layer_end < sparse_layer_start:
+        raise ValueError("run.sparse_layer_end must be >= run.sparse_layer_start")
 
-    if sparse_layer_end is not None:
-        if not isinstance(sparse_layer_end, int):
-            raise ValueError("run.sparse_layer_end must be an integer when provided")
-        if sparse_layer_end < 0:
-            raise ValueError("run.sparse_layer_end must be >= 0")
+    start_layer = _require_int(run_cfg, "start_layer", where="run")
+    end_layer = _require_int(run_cfg, "end_layer", where="run")
+    if start_layer < 0:
+        raise ValueError("run.start_layer must be >= 0")
+    if end_layer < 0:
+        raise ValueError("run.end_layer must be >= 0")
+    if end_layer < start_layer:
+        raise ValueError("run.end_layer must be >= run.start_layer")
 
-    if sparse_layer_start is not None and sparse_layer_end is not None:
-        if sparse_layer_end < sparse_layer_start:
-            raise ValueError(
-                "run.sparse_layer_end must be >= run.sparse_layer_start"
-            )
+    collect_per_layer = run_cfg.get("collect_per_layer")
+    if not isinstance(collect_per_layer, bool):
+        raise ValueError("run.collect_per_layer must be a boolean")
+
+    kv_cache = _merge_defaults(obj, "kv_cache", DEFAULT_KV_CACHE)
+    max_batch_size = _require_int(kv_cache, "max_batch_size", where="kv_cache")
+    max_seq_len = _require_int(kv_cache, "max_seq_len", where="kv_cache")
+    page_size = _require_int(kv_cache, "page_size", where="kv_cache")
+
+    use_triton = kv_cache.get("use_triton")
+    if not isinstance(use_triton, bool):
+        raise ValueError("kv_cache.use_triton must be a boolean")
+
+    if max_batch_size <= 0:
+        raise ValueError("kv_cache.max_batch_size must be > 0")
+    if max_seq_len <= 0:
+        raise ValueError("kv_cache.max_seq_len must be > 0")
+    if page_size <= 0:
+        raise ValueError("kv_cache.page_size must be > 0")
 
     return obj

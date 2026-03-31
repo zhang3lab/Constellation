@@ -34,20 +34,22 @@ def run_full_model_debug(coord, cfg):
 
     run_cfg = cfg["run"]
 
-    start_layer = int(run_cfg.get("start_layer", 0))
-    end_layer = int(run_cfg.get("end_layer", 60))
-    collect_per_layer = bool(run_cfg.get("collect_per_layer", True))
+    start_layer = int(run_cfg["start_layer"])
+    end_layer = int(run_cfg["end_layer"])
+    collect_per_layer = bool(run_cfg["collect_per_layer"])
     prompt = "Hello world"
 
     with InferenceSession(coord, cfg) as session:
         session.full_model_ref = DeepseekFullModelRef(session)
 
+        kv_cache_cfg = cfg["kv_cache"]
         session.ensure_full_model_runtime(
             tensor_cache_dir="tmp/non_moe_backbone_cache",
             split_layer=30,
             backbone_dtype=torch.bfloat16,
+            kv_cache_cfg = kv_cache_cfg
         )
-        session.reset_full_model_kv_cache()
+        session.reset_full_model_kv_cache(kv_cache_cfg = kv_cache_cfg)
 
         print("cuda:0 allocated GB =", torch.cuda.memory_allocated("cuda:0") / 1024**3)
         print("cuda:1 allocated GB =", torch.cuda.memory_allocated("cuda:1") / 1024**3)
@@ -97,7 +99,7 @@ def main():
     coord = Coordinator(cfg["nodes"])
     setup_control_plane(coord, cfg)
 
-    mode = str(cfg["run"].get("mode", "validation"))
+    mode = str(cfg["run"]["mode"])
     if mode == "validation":
         run_runtime_validation(coord, cfg)
     elif mode == "demo":

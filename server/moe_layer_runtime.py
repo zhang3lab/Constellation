@@ -281,7 +281,7 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
             f"hidden size mismatch: got={hidden.shape[0]} expected={hidden_size}"
         )
 
-    experts_per_layer = int(session.cfg["run"].get("experts_per_layer", 256))
+    experts_per_layer = int(session.cfg["run"]["experts_per_layer"])
 
     restricted_local_ids = session.cfg["run"].get("restricted_expert_ids")
     if restricted_local_ids is not None:
