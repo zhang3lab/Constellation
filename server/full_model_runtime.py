@@ -2,7 +2,7 @@ import numpy as np
 
 from server.array_utils import as_f32_1d
 from server.deepseek_full_model_ref import (
-    DeepseekFullModelRefBase,
+    DeepseekFullModelExecutorBase,
     _post_attention_ffn_input,
 )
 from server.full_model_ref import AttentionSharedSegmentResult, ModelExecResult
@@ -10,10 +10,10 @@ from server.moe_layer_runtime import run_moe_layer
 from server.test_utils import print_stats
 
 
-def _get_full_model_ref(session) -> DeepseekFullModelRefBase:
-    ref = getattr(session, "full_model_ref", None)
+def _get_full_model_executor(session) -> DeepseekFullModelExecutorBase:
+    ref = getattr(session, "full_model_executor", None)
     if ref is None:
-        raise RuntimeError("session.full_model_ref is not initialized")
+        raise RuntimeError("session.full_model_executor is not initialized")
     return ref
 
 
@@ -60,7 +60,7 @@ def run_dense_layer(
     kv_cache=None,
     return_aux: bool = False,
 ):
-    ref = _get_full_model_ref(session)
+    ref = _get_full_model_executor(session)
     hidden_in = as_f32_1d(hidden_in, f"dense_layer{layer_id}.input")
 
     attn = ref.run_attention_block(
@@ -116,7 +116,7 @@ def run_sparse_layer(
     kv_cache=None,
     return_aux: bool = False,
 ):
-    ref = _get_full_model_ref(session)
+    ref = _get_full_model_executor(session)
     hidden_in = as_f32_1d(hidden_in, f"sparse_layer{layer_id}.input")
 
     attn = ref.run_attention_block(
@@ -206,7 +206,7 @@ def run_full_model(
     kv_cache=None,
     collect_per_layer: bool = False,
 ):
-    ref = _get_full_model_ref(session)
+    ref = _get_full_model_executor(session)
     hidden_in = as_f32_1d(hidden_in, "full_model.input")
 
     start_layer = int(start_layer)

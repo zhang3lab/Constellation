@@ -64,7 +64,7 @@ class InferenceSession:
         self.client_pool = SessionClientPool()
 
         self.deepseek_model_loader = None
-        self.full_model_ref = None
+        self.full_model_executor = None
 
         self.mapped_tensor_store = None
         self.backbone_store = None
@@ -219,7 +219,7 @@ class InferenceSession:
                 pass
 
         self.deepseek_model_loader = None
-        self.full_model_ref = None
+        self.full_model_executor = None
 
         self.mapped_tensor_store = None
         self.backbone_store = None

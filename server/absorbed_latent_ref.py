@@ -1,12 +1,14 @@
 import math
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
+import numpy as np
 import torch
+
+from server.full_model_ref import ModelExecResult
 
 
 def rms_norm_t(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return torch.nn.functional.rms_norm(x, (x.shape[-1],), weight, eps)
-
 
 
 def apply_rope_1tok(x: torch.Tensor, freq_cis_1tok: torch.Tensor) -> torch.Tensor:
@@ -19,7 +21,6 @@ def apply_rope_1tok(x: torch.Tensor, freq_cis_1tok: torch.Tensor) -> torch.Tenso
     yi = xr * ci + xi * cr
     y = torch.stack([yr, yi], dim=-1).reshape(*x.shape[:-1], x.shape[-1])
     return y.to(x.dtype)
-
 
 
 def build_one_token_q_and_cache_entry(
@@ -70,7 +71,6 @@ def build_one_token_q_and_cache_entry(
     return q_nope_absorb, q_rope, q_flash, blocked_k
 
 
-
 def eager_absorbed_latent_attention(
     q_nope_absorb: torch.Tensor,
     q_rope: torch.Tensor,
@@ -105,7 +105,6 @@ def eager_absorbed_latent_attention(
     return out.to(q_nope_absorb.dtype)
 
 
-
 def split_blocked_k(
     blocked_k_token: torch.Tensor,
     *,
@@ -123,7 +122,6 @@ def split_blocked_k(
     if x.dim() == 3:
         x = x[0, 0]
     return x[:kv_lora_rank], x[kv_lora_rank:]
-
 
 
 def latent_to_final_hidden(
@@ -146,7 +144,6 @@ def latent_to_final_hidden(
     value_heads = torch.einsum("bhk,hvk->bhv", latent_out, kv_up_v)
     value_flat = value_heads.reshape(1, num_heads * v_head_dim)
     return value_flat @ ws["o_proj"].t()
-
 
 
 def build_ref_state_for_one_token(
@@ -200,3 +197,116 @@ def build_ref_state_for_one_token(
         "cache_k_rope_1tok": cache_k_rope_1tok,
     }
 
+
+def _cache_manager_to_dense_cache(
+    cache_manager,
+    *,
+    batch_idx: int,
+    end_pos: int,
+    device: torch.device | str,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    cache_latent, cache_k_rope = cache_manager.retrieve(
+        batch_idx=batch_idx,
+        start_pos=0,
+        end_pos=end_pos,
+    )
+    return (
+        cache_latent.to(device=device, dtype=dtype),
+        cache_k_rope.to(device=device, dtype=dtype),
+    )
+
+
+def run_attention_block_ref(
+    session,
+    hidden_in: np.ndarray,
+    layer_id: int,
+    *,
+    position_ids=None,
+    attention_mask=None,
+    kv_cache=None,
+    return_aux: bool = False,
+) -> ModelExecResult:
+    del attention_mask  # single-token causal path for now
+
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+    if session.freq_cis_by_device is None:
+        raise RuntimeError("session.freq_cis_by_device is not initialized")
+    if kv_cache is None:
+        raise RuntimeError("kv_cache is required for run_attention_block_ref")
+
+    layer_id = int(layer_id)
+    layer_entry = session.backbone_store.layer(layer_id)
+    ws = layer_entry["attention"]
+    dev = str(layer_entry["device"])
+    runtime_dtype = session.backbone_store.dtype
+    mla_cfg = session.backbone_store.mla_cfg
+
+    x = torch.from_numpy(
+        np.asarray(hidden_in, dtype=np.float32).reshape(-1)
+    ).to(device=dev, dtype=runtime_dtype).view(1, 1, -1)
+
+    start_pos = 0 if position_ids is None else int(np.asarray(position_ids).reshape(-1)[0])
+    freq_t = session.freq_cis_by_device[dev][start_pos : start_pos + 1]
+
+    state = build_ref_state_for_one_token(
+        x,
+        ws,
+        num_heads=int(mla_cfg["num_heads"]),
+        kv_lora_rank=int(mla_cfg["kv_latent_rank"]),
+        qk_nope_head_dim=int(mla_cfg["qk_nrope_head_dim"]),
+        qk_rope_head_dim=int(mla_cfg["qk_rope_head_dim"]),
+        v_head_dim=int(mla_cfg["v_head_dim"]),
+        freq_t=freq_t,
+    )
+
+    cache_manager = kv_cache[layer_id]
+    cache_manager.update(
+        batch_idx=0,
+        start_pos=start_pos,
+        kv_latent=state["cache_latent_1tok"].view(1, -1),
+        k_rope=state["cache_k_rope_1tok"].view(1, -1),
+    )
+
+    cache_latent, cache_k_rope = _cache_manager_to_dense_cache(
+        cache_manager,
+        batch_idx=0,
+        end_pos=start_pos + 1,
+        device=dev,
+        dtype=runtime_dtype,
+    )
+
+    latent_out = eager_absorbed_latent_attention(
+        state["q_nope_absorb"],
+        state["q_rope"],
+        cache_latent,
+        cache_k_rope,
+        kv_lora_rank=int(mla_cfg["kv_latent_rank"]),
+        qk_rope_head_dim=int(mla_cfg["qk_rope_head_dim"]),
+    )
+
+    out = latent_to_final_hidden(
+        latent_out,
+        ws,
+        num_heads=int(mla_cfg["num_heads"]),
+        kv_lora_rank=int(mla_cfg["kv_latent_rank"]),
+        qk_nope_head_dim=int(mla_cfg["qk_nrope_head_dim"]),
+        v_head_dim=int(mla_cfg["v_head_dim"]),
+    )
+
+    out_np = out[0].detach().float().cpu().numpy().astype(np.float32, copy=False)
+
+    aux: dict[str, Any] = {}
+    if return_aux:
+        aux = {
+            "kind": "attention_block",
+            "impl": "absorbed_latent_ref",
+            "layer_id": layer_id,
+            "device": dev,
+            "start_pos": start_pos,
+            "q_flash": state["q_flash"].detach().cpu().numpy(),
+            "blocked_k_token": state["blocked_k_token"].detach().cpu().numpy(),
+        }
+
+    return ModelExecResult(output=out_np, aux=aux)

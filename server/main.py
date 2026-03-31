@@ -1,7 +1,7 @@
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
-from server.deepseek_full_model_ref import DeepseekFullModelRef
+from server.deepseek_full_model_ref import DeepseekFullModelExecutor
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 from server.moe_layer_runtime import run_moe_layer
@@ -40,7 +40,7 @@ def run_full_model_debug(coord, cfg):
     prompt = "Hello world"
 
     with InferenceSession(coord, cfg) as session:
-        session.full_model_ref = DeepseekFullModelRef(session)
+        session.full_model_executor = DeepseekFullModelExecutor(session)
 
         kv_cache_cfg = cfg["kv_cache"]
         session.ensure_full_model_runtime(
@@ -54,7 +54,7 @@ def run_full_model_debug(coord, cfg):
         print("cuda:0 allocated GB =", torch.cuda.memory_allocated("cuda:0") / 1024**3)
         print("cuda:1 allocated GB =", torch.cuda.memory_allocated("cuda:1") / 1024**3)
 
-        prepared = session.full_model_ref.prepare_prompt_hidden_input(prompt)
+        prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
         hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
 
         hidden_size = int(session.get_router_config()["hidden_size"])
@@ -85,7 +85,7 @@ def run_full_model_debug(coord, cfg):
         out = result["output"]
         print("[full-model] output[:8] =", out[:8])
 
-        logits_result = session.full_model_ref.run_final_norm_and_lm_head(
+        logits_result = session.full_model_executor.run_final_norm_and_lm_head(
             out,
             return_aux=collect_per_layer,
         )
@@ -99,7 +99,7 @@ def run_full_model_debug(coord, cfg):
         print("[full-model] logits_top_ids =", top_ids.tolist())
         print("[full-model] logits_top_vals =", top_vals.tolist())
 
-        top_tokens = session.full_model_ref.decode_token_ids(top_ids.tolist())
+        top_tokens = session.full_model_executor.decode_token_ids(top_ids.tolist())
         print("[full-model] logits_top_tokens =", top_tokens)
 
         if not np.isfinite(out).all():

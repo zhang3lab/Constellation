@@ -42,7 +42,7 @@ def _post_attention_ffn_input(
     return y
 
 
-class DeepseekFullModelRefBase(FullModelRefBase):
+class DeepseekFullModelExecutorBase(FullModelRefBase):
     """
     DeepSeek-specific model-structure helpers and default composed segments.
 
@@ -219,7 +219,7 @@ class DeepseekFullModelRefBase(FullModelRefBase):
 
 
 
-class DeepseekFullModelRef(DeepseekFullModelRefBase):
+class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
     def __init__(self, session):
         self.session = session
 
