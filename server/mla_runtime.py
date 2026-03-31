@@ -97,7 +97,7 @@ class MLARuntime:
             self.eps,
         )
 
-        q_latent = torch.matmul(x, weights["q_a_proj"].t())
+        q_latent = torch.matmul(x_norm, weights["q_a_proj"].t())
         q_latent = fused_rms_norm(
             q_latent,
             (q_latent.shape[-1],),
@@ -112,7 +112,7 @@ class MLARuntime:
         )
         q_rope = fused_apply_rotary_emb(q_rope, freq_cis)
      
-        kv_down = torch.matmul(x, weights["kv_a_proj_with_mqa"].t())
+        kv_down = torch.matmul(x_norm, weights["kv_a_proj_with_mqa"].t())
         kv_latent, k_rope = kv_down.split(
             [self.kv_latent_rank, self.qk_rope_head_dim], dim=-1
         )
