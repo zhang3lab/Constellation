@@ -3,6 +3,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+DEFAULT_ROOT = {
+    "verbose": False,
+}
+
 DEFAULT_RUN = {
     "mode": "validation",
     "start_layer": 0,
@@ -76,6 +80,13 @@ def load_config(path: str) -> Dict[str, Any]:
 
     if not isinstance(obj, dict):
         raise ValueError("config root must be a JSON object")
+
+    merged_root = dict(DEFAULT_ROOT)
+    merged_root.update(obj)
+    obj = merged_root
+
+    if not isinstance(obj["verbose"], bool):
+        raise ValueError("verbose must be a boolean")
 
     nodes = _require_list(obj, "nodes")
     for i, node in enumerate(nodes):

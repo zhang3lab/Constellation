@@ -17,6 +17,12 @@ from server.inference_session import InferenceSession
 from server.test.utils import compare_arrays, print_stats
 
 
+FULL_MODEL_LAYER_COS_MIN = 0.9998
+FULL_MODEL_FINAL_COS_MIN = 0.9998
+FULL_MODEL_FINAL_MEAN_ABS_MAX = 0.08
+FULL_MODEL_FINAL_MAX_ABS_MAX = 1.0
+
+
 class DeepseekFullModelReference(DeepseekFullModelExecutor):
     def run_attention_block(
         self,
@@ -188,14 +194,89 @@ def main():
     common_layers = sorted(set(rt_layers.keys()) & set(rf_layers.keys()))
     print(f"[compare] common_layers={common_layers}")
 
+    last_layer_metrics = None
+
     for layer_id in common_layers:
-        print_stats(f"runtime.layer{layer_id}_output", rt_layers[layer_id])
-        print_stats(f"ref.layer{layer_id}_output", rf_layers[layer_id])
-        compare_arrays(
-            f"layer{layer_id}_output",
-            rf_layers[layer_id],
-            rt_layers[layer_id],
+        rt = np.asarray(rt_layers[layer_id], dtype=np.float32).reshape(-1)
+        rf = np.asarray(rf_layers[layer_id], dtype=np.float32).reshape(-1)
+     
+        print_stats(f"runtime.layer{layer_id}_output", rt)
+        print_stats(f"ref.layer{layer_id}_output", rf)
+        compare_arrays(f"layer{layer_id}_output", rf, rt)
+     
+        diff = np.abs(rf - rt)
+        mean_abs = float(diff.mean())
+        max_abs = float(diff.max())
+        cos = float(
+            np.dot(rf, rt) / (np.linalg.norm(rf) * np.linalg.norm(rt) + 1e-12)
         )
+     
+        assert cos >= FULL_MODEL_LAYER_COS_MIN, (
+            f"layer{layer_id} cosine too low: got={cos:.8f} "
+            f"expected>={FULL_MODEL_LAYER_COS_MIN:.8f}"
+        )
+     
+        if layer_id == common_layers[-1]:
+            last_layer_metrics = {
+                "layer_id": layer_id,
+                "mean_abs": mean_abs,
+                "max_abs": max_abs,
+                "cos": cos,
+            }
+
+    if last_layer_metrics is None:
+        raise RuntimeError("no common per-layer outputs found for regression check")
+
+    assert last_layer_metrics["cos"] >= FULL_MODEL_FINAL_COS_MIN, (
+        f"final layer cosine too low: "
+        f"layer={last_layer_metrics['layer_id']} "
+        f"got={last_layer_metrics['cos']:.8f} "
+        f"expected>={FULL_MODEL_FINAL_COS_MIN:.8f}"
+    )
+
+    assert last_layer_metrics["mean_abs"] <= FULL_MODEL_FINAL_MEAN_ABS_MAX, (
+        f"final layer mean_abs too high: "
+        f"layer={last_layer_metrics['layer_id']} "
+        f"got={last_layer_metrics['mean_abs']:.6e} "
+        f"expected<={FULL_MODEL_FINAL_MEAN_ABS_MAX:.6e}"
+    )
+
+    assert last_layer_metrics["max_abs"] <= FULL_MODEL_FINAL_MAX_ABS_MAX, (
+        f"final layer max_abs too high: "
+        f"layer={last_layer_metrics['layer_id']} "
+        f"got={last_layer_metrics['max_abs']:.6e} "
+        f"expected<={FULL_MODEL_FINAL_MAX_ABS_MAX:.6e}"
+    )
+
+    print(
+        "[regress] full_model passed: "
+        f"final_layer={last_layer_metrics['layer_id']} "
+        f"cos={last_layer_metrics['cos']:.8f} "
+        f"mean_abs={last_layer_metrics['mean_abs']:.6e} "
+        f"max_abs={last_layer_metrics['max_abs']:.6e}"
+    )
+
+    rf_final = np.asarray(ref_out["final_hidden"], dtype=np.float32).reshape(-1)
+    rt_final = np.asarray(runtime_out["final_hidden"], dtype=np.float32).reshape(-1)
+    final_diff = np.abs(rf_final - rt_final)
+    final_mean_abs = float(final_diff.mean())
+    final_max_abs = float(final_diff.max())
+    final_cos = float(
+        np.dot(rf_final, rt_final) / (np.linalg.norm(rf_final) * np.linalg.norm(rt_final) + 1e-12)
+    )
+
+    assert final_cos >= FULL_MODEL_FINAL_COS_MIN, (
+        f"final_hidden cosine too low: got={final_cos:.8f} "
+        f"expected>={FULL_MODEL_FINAL_COS_MIN:.8f}"
+    )
+    assert final_mean_abs <= FULL_MODEL_FINAL_MEAN_ABS_MAX, (
+        f"final_hidden mean_abs too high: got={final_mean_abs:.6e} "
+        f"expected<={FULL_MODEL_FINAL_MEAN_ABS_MAX:.6e}"
+    )
+    assert final_max_abs <= FULL_MODEL_FINAL_MAX_ABS_MAX, (
+        f"final_hidden max_abs too high: got={final_max_abs:.6e} "
+        f"expected<={FULL_MODEL_FINAL_MAX_ABS_MAX:.6e}"
+    )
 
 
 if __name__ == "__main__":

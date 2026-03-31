@@ -79,7 +79,8 @@ def setup_control_plane(coord, cfg):
         for p, eid in zip(coord.placements, preload_expert_ids):
             p["expert_id"] = int(eid)
 
-    coord.print_placement()
+    if cfg["verbose"]:
+        coord.print_placement()
     placement_acks = coord.send_placement_plan()
 
     model_loader = DeepseekModelLoader(model_root)
