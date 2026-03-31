@@ -5,7 +5,7 @@ from typing import Dict, Tuple
 
 import torch
 
-from mla import PageAttentionCacheManager, precompute_freqs_cis
+from third_party.ShallowMLA.mla import PageAttentionCacheManager, precompute_freqs_cis
 
 from server.backbone_store import (
     TwoGpuLayerPartition,

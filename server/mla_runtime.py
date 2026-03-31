@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 import triton.language as tl
 
-from mla import (
+from third_party.ShallowMLA.mla import (
     fused_apply_rotary_emb,
     fused_mask_softmax,
     fused_qk_attention,
