@@ -30,6 +30,13 @@ def run_runtime_demo(coord, cfg):
 
 def run_full_model_debug(coord, cfg):
     import numpy as np
+    import torch
+
+    from server.tensor_cache import MappedTensorStore
+    from server.backbone_store import (
+        TwoGpuLayerPartition,
+        preload_non_moe_backbone,
+    )
 
     run_cfg = cfg["run"]
 
@@ -40,6 +47,19 @@ def run_full_model_debug(coord, cfg):
 
     with InferenceSession(coord, cfg) as session:
         session.full_model_ref = DeepseekFullModelRef(session)
+
+        mapped_store = MappedTensorStore("tmp/non_moe_backbone_cache")
+        partition = TwoGpuLayerPartition(split_layer=30)
+
+        session.backbone_store = preload_non_moe_backbone(
+            session,
+            dtype=torch.bfloat16,
+            partition=partition,
+            mapped_store=mapped_store,
+        )
+
+        print("cuda:0 allocated GB =", torch.cuda.memory_allocated("cuda:0") / 1024**3)
+        print("cuda:1 allocated GB =", torch.cuda.memory_allocated("cuda:1") / 1024**3)
 
         hidden_size = int(session.get_router_config()["hidden_size"])
 
