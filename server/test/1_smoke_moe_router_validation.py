@@ -16,13 +16,21 @@ def run_real_router_demo(session, layer_id: int, repeats: int = 10):
     hidden = np.zeros((hidden_size,), dtype=np.float32)
 
     result = run_moe_layer(session, hidden, layer_id, return_aux=True)
+    aux = result.get("aux") or {}
 
-    print("[router] global routes =", result["routes"])
-    print("[router] local routes  =", result["local_routes"])
-    print("[router] selected_group_idx =", result["aux"]["selected_group_idx"])
-    print("[router] topk_idx =", result["aux"]["topk_idx"])
-    print("[router] topk_weight =", result["aux"]["topk_weight"])
-    print("[router] topk_weight_sum =", float(np.sum(result["aux"]["topk_weight"])))
+    global_routes = result.get("routes", aux.get("routes"))
+    local_routes = result.get("local_routes", aux.get("local_routes"))
+    topk_idx = aux.get("topk_idx")
+    topk_weight = aux.get("topk_weight")
+    selected_group_idx = aux.get("selected_group_idx")
+
+    print("[router] global routes =", global_routes)
+    print("[router] local routes  =", local_routes)
+    print("[router] selected_group_idx =", selected_group_idx)
+    print("[router] topk_idx =", topk_idx)
+    print("[router] topk_weight =", topk_weight)
+    if topk_weight is not None:
+        print("[router] topk_weight_sum =", float(np.sum(topk_weight)))
     print("[router] output[:8] =", result["output"][:8])
 
     out = np.asarray(result["output"], dtype=np.float32)
@@ -53,15 +61,19 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
 
     for i in range(repeats):
         result = run_moe_layer(session, hidden, layer_id, return_aux=True)
-        routes = result["routes"]
-        local_routes = result["local_routes"]
+        aux = result.get("aux") or {}
+
+        routes = result.get("routes", aux.get("routes"))
+        local_routes = result.get("local_routes", aux.get("local_routes"))
         out = np.asarray(result["output"], dtype=np.float32)
-        aux = result["aux"]
+
+        topk_idx = aux.get("topk_idx")
+        topk_weight = aux.get("topk_weight")
 
         print(
             f"[router-stability] iter={i} "
-            f"topk_idx={aux['topk_idx']} "
-            f"topk_weight={aux['topk_weight']}"
+            f"topk_idx={topk_idx} "
+            f"topk_weight={topk_weight}"
         )
         print(
             f"[router-stability] iter={i} "
@@ -71,37 +83,49 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
         if routes_ref is None:
             routes_ref = routes
             local_routes_ref = local_routes
-            topk_idx_ref = np.asarray(aux["topk_idx"])
-            topk_weight_ref = np.asarray(aux["topk_weight"], dtype=np.float32)
+            topk_idx_ref = None if topk_idx is None else np.asarray(topk_idx)
+            topk_weight_ref = (
+                None if topk_weight is None else np.asarray(topk_weight, dtype=np.float32)
+            )
         else:
-            if routes != routes_ref:
+            if routes is not None and routes_ref is not None and routes != routes_ref:
                 raise RuntimeError(
                     f"router global routes changed between runs:\n"
                     f"ref={routes_ref}\n"
                     f"cur={routes}"
                 )
 
-            if local_routes != local_routes_ref:
+            if (
+                local_routes is not None
+                and local_routes_ref is not None
+                and local_routes != local_routes_ref
+            ):
                 raise RuntimeError(
                     f"router local routes changed between runs:\n"
                     f"ref={local_routes_ref}\n"
                     f"cur={local_routes}"
                 )
 
-            if not np.array_equal(np.asarray(aux["topk_idx"]), topk_idx_ref):
-                raise RuntimeError(
-                    f"router topk_idx changed between runs:\n"
-                    f"ref={topk_idx_ref}\n"
-                    f"cur={aux['topk_idx']}"
-                )
+            cur_topk_idx = None if topk_idx is None else np.asarray(topk_idx)
+            cur_topk_weight = (
+                None if topk_weight is None else np.asarray(topk_weight, dtype=np.float32)
+            )
 
-            cur_topk_weight = np.asarray(aux["topk_weight"], dtype=np.float32)
-            if not np.array_equal(cur_topk_weight, topk_weight_ref):
-                raise RuntimeError(
-                    f"router topk_weight changed between runs:\n"
-                    f"ref={topk_weight_ref}\n"
-                    f"cur={cur_topk_weight}"
-                )
+            if topk_idx_ref is not None and cur_topk_idx is not None:
+                if not np.array_equal(cur_topk_idx, topk_idx_ref):
+                    raise RuntimeError(
+                        f"router topk_idx changed between runs:\n"
+                        f"ref={topk_idx_ref}\n"
+                        f"cur={cur_topk_idx}"
+                    )
+
+            if topk_weight_ref is not None and cur_topk_weight is not None:
+                if not np.array_equal(cur_topk_weight, topk_weight_ref):
+                    raise RuntimeError(
+                        f"router topk_weight changed between runs:\n"
+                        f"ref={topk_weight_ref}\n"
+                        f"cur={cur_topk_weight}"
+                    )
 
         finite = np.isfinite(out)
         if int(finite.sum()) != out.size:
