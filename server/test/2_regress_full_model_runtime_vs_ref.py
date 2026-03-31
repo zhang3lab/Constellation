@@ -14,7 +14,7 @@ from server.deepseek_full_model_ref import DeepseekFullModelExecutor
 from server.full_model_ref import ModelExecResult
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
-from server.test_utils import compare_arrays, print_stats
+from server.test.utils import compare_arrays, print_stats
 
 
 class DeepseekFullModelReference(DeepseekFullModelExecutor):
