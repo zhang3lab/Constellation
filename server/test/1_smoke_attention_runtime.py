@@ -13,7 +13,7 @@ from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
 from server.inference_session import InferenceSession
-from server.test.utils import compare_arrays, print_stats
+from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
 class DeepseekFullModelReference(DeepseekFullModelExecutor):

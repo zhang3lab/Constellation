@@ -8,7 +8,7 @@ from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.inference_session import InferenceSession
 from server.moe_layer_runtime import run_moe_layer
-from server.test.utils import compare_stability
+from server.test.utils import compare_stability, to_numpy_f32
 
 
 def make_router_test_input(hidden_size: int) -> np.ndarray:

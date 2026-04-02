@@ -14,7 +14,7 @@ from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
-from server.test.utils import compare_arrays, print_stats
+from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
 FULL_MODEL_LAYER_COS_MIN = 0.9998

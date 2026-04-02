@@ -9,7 +9,7 @@ from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.inference_session import InferenceSession
-from server.test.utils import compare_arrays, print_stats
+from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
 def main():
