@@ -154,6 +154,7 @@ class InferenceSession:
                 device=dev,
                 dtype=self.backbone_store.dtype,
             )
+        print(self.freq_cis_by_device.keys())
 
 
     def ensure_full_model_runtime(
