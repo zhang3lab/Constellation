@@ -47,9 +47,9 @@ def main():
         hidden = prepared["hidden_in"]
 
         hidden_size = int(session.get_router_config()["hidden_size"])
-        if hidden.shape != (hidden_size,):
+        if tuple(hidden.shape) != (hidden_size,):
             raise RuntimeError(
-                f"[e2e] hidden shape mismatch: got={hidden.shape} expected={(hidden_size,)}"
+                f"[e2e] hidden shape mismatch: got={tuple(hidden.shape)} expected={(hidden_size,)}"
             )
 
         print(f"[e2e] prompt={args.prompt!r}")
@@ -70,14 +70,15 @@ def main():
             collect_per_layer=collect_per_layer,
         )
 
-        out = to_numpy_f32(result["output"])
+        out_t = result["output"]
+        out = to_numpy_f32(out_t)
         print_stats("e2e.final_hidden", out)
 
         if not np.isfinite(out).all():
             raise RuntimeError("[e2e] final hidden contains non-finite values")
 
         logits_result = session.full_model_executor.run_final_norm_and_lm_head(
-            out,
+            out_t,
             return_aux=False,
         )
         logits = to_numpy_f32(logits_result.output)
