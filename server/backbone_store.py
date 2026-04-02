@@ -108,6 +108,23 @@ class BackboneLoadPlan:
             lm_head=off,
         )
 
+    @staticmethod
+    def attention_only(
+        *,
+        attention_dtype: torch.dtype = torch.float32,
+        embed_dtype: torch.dtype = torch.float32,
+    ) -> "BackboneLoadPlan":
+        off = LoadSpec(False, torch.bfloat16)
+        return BackboneLoadPlan(
+            attention=LoadSpec(True, attention_dtype),
+            dense_prefix=off,
+            shared_expert=off,
+            router=off,
+            embed=LoadSpec(True, embed_dtype),
+            norm=off,
+            lm_head=off,
+        )
+
 
 class BackboneStore:
     def __init__(self, *, mla_cfg: dict, dtype: torch.dtype, partition: LayerPartition):

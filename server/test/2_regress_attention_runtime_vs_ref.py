@@ -165,9 +165,9 @@ def main():
         ref_sess.backbone_store = preload_non_moe_backbone(
             ref_sess,
             mapped_store=MappedTensorStore("tmp/non_moe_backbone_cache"),
-            plan=BackboneLoadPlan.full(
-                default_dtype=torch.float32,
-                router_dtype=torch.float32,
+            plan=BackboneLoadPlan.attention_only(
+                attention_dtype=torch.float32,
+                embed_dtype=torch.float32,
             ),
         )
         ref_sess.ensure_freq_cis_for_full_model_runtime()
