@@ -68,6 +68,7 @@ class LoadSpec:
 
 @dataclass(frozen=True)
 class BackboneLoadPlan:
+    runtime_dtype: torch.dtype
     attention: LoadSpec
     dense_prefix: LoadSpec
     shared_expert: LoadSpec
@@ -85,6 +86,7 @@ class BackboneLoadPlan:
         layer_ids: set[int] | frozenset[int] | None = None,
     ) -> "BackboneLoadPlan":
         return BackboneLoadPlan(
+            runtime_dtype=default_dtype,
             attention=LoadSpec(True, default_dtype),
             dense_prefix=LoadSpec(True, default_dtype),
             shared_expert=LoadSpec(True, default_dtype),
@@ -103,6 +105,7 @@ class BackboneLoadPlan:
     ) -> "BackboneLoadPlan":
         off = LoadSpec(False, torch.bfloat16)
         return BackboneLoadPlan(
+            runtime_dtype=torch.float32,
             attention=off,
             dense_prefix=off,
             shared_expert=off,
@@ -122,6 +125,7 @@ class BackboneLoadPlan:
     ) -> "BackboneLoadPlan":
         off = LoadSpec(False, torch.bfloat16)
         return BackboneLoadPlan(
+            runtime_dtype=torch.float32,
             attention=LoadSpec(True, attention_dtype),
             dense_prefix=off,
             shared_expert=off,
@@ -139,6 +143,7 @@ class BackboneLoadPlan:
     ) -> "BackboneLoadPlan":
         off = LoadSpec(False, torch.bfloat16)
         return BackboneLoadPlan(
+            runtime_dtype=torch.float32,
             attention=off,
             dense_prefix=LoadSpec(True, torch.float32),
             shared_expert=off,
@@ -230,7 +235,7 @@ def preload_non_moe_backbone(
     # store.dtype 代表主 hidden/runtime dtype；router 可单独是 fp32
     store = BackboneStore(
         mla_cfg=model_loader.mla_config(),
-        dtype=plan.attention.dtype,
+        dtype=plan.runtime_dtype,
         partition=partition,
     )
 
