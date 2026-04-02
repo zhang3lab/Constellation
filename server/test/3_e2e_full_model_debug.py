@@ -44,7 +44,7 @@ def main():
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
         prepared = session.full_model_executor.prepare_prompt_hidden_input(args.prompt)
-        hidden = to_numpy_f32(prepared["hidden_in"])
+        hidden = prepared["hidden_in"]
 
         hidden_size = int(session.get_router_config()["hidden_size"])
         if hidden.shape != (hidden_size,):

@@ -72,7 +72,7 @@ def run_runtime_path(
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = to_numpy_f32(prepared["hidden_in"])
+    hidden = prepared["hidden_in"]
 
     result = run_full_model(
         session,
@@ -119,7 +119,7 @@ def run_reference_path(
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = to_numpy_f32(prepared["hidden_in"])
+    hidden = prepared["hidden_in"]
 
     result = run_full_model(
         session,
