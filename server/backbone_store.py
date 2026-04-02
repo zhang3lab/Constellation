@@ -272,7 +272,7 @@ def preload_non_moe_backbone(
                 mapped_store=mapped_store,
             )
      
-        if need_attention or need_dense_prefix or need_shared_expert:
+        if need_attention or need_dense_prefix or need_shared_expert or need_router:
             entry["post_attention_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.post_attention_layernorm.weight",
                 device=dev,
