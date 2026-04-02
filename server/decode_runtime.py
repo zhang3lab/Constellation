@@ -5,6 +5,17 @@ import numpy as np
 from server.full_model_runtime import run_full_model
 
 
+def infer_prompt_last_position(self, prepared: dict) -> int:
+    prepared_pos = prepared.get("position_ids")
+    if prepared_pos is not None:
+        return int(np.asarray(prepared_pos).reshape(-1)[0])
+
+    input_ids = prepared.get("input_ids")
+    if input_ids is None:
+        raise RuntimeError("prepared prompt data missing input_ids")
+    return len(input_ids) - 1
+
+
 def run_decode(
     session,
     *,
@@ -32,7 +43,7 @@ def run_decode(
 
     prompt_token_ids = [int(x) for x in prepared["input_ids"]]
     generated_ids = list(prompt_token_ids)
-    current_pos = int(np.asarray(prepared["position_ids"]).reshape(-1)[0])
+    current_pos = executor.infer_prompt_last_position(prepared)
 
     per_step = []
 

@@ -400,6 +400,18 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
 
 
     def prepare_prompt_hidden_input(self, prompt: str) -> dict:
+        """
+        Prepare prompt-side inputs for full-model execution.
+
+        Return value guarantees:
+        - prepared["hidden_in"]: np.ndarray for the last prompt token input hidden
+        - prepared["input_ids"]: token ids of the prompt
+
+        Optional fields:
+        - prepared["position_ids"]: may be None; callers may fall back to len(input_ids) - 1
+        - prepared["attention_mask"]: may be None
+        - prepared["kv_cache"]: may be None
+        """
         input_ids = self.encode(prompt)
         if not input_ids:
             raise RuntimeError("prompt encoded to empty input_ids")
@@ -418,6 +430,7 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
             "attention_mask": None,
             "kv_cache": None,
         }
+
 
     def run_final_norm_and_lm_head(
         self,
