@@ -366,6 +366,14 @@ def run_full_model(
         layer_entry = session.backbone_store.layer(layer_id)
         layer_dev = str(layer_entry["device"])
 
+        if not isinstance(cur, torch.Tensor):
+            raise TypeError(
+                f"full_model.layer{layer_id}.input expected torch.Tensor, got {type(cur).__name__}"
+            )
+
+        if str(cur.device) != layer_dev:
+            cur = cur.to(device=layer_dev)
+
         cur = as_array(
             cur,
             f"full_model.layer{layer_id}.input",
