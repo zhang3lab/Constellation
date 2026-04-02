@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from server.backbone_store import BackboneLoadPlan, preload_non_moe_backbone
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
