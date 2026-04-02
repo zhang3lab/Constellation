@@ -7,6 +7,17 @@ import torch
 from server.full_model_types import ModelExecResult
 
 
+def _to_numpy_f32_1d(x, name: str) -> np.ndarray:
+    if isinstance(x, torch.Tensor):
+        arr = x.detach().cpu().float().numpy()
+    else:
+        arr = np.asarray(x, dtype=np.float32)
+    arr = np.asarray(arr, dtype=np.float32).reshape(-1)
+    if not np.all(np.isfinite(arr)):
+        raise RuntimeError(f"{name} contains non-finite values")
+    return arr
+
+
 def rms_norm_t(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return torch.nn.functional.rms_norm(x, (x.shape[-1],), weight, eps)
 
@@ -243,9 +254,18 @@ def run_attention_block_ref(
     runtime_dtype = session.backbone_store.dtype
     mla_cfg = session.backbone_store.mla_cfg
 
-    x = torch.from_numpy(
-        np.asarray(hidden_in, dtype=np.float32).reshape(-1)
-    ).to(device=dev, dtype=runtime_dtype).view(1, 1, -1)
+    if isinstance(hidden_in, torch.Tensor):
+        x0 = hidden_in.detach()
+        if x0.ndim != 1:
+            raise RuntimeError(f"run_attention_block_ref hidden_in must be 1D, got shape={tuple(x0.shape)}")
+        if not torch.all(torch.isfinite(x0)).item():
+            raise RuntimeError("run_attention_block_ref hidden_in contains non-finite values")
+        x = x0.to(device=dev, dtype=runtime_dtype).view(1, 1, -1)
+    else:
+        hidden_np = np.asarray(hidden_in, dtype=np.float32).reshape(-1)
+        if not np.all(np.isfinite(hidden_np)):
+            raise RuntimeError("run_attention_block_ref hidden_in contains non-finite values")
+        x = torch.as_tensor(hidden_np, device=dev, dtype=runtime_dtype).view(1, 1, -1)
 
     start_pos = 0 if position_ids is None else int(np.asarray(position_ids).reshape(-1)[0])
     freq_t = session.freq_cis_by_device[dev][start_pos : start_pos + 1]
