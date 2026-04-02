@@ -169,6 +169,19 @@ def main():
         )
 
     with InferenceSession(coord, cfg) as ref_sess:
+        ref_sess.full_model_executor = DeepseekFullModelExecutor(ref_sess)
+     
+        ref_sess.backbone_store = preload_non_moe_backbone(
+            ref_sess,
+            mapped_store=MappedTensorStore("tmp/non_moe_backbone_cache"),
+            plan=BackboneLoadPlan.full(
+                default_dtype=torch.float32,
+                router_dtype=torch.float32,
+            ),
+        )
+     
+        ref_sess.ensure_freq_cis_for_full_model_runtime()
+     
         ref_out = run_reference_path(
             ref_sess,
             prompt=args.prompt,

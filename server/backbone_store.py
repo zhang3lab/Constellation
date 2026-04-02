@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import torch
 
 
@@ -57,6 +58,55 @@ class ExplicitLayerPartition(LayerPartition):
 
     def lm_head_device(self) -> str:
         return self._lm_head_device
+
+
+@dataclass(frozen=True)
+class LoadSpec:
+    enabled: bool
+    dtype: torch.dtype
+
+
+@dataclass(frozen=True)
+class BackboneLoadPlan:
+    attention: LoadSpec
+    dense_prefix: LoadSpec
+    shared_expert: LoadSpec
+    router: LoadSpec
+    embed: LoadSpec
+    norm: LoadSpec
+    lm_head: LoadSpec
+
+    @staticmethod
+    def full(
+        *,
+        default_dtype: torch.dtype = torch.bfloat16,
+        router_dtype: torch.dtype = torch.float32,
+    ) -> "BackboneLoadPlan":
+        return BackboneLoadPlan(
+            attention=LoadSpec(True, default_dtype),
+            dense_prefix=LoadSpec(True, default_dtype),
+            shared_expert=LoadSpec(True, default_dtype),
+            router=LoadSpec(True, router_dtype),
+            embed=LoadSpec(True, default_dtype),
+            norm=LoadSpec(True, default_dtype),
+            lm_head=LoadSpec(True, default_dtype),
+        )
+
+    @staticmethod
+    def router_only(
+        *,
+        router_dtype: torch.dtype = torch.float32,
+    ) -> "BackboneLoadPlan":
+        off = LoadSpec(False, torch.bfloat16)
+        return BackboneLoadPlan(
+            attention=off,
+            dense_prefix=off,
+            shared_expert=off,
+            router=LoadSpec(True, router_dtype),
+            embed=off,
+            norm=off,
+            lm_head=off,
+        )
 
 
 class BackboneStore:
@@ -124,31 +174,29 @@ def _load_gpu_tensor(
 def preload_non_moe_backbone(
     session,
     *,
-    dtype: torch.dtype = torch.bfloat16,
     partition: LayerPartition | None = None,
     mapped_store=None,
-    load_attention: bool = True,
-    load_dense_prefix: bool = True,
-    load_shared_expert: bool = True,
-    load_router: bool = True,
-    load_embed_head: bool = True,
+    plan: BackboneLoadPlan | None = None,
 ) -> BackboneStore:
     model_loader = session.get_deepseek_model_loader()
     if partition is None:
         partition = TwoGpuLayerPartition(split_layer=30)
+    if plan is None:
+        plan = BackboneLoadPlan.full()
 
+    # store.dtype 代表主 hidden/runtime dtype；router 可单独是 fp32
     store = BackboneStore(
         mla_cfg=model_loader.mla_config(),
-        dtype=dtype,
+        dtype=plan.attention.dtype,
         partition=partition,
     )
 
-    if load_embed_head:
+    if plan.embed.enabled:
         store.set_embed_tokens(
             _load_gpu_tensor(
                 "model.embed_tokens.weight",
                 device=partition.embed_device(),
-                dtype=dtype,
+                dtype=plan.embed.dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )
@@ -160,18 +208,18 @@ def preload_non_moe_backbone(
             "device": dev,
         }
 
-        if load_attention:
+        if plan.attention.enabled:
             entry["input_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.input_layernorm.weight",
                 device=dev,
-                dtype=dtype,
+                dtype=plan.attention.dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )
             entry["post_attention_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.post_attention_layernorm.weight",
                 device=dev,
-                dtype=dtype,
+                dtype=plan.attention.dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )
@@ -179,124 +227,124 @@ def preload_non_moe_backbone(
                 "input_layernorm": _load_gpu_tensor(
                     f"model.layers.{layer_id}.input_layernorm.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "q_a_proj": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.q_a_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "q_a_layernorm": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.q_a_layernorm.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "q_b_proj": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.q_b_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "kv_a_proj_with_mqa": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.kv_a_proj_with_mqa.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "kv_a_layernorm": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.kv_a_layernorm.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "kv_b_proj": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.kv_b_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "o_proj": _load_gpu_tensor(
                     f"model.layers.{layer_id}.self_attn.o_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.attention.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
             }
 
-        if load_dense_prefix and layer_id < 3:
+        if plan.dense_prefix.enabled and layer_id < 3:
             entry["dense_ffn"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.up_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.dense_prefix.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "w_gate": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.gate_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.dense_prefix.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "w_down": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.down_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.dense_prefix.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
             }
 
-        if load_shared_expert and layer_id >= 3:
+        if plan.shared_expert.enabled and layer_id >= 3:
             entry["shared_expert"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.shared_experts.up_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.shared_expert.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "w_gate": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.shared_experts.gate_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.shared_expert.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "w_down": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.shared_experts.down_proj.weight",
                     device=dev,
-                    dtype=dtype,
+                    dtype=plan.shared_expert.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
             }
 
-        if load_router and layer_id >= 3:
+        if plan.router.enabled and layer_id >= 3:
             entry["router"] = {
                 "gate_weight": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.gate.weight",
                     device=dev,
-                    dtype=torch.float32,
+                    dtype=plan.router.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
                 "e_score_correction_bias": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.gate.e_score_correction_bias",
                     device=dev,
-                    dtype=torch.float32,
+                    dtype=plan.router.dtype,
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
@@ -304,21 +352,23 @@ def preload_non_moe_backbone(
 
         store.set_layer(layer_id, entry)
 
-    if load_embed_head:
+    if plan.norm.enabled:
         store.set_model_norm(
             _load_gpu_tensor(
                 "model.norm.weight",
                 device=partition.final_norm_device(),
-                dtype=dtype,
+                dtype=plan.norm.dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )
         )
+
+    if plan.lm_head.enabled:
         store.set_lm_head(
             _load_gpu_tensor(
                 "lm_head.weight",
                 device=partition.lm_head_device(),
-                dtype=dtype,
+                dtype=plan.lm_head.dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )

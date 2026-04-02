@@ -251,24 +251,31 @@ def run_attention_block_ref(
     layer_entry = session.backbone_store.layer(layer_id)
     ws = layer_entry["attention"]
     dev = str(layer_entry["device"])
-    runtime_dtype = session.backbone_store.dtype
     mla_cfg = session.backbone_store.mla_cfg
+
+    ref_dtype = torch.float32
 
     if isinstance(hidden_in, torch.Tensor):
         x0 = hidden_in.detach()
         if x0.ndim != 1:
-            raise RuntimeError(f"run_attention_block_ref hidden_in must be 1D, got shape={tuple(x0.shape)}")
+            raise RuntimeError(
+                f"run_attention_block_ref hidden_in must be 1D, got shape={tuple(x0.shape)}"
+            )
         if not torch.all(torch.isfinite(x0)).item():
             raise RuntimeError("run_attention_block_ref hidden_in contains non-finite values")
-        x = x0.to(device=dev, dtype=runtime_dtype).view(1, 1, -1)
+        x = x0.to(device=dev, dtype=ref_dtype).view(1, 1, -1)
     else:
         hidden_np = np.asarray(hidden_in, dtype=np.float32).reshape(-1)
         if not np.all(np.isfinite(hidden_np)):
             raise RuntimeError("run_attention_block_ref hidden_in contains non-finite values")
-        x = torch.as_tensor(hidden_np, device=dev, dtype=runtime_dtype).view(1, 1, -1)
+        x = torch.as_tensor(hidden_np, device=dev, dtype=ref_dtype).view(1, 1, -1)
 
     start_pos = 0 if position_ids is None else int(np.asarray(position_ids).reshape(-1)[0])
+
     freq_t = session.freq_cis_by_device[dev][start_pos : start_pos + 1]
+    if not isinstance(freq_t, torch.Tensor):
+        raise TypeError(f"freq_t expected torch.Tensor, got {type(freq_t).__name__}")
+    freq_t = freq_t.to(dtype=ref_dtype)
 
     state = build_ref_state_for_one_token(
         x,
@@ -294,7 +301,7 @@ def run_attention_block_ref(
         batch_idx=0,
         end_pos=start_pos + 1,
         device=dev,
-        dtype=runtime_dtype,
+        dtype=ref_dtype,
     )
 
     latent_out = eager_absorbed_latent_attention(
@@ -316,6 +323,10 @@ def run_attention_block_ref(
     )
 
     out_t = out[0]
+    if not isinstance(out_t, torch.Tensor):
+        raise TypeError(
+            f"run_attention_block_ref output expected torch.Tensor, got {type(out_t).__name__}"
+        )
 
     aux: dict[str, Any] = {}
     if return_aux:
