@@ -6,6 +6,11 @@ from typing import Dict, Any
 import numpy as np
 import torch
 
+from third_party.ShallowMLA.mla import precompute_freqs_cis
+
+
+FREQ_CIS_TENSOR_NAME = "__synthetic__.freq_cis"
+
 
 def collect_non_moe_backbone_tensor_names_deepseek() -> list[str]:
     names: list[str] = []
@@ -52,6 +57,46 @@ def _index_string_to_numpy_dtype(dtype: str):
     if dtype == "float32":
         return np.float32
     raise ValueError(f"unsupported dtype in tensor cache index: {dtype}")
+
+
+def _build_freq_cis_tensor(model_loader) -> tuple[torch.Tensor, dict[str, Any]]:
+    mla_cfg = model_loader.mla_config()
+
+    qk_rope_head_dim = int(mla_cfg["qk_rope_head_dim"])
+    seq_len = int(mla_cfg["max_position_embeddings"])
+    seq_len_train = int(mla_cfg["max_seq_len_train"])
+    beta_fast = float(mla_cfg["beta_fast"])
+    beta_slow = float(mla_cfg["beta_slow"])
+    rope_theta = float(mla_cfg["rope_theta"])
+    rope_factor = float(mla_cfg["rope_factor"])
+
+    freq_cis = precompute_freqs_cis(
+        qk_rope_head_dim=qk_rope_head_dim,
+        seq_len=seq_len,
+        seq_len_train=seq_len_train,
+        beta_fast=beta_fast,
+        beta_slow=beta_slow,
+        rope_theta=rope_theta,
+        rope_factor=rope_factor,
+        dtype=torch.float32,
+    )
+    if not isinstance(freq_cis, torch.Tensor):
+        raise TypeError(f"freq_cis expected torch.Tensor, got {type(freq_cis).__name__}")
+
+    freq_cis = freq_cis.detach().contiguous().cpu()
+    if freq_cis.dtype != torch.float32:
+        freq_cis = freq_cis.to(torch.float32)
+
+    meta = {
+        "qk_rope_head_dim": qk_rope_head_dim,
+        "seq_len": seq_len,
+        "seq_len_train": seq_len_train,
+        "beta_fast": beta_fast,
+        "beta_slow": beta_slow,
+        "rope_theta": rope_theta,
+        "rope_factor": rope_factor,
+    }
+    return freq_cis, meta
 
 
 class TensorCacheBuilder:
@@ -113,6 +158,23 @@ class TensorCacheBuilder:
                         "dtype": _torch_dtype_to_index_string(t.dtype),
                     }
                     offset += nbytes
+
+                print(f"[tensor-cache] [synthetic] {FREQ_CIS_TENSOR_NAME}")
+                freq_cis, freq_cis_meta = _build_freq_cis_tensor(model_loader)
+                arr = freq_cis.numpy()
+                raw = arr.tobytes(order="C")
+                nbytes = len(raw)
+
+                f.write(raw)
+
+                index[FREQ_CIS_TENSOR_NAME] = {
+                    "offset": int(offset),
+                    "nbytes": int(nbytes),
+                    "shape": [int(x) for x in arr.shape],
+                    "dtype": _torch_dtype_to_index_string(freq_cis.dtype),
+                    "meta": freq_cis_meta,
+                }
+                offset += nbytes
 
             meta = {
                 "format": "constellation_tensor_cache_v1",
@@ -227,3 +289,15 @@ class MappedTensorStore:
         if dtype is None:
             dtype = t.dtype
         return t.to(device=device, dtype=dtype)
+
+    def get_tensor_meta(self, name: str) -> dict[str, Any] | None:
+        name = str(name)
+        rec = self._index.get(name)
+        if rec is None:
+            raise KeyError(f"tensor not found in mapped store: {name}")
+        meta = rec.get("meta")
+        if meta is None:
+            return None
+        if not isinstance(meta, dict):
+            raise RuntimeError(f"tensor cache meta for {name} must be a dict")
+        return dict(meta)
