@@ -163,6 +163,7 @@ class InferenceSession:
         split_layer: int = 30,
         backbone_dtype: torch.dtype = torch.bfloat16,
         kv_cache_cfg: dict,
+        plan: BackboneLoadPlan | None = None,
     ) -> None:
         if self.backbone_store is not None:
             return
@@ -173,14 +174,18 @@ class InferenceSession:
         self.mapped_tensor_store = MappedTensorStore(tensor_cache_dir)
      
         partition = TwoGpuLayerPartition(split_layer=split_layer)
+
+        if plan is None:
+            plan = BackboneLoadPlan.full(
+                default_dtype=backbone_dtype,
+                router_dtype=torch.float32,
+            )
+
         self.backbone_store = preload_non_moe_backbone(
             self,
             partition=partition,
             mapped_store=self.mapped_tensor_store,
-            plan=BackboneLoadPlan.full(
-                default_dtype=backbone_dtype,
-                router_dtype=torch.float32,
-            ),
+            plan=plan,
         )
      
         mla_cfg = self.backbone_store.mla_cfg

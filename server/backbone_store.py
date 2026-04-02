@@ -132,6 +132,23 @@ class BackboneLoadPlan:
             layer_ids=None if layer_ids is None else frozenset(int(x) for x in layer_ids),
         )
 
+    @staticmethod
+    def runtime_fp32_no_attention_no_experts(
+        *,
+        router_dtype: torch.dtype = torch.float32,
+    ) -> "BackboneLoadPlan":
+        off = LoadSpec(False, torch.bfloat16)
+        return BackboneLoadPlan(
+            attention=off,
+            dense_prefix=LoadSpec(True, torch.float32),
+            shared_expert=off,
+            router=LoadSpec(True, router_dtype),
+            embed=LoadSpec(True, torch.float32),
+            norm=LoadSpec(True, torch.float32),
+            lm_head=LoadSpec(True, torch.float32),
+            layer_ids=None,
+        )
+
 
 class BackboneStore:
     def __init__(self, *, mla_cfg: dict, dtype: torch.dtype, partition: LayerPartition):

@@ -117,8 +117,9 @@ def run_reference_path(
     session.ensure_full_model_runtime(
         tensor_cache_dir="tmp/non_moe_backbone_cache",
         split_layer=30,
-        backbone_dtype=torch.bfloat16,
+        backbone_dtype=torch.float32,
         kv_cache_cfg=kv_cache_cfg,
+        plan=BackboneLoadPlan.runtime_fp32_no_attention_no_experts(),
     )
 
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
