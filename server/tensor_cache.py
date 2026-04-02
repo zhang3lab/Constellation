@@ -59,11 +59,11 @@ def _index_string_to_numpy_dtype(dtype: str):
     raise ValueError(f"unsupported dtype in tensor cache index: {dtype}")
 
 
-def _build_freq_cis_tensor(model_loader) -> tuple[torch.Tensor, dict[str, Any]]:
+def _build_freq_cis_tensor(model_loader, *, max_seq_len: int) -> tuple[torch.Tensor, dict[str, Any]]:
     mla_cfg = model_loader.mla_config()
 
     qk_rope_head_dim = int(mla_cfg["qk_rope_head_dim"])
-    seq_len = int(mla_cfg["max_position_embeddings"])
+    seq_len = int(max_seq_len)
     seq_len_train = int(mla_cfg["max_seq_len_train"])
     beta_fast = float(mla_cfg["beta_fast"])
     beta_slow = float(mla_cfg["beta_slow"])
@@ -80,6 +80,7 @@ def _build_freq_cis_tensor(model_loader) -> tuple[torch.Tensor, dict[str, Any]]:
         rope_factor=rope_factor,
         dtype=torch.float32,
     )
+
     if not isinstance(freq_cis, torch.Tensor):
         raise TypeError(f"freq_cis expected torch.Tensor, got {type(freq_cis).__name__}")
 
@@ -110,6 +111,7 @@ class TensorCacheBuilder:
         model_loader,
         tensor_names: list[str],
         *,
+        max_seq_len: int,
         overwrite: bool = False,
     ) -> None:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -160,7 +162,10 @@ class TensorCacheBuilder:
                     offset += nbytes
 
                 print(f"[tensor-cache] [synthetic] {FREQ_CIS_TENSOR_NAME}")
-                freq_cis, freq_cis_meta = _build_freq_cis_tensor(model_loader)
+                freq_cis, freq_cis_meta = _build_freq_cis_tensor(
+                    model_loader,
+                    max_seq_len=max_seq_len,
+                )
                 arr = freq_cis.numpy()
                 raw = arr.tobytes(order="C")
                 nbytes = len(raw)
