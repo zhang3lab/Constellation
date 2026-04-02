@@ -399,6 +399,22 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         return [int(x) for x in ids]
 
 
+    def embed_token_id(self, token_id: int) -> np.ndarray:
+        token_id = int(token_id)
+
+        if self.session.backbone_store is None:
+            raise RuntimeError("session.backbone_store is not initialized")
+
+        emb = self.session.backbone_store.embed_tokens()
+        if token_id < 0 or token_id >= int(emb.shape[0]):
+            raise RuntimeError(
+                f"token_id out of range: got={token_id} vocab_size={int(emb.shape[0])}"
+            )
+
+        x = emb[token_id].detach().float().cpu().numpy().astype(np.float32, copy=False)
+        return as_f32_1d(x, f"embed_token_id[{token_id}]")
+
+
     def prepare_prompt_hidden_input(self, prompt: str) -> dict:
         """
         Prepare prompt-side inputs for full-model execution.
