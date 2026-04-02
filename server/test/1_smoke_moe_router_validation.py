@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import numpy as np
 
+from server.backbone_store import preload_non_moe_backbone
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
