@@ -432,6 +432,18 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         }
 
 
+    def infer_prompt_last_position(self, prepared: dict) -> int:
+        prepared_pos = prepared.get("position_ids")
+        if prepared_pos is not None:
+            return int(np.asarray(prepared_pos).reshape(-1)[0])
+
+        input_ids = prepared.get("input_ids")
+        if input_ids is None:
+            raise RuntimeError("prepared prompt data missing input_ids")
+        return len(input_ids) - 1
+
+
+
     def run_final_norm_and_lm_head(
         self,
         hidden_in: np.ndarray,
