@@ -104,7 +104,9 @@ def run_reference_attention(
             ),
         )
 
-    session.ensure_freq_cis_by_device()
+    session.ensure_freq_cis_by_device(
+        max_seq_len=int(kv_cache_cfg["max_seq_len"]),
+    )
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)

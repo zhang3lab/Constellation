@@ -85,7 +85,7 @@ class InferenceSession:
     def get_mla_config(self) -> dict:
         return self.get_deepseek_model_loader().mla_config()
 
-    def ensure_freq_cis_by_device(self) -> None:
+    def ensure_freq_cis_by_device(self, *, max_seq_len: int) -> None:
         if self.freq_cis_by_device is not None:
             return
      
@@ -93,18 +93,18 @@ class InferenceSession:
             raise RuntimeError("backbone_store is not initialized")
      
         mla_cfg = self.backbone_store.mla_cfg
-        max_seq_len = int(mla_cfg["max_position_embeddings"])
+        max_seq_len = int(max_seq_len)
      
         devices = set()
-        devices.add(self.backbone_store.partition.embed_device())
-        devices.add(self.backbone_store.partition.final_norm_device())
-        devices.add(self.backbone_store.partition.lm_head_device())
+        devices.add(str(self.backbone_store.partition.embed_device()))
+        devices.add(str(self.backbone_store.partition.final_norm_device()))
+        devices.add(str(self.backbone_store.partition.lm_head_device()))
         for layer_id in range(61):
-            devices.add(self.backbone_store.partition.layer_device(layer_id))
+            devices.add(str(self.backbone_store.partition.layer_device(layer_id)))
      
         expected_freq_cis_meta = {
             "qk_rope_head_dim": int(mla_cfg["qk_rope_head_dim"]),
-            "seq_len": int(max_seq_len),
+            "seq_len": max_seq_len,
             "seq_len_train": int(mla_cfg["max_seq_len_train"]),
             "beta_fast": float(mla_cfg["beta_fast"]),
             "beta_slow": float(mla_cfg["beta_slow"]),
@@ -113,7 +113,6 @@ class InferenceSession:
         }
      
         freq_cis_master = None
-     
         if (
             self.mapped_tensor_store is not None
             and self.mapped_tensor_store.has_tensor(FREQ_CIS_TENSOR_NAME)
@@ -127,7 +126,6 @@ class InferenceSession:
                     f"expected={expected_freq_cis_meta}\n"
                     f"got={got_meta}"
                 )
-     
             freq_cis_master = self.mapped_tensor_store.get_torch_cpu(FREQ_CIS_TENSOR_NAME)
         else:
             freq_cis_master = precompute_freqs_cis(
@@ -152,7 +150,7 @@ class InferenceSession:
      
         self.freq_cis_by_device = {}
         for dev in devices:
-            self.freq_cis_by_device[str(dev)] = freq_cis_master.to(
+            self.freq_cis_by_device[dev] = freq_cis_master.to(
                 device=dev,
                 dtype=self.backbone_store.dtype,
             )
@@ -209,7 +207,9 @@ class InferenceSession:
         kv_latent_rank = int(mla_cfg["kv_latent_rank"])
         qk_rope_head_dim = int(mla_cfg["qk_rope_head_dim"])
 
-        self.ensure_freq_cis_by_device()
+        self.ensure_freq_cis_by_device(
+            max_seq_len=int(kv_cache_cfg["max_seq_len"]),
+        )
 
         tokens_capacity = max_batch_size * max_seq_len
         num_pages = int(tokens_capacity * 1.1 / page_size)
