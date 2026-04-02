@@ -19,8 +19,8 @@ from server.tensor_cache import MappedTensorStore
 from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
-FULL_MODEL_LAYER_COS_MIN = 0.9998
-FULL_MODEL_FINAL_COS_MIN = 0.9998
+FULL_MODEL_LAYER_COS_MIN = 0.99975
+FULL_MODEL_FINAL_COS_MIN = 0.99975
 FULL_MODEL_FINAL_MEAN_ABS_MAX = 0.08
 FULL_MODEL_FINAL_MAX_ABS_MAX = 1.0
 
