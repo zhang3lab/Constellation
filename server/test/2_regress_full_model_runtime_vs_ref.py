@@ -198,8 +198,8 @@ def main():
     last_layer_metrics = None
 
     for layer_id in common_layers:
-        rt = np.asarray(rt_layers[layer_id], dtype=np.float32).reshape(-1)
-        rf = np.asarray(rf_layers[layer_id], dtype=np.float32).reshape(-1)
+        rt = to_numpy_f32(rt_layers[layer_id]).reshape(-1)
+        rf = to_numpy_f32(rf_layers[layer_id]).reshape(-1)
      
         print_stats(f"runtime.layer{layer_id}_output", rt)
         print_stats(f"ref.layer{layer_id}_output", rf)
@@ -257,8 +257,8 @@ def main():
         f"max_abs={last_layer_metrics['max_abs']:.6e}"
     )
 
-    rf_final = np.asarray(ref_out["final_hidden"], dtype=np.float32).reshape(-1)
-    rt_final = np.asarray(runtime_out["final_hidden"], dtype=np.float32).reshape(-1)
+    rf_final = to_numpy_f32(ref_out["final_hidden"]).reshape(-1)
+    rt_final = to_numpy_f32(runtime_out["final_hidden"]).reshape(-1)
     final_diff = np.abs(rf_final - rt_final)
     final_mean_abs = float(final_diff.mean())
     final_max_abs = float(final_diff.max())
