@@ -8,6 +8,7 @@ import torch
 from third_party.ShallowMLA.mla import PageAttentionCacheManager, precompute_freqs_cis
 
 from server.backbone_store import (
+    BackboneLoadPlan,
     TwoGpuLayerPartition,
     preload_non_moe_backbone,
 )
@@ -103,9 +104,12 @@ class InferenceSession:
         partition = TwoGpuLayerPartition(split_layer=split_layer)
         self.backbone_store = preload_non_moe_backbone(
             self,
-            dtype=backbone_dtype,
             partition=partition,
             mapped_store=self.mapped_tensor_store,
+            plan=BackboneLoadPlan.full(
+                default_dtype=backbone_dtype,
+                router_dtype=torch.float32,
+            ),
         )
      
         mla_cfg = self.backbone_store.mla_cfg
