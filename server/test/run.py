@@ -39,24 +39,6 @@ def select_tests(kind: str, pattern: str | None) -> list[Path]:
     return tests
 
 
-def extra_args_for_test(p: Path, config_path: str) -> list[str]:
-    name = p.name
-
-    needs_config = {
-        "1_smoke_attention_runtime.py",
-        "1_smoke_expert_inference.py",
-        "2_regress_attention_runtime_vs_ref.py",
-        "2_regress_full_model_runtime_vs_ref.py",
-        "3_e2e_full_model_debug.py",
-        "3_e2e_decode_runtime.py",
-    }
-
-    if name in needs_config:
-        return ["--config", config_path]
-
-    return []
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -86,7 +68,7 @@ def main():
         print(f"=== running {p.name} ===")
         old_argv = sys.argv[:]
         try:
-            sys.argv = [str(p), *extra_args_for_test(p, args.config)]
+            sys.argv = [str(p), "--config", args.config]
             runpy.run_path(str(p), run_name="__main__")
         finally:
             sys.argv = old_argv
