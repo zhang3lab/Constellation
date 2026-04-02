@@ -48,6 +48,7 @@ def extra_args_for_test(p: Path, config_path: str) -> list[str]:
         "2_regress_attention_runtime_vs_ref.py",
         "2_regress_full_model_runtime_vs_ref.py",
         "3_e2e_full_model_debug.py",
+        "3_e2e_decode_runtime.py",
     }
 
     if name in needs_config:
