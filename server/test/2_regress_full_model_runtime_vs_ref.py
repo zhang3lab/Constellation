@@ -119,7 +119,7 @@ def run_reference_path(
         split_layer=30,
         backbone_dtype=torch.float32,
         kv_cache_cfg=kv_cache_cfg,
-        plan=BackboneLoadPlan.runtime_fp32_no_attention_no_experts(),
+        plan=BackboneLoadPlan.runtime_fp32_no_attention_no_routed_experts(),
     )
 
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)

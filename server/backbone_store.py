@@ -137,7 +137,7 @@ class BackboneLoadPlan:
         )
 
     @staticmethod
-    def runtime_fp32_no_attention_no_experts(
+    def runtime_fp32_no_attention_no_routed_experts(
         *,
         router_dtype: torch.dtype = torch.float32,
     ) -> "BackboneLoadPlan":
@@ -146,7 +146,7 @@ class BackboneLoadPlan:
             runtime_dtype=torch.float32,
             attention=off,
             dense_prefix=LoadSpec(True, torch.float32),
-            shared_expert=off,
+            shared_expert=LoadSpec(True, torch.float32),
             router=LoadSpec(True, router_dtype),
             embed=LoadSpec(True, torch.float32),
             norm=LoadSpec(True, torch.float32),
