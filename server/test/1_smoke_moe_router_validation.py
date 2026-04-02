@@ -21,6 +21,20 @@ def run_real_router_demo(session, layer_id: int, repeats: int = 10):
     hidden_size = int(session.get_router_config()["hidden_size"])
     hidden = make_router_test_input(hidden_size)
 
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+
+    layer_entry = session.backbone_store.layer(layer_id)
+    dev = str(layer_entry["device"])
+    runtime_dtype = session.backbone_store.dtype
+
+    if isinstance(hidden, np.ndarray):
+        hidden = torch.as_tensor(hidden, device=dev, dtype=runtime_dtype)
+    elif isinstance(hidden, torch.Tensor):
+        hidden = hidden.to(device=dev, dtype=runtime_dtype)
+    else:
+        raise TypeError(f"unsupported hidden type: {type(hidden).__name__}")
+
     result = run_moe_layer(session, hidden, layer_id, return_aux=True)
     aux = result.get("aux") or {}
 
@@ -58,6 +72,20 @@ def run_real_router_demo(session, layer_id: int, repeats: int = 10):
 def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
     hidden_size = int(session.get_router_config()["hidden_size"])
     hidden = make_router_test_input(hidden_size)
+
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+
+    layer_entry = session.backbone_store.layer(layer_id)
+    dev = str(layer_entry["device"])
+    runtime_dtype = session.backbone_store.dtype
+
+    if isinstance(hidden, np.ndarray):
+        hidden = torch.as_tensor(hidden, device=dev, dtype=runtime_dtype)
+    elif isinstance(hidden, torch.Tensor):
+        hidden = hidden.to(device=dev, dtype=runtime_dtype)
+    else:
+        raise TypeError(f"unsupported hidden type: {type(hidden).__name__}")
 
     outputs = []
     routes_ref = None
