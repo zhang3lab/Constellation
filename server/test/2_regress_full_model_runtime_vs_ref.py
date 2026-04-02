@@ -44,11 +44,12 @@ class DeepseekFullModelReference(DeepseekFullModelExecutor):
             return_aux=return_aux,
         )
 
-def build_layer_map(per_layer: list[dict[str, Any]]) -> dict[int, np.ndarray]:
-    out: dict[int, np.ndarray] = {}
+
+def build_layer_map(per_layer):
+    out = {}
     for item in per_layer:
-        if "layer_id" in item and "output" in item:
-            out[int(item["layer_id"])] = np.asarray(item["output"], dtype=np.float32)
+        if "layer_id" in item:
+            out[int(item["layer_id"])] = to_numpy_f32(item["output"])
     return out
 
 
