@@ -315,7 +315,7 @@ def run_attention_block_ref(
         v_head_dim=int(mla_cfg["v_head_dim"]),
     )
 
-    out_np = out[0].detach().float().cpu().numpy().astype(np.float32, copy=False)
+    out_t = out[0]
 
     aux: dict[str, Any] = {}
     if return_aux:
@@ -329,4 +329,4 @@ def run_attention_block_ref(
             "blocked_k_token": state["blocked_k_token"].detach().float().cpu().numpy(),
         }
 
-    return ModelExecResult(output=out_np, aux=aux)
+    return ModelExecResult(output=out_t, aux=aux)
