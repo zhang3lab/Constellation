@@ -89,12 +89,22 @@ def run_reference_attention(
     session.full_model_executor = DeepseekFullModelReference(session)
 
     kv_cache_cfg = session.cfg["kv_cache"]
-    session.ensure_full_model_runtime(
-        tensor_cache_dir="tmp/non_moe_backbone_cache",
-        split_layer=30,
-        backbone_dtype=torch.bfloat16,
-        kv_cache_cfg=kv_cache_cfg,
-    )
+
+    if session.mapped_tensor_store is None:
+        session.mapped_tensor_store = MappedTensorStore("tmp/non_moe_backbone_cache")
+
+    if session.backbone_store is None:
+        session.backbone_store = preload_non_moe_backbone(
+            session,
+            mapped_store=session.mapped_tensor_store,
+            plan=BackboneLoadPlan.attention_only(
+                attention_dtype=torch.float32,
+                embed_dtype=torch.float32,
+                layer_ids={int(layer_id)},
+            ),
+        )
+
+    session.ensure_freq_cis_by_device()
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
@@ -160,19 +170,6 @@ def main():
         )
 
     with InferenceSession(coord, cfg) as ref_sess:
-        ref_sess.full_model_executor = DeepseekFullModelExecutor(ref_sess)
-     
-        ref_sess.backbone_store = preload_non_moe_backbone(
-            ref_sess,
-            mapped_store=MappedTensorStore("tmp/non_moe_backbone_cache"),
-            plan=BackboneLoadPlan.attention_only(
-                attention_dtype=torch.float32,
-                embed_dtype=torch.float32,
-                layer_ids={int(args.layer_id)},
-            ),
-        )
-        ref_sess.ensure_freq_cis_for_full_model_runtime()
-     
         ref_out = run_reference_attention(
             ref_sess,
             prompt=args.prompt,

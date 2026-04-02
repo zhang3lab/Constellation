@@ -85,6 +85,79 @@ class InferenceSession:
     def get_mla_config(self) -> dict:
         return self.get_deepseek_model_loader().mla_config()
 
+    def ensure_freq_cis_by_device(self) -> None:
+        if self.freq_cis_by_device is not None:
+            return
+     
+        if self.backbone_store is None:
+            raise RuntimeError("backbone_store is not initialized")
+     
+        mla_cfg = self.backbone_store.mla_cfg
+        max_seq_len = int(mla_cfg["max_position_embeddings"])
+     
+        devices = set()
+        devices.add(self.backbone_store.partition.embed_device())
+        devices.add(self.backbone_store.partition.final_norm_device())
+        devices.add(self.backbone_store.partition.lm_head_device())
+        for layer_id in range(61):
+            devices.add(self.backbone_store.partition.layer_device(layer_id))
+     
+        expected_freq_cis_meta = {
+            "qk_rope_head_dim": int(mla_cfg["qk_rope_head_dim"]),
+            "seq_len": int(max_seq_len),
+            "seq_len_train": int(mla_cfg["max_seq_len_train"]),
+            "beta_fast": float(mla_cfg["beta_fast"]),
+            "beta_slow": float(mla_cfg["beta_slow"]),
+            "rope_theta": float(mla_cfg["rope_theta"]),
+            "rope_factor": float(mla_cfg["rope_factor"]),
+        }
+     
+        freq_cis_master = None
+     
+        if (
+            self.mapped_tensor_store is not None
+            and self.mapped_tensor_store.has_tensor(FREQ_CIS_TENSOR_NAME)
+        ):
+            got_meta = self.mapped_tensor_store.get_tensor_meta(FREQ_CIS_TENSOR_NAME)
+            if got_meta is None:
+                raise RuntimeError(f"{FREQ_CIS_TENSOR_NAME} missing metadata in tensor cache")
+            if got_meta != expected_freq_cis_meta:
+                raise RuntimeError(
+                    f"{FREQ_CIS_TENSOR_NAME} metadata mismatch:\n"
+                    f"expected={expected_freq_cis_meta}\n"
+                    f"got={got_meta}"
+                )
+     
+            freq_cis_master = self.mapped_tensor_store.get_torch_cpu(FREQ_CIS_TENSOR_NAME)
+        else:
+            freq_cis_master = precompute_freqs_cis(
+                qk_rope_head_dim=int(mla_cfg["qk_rope_head_dim"]),
+                seq_len=max_seq_len,
+                seq_len_train=int(mla_cfg["max_seq_len_train"]),
+                beta_fast=float(mla_cfg["beta_fast"]),
+                beta_slow=float(mla_cfg["beta_slow"]),
+                rope_theta=float(mla_cfg["rope_theta"]),
+                rope_factor=float(mla_cfg["rope_factor"]),
+                dtype=torch.float32,
+            )
+     
+        if not isinstance(freq_cis_master, torch.Tensor):
+            raise TypeError(
+                f"freq_cis_master expected torch.Tensor, got {type(freq_cis_master).__name__}"
+            )
+     
+        freq_cis_master = freq_cis_master.detach().contiguous().cpu()
+        if freq_cis_master.dtype != torch.float32:
+            freq_cis_master = freq_cis_master.to(torch.float32)
+     
+        self.freq_cis_by_device = {}
+        for dev in devices:
+            self.freq_cis_by_device[str(dev)] = freq_cis_master.to(
+                device=dev,
+                dtype=self.backbone_store.dtype,
+            )
+
+
     def ensure_full_model_runtime(
         self,
         *,
@@ -136,58 +209,7 @@ class InferenceSession:
         kv_latent_rank = int(mla_cfg["kv_latent_rank"])
         qk_rope_head_dim = int(mla_cfg["qk_rope_head_dim"])
 
-        devices = sorted(
-            {str(self.backbone_store.layer(layer_id)["device"]) for layer_id in range(61)}
-        )
-
-        expected_freq_cis_meta = {
-            "qk_rope_head_dim": int(mla_cfg["qk_rope_head_dim"]),
-            "seq_len": int(max_seq_len),
-            "seq_len_train": int(mla_cfg["max_seq_len_train"]),
-            "beta_fast": float(mla_cfg["beta_fast"]),
-            "beta_slow": float(mla_cfg["beta_slow"]),
-            "rope_theta": float(mla_cfg["rope_theta"]),
-            "rope_factor": float(mla_cfg["rope_factor"]),
-        }
-
-        freq_cis_master = None
-        if self.mapped_tensor_store is not None and self.mapped_tensor_store.has_tensor(FREQ_CIS_TENSOR_NAME):
-            got_meta = self.mapped_tensor_store.get_tensor_meta(FREQ_CIS_TENSOR_NAME)
-            if got_meta is None:
-                raise RuntimeError(f"{FREQ_CIS_TENSOR_NAME} missing metadata in tensor cache")
-            if got_meta != expected_freq_cis_meta:
-                raise RuntimeError(
-                    f"{FREQ_CIS_TENSOR_NAME} metadata mismatch:\n"
-                    f"expected={expected_freq_cis_meta}\n"
-                    f"got={got_meta}"
-                )
-            freq_cis_master = self.mapped_tensor_store.get_torch_cpu(FREQ_CIS_TENSOR_NAME)
-        else:
-            freq_cis_master = precompute_freqs_cis(
-                qk_rope_head_dim=int(mla_cfg["qk_rope_head_dim"]),
-                seq_len=max_seq_len,
-                seq_len_train=int(mla_cfg["max_seq_len_train"]),
-                beta_fast=float(mla_cfg["beta_fast"]),
-                beta_slow=float(mla_cfg["beta_slow"]),
-                rope_theta=float(mla_cfg["rope_theta"]),
-                rope_factor=float(mla_cfg["rope_factor"]),
-                dtype=torch.float32,
-            )
-
-        if not isinstance(freq_cis_master, torch.Tensor):
-            raise TypeError(
-                f"freq_cis_master expected torch.Tensor, got {type(freq_cis_master).__name__}"
-            )
-
-        freq_cis_master = freq_cis_master.detach().contiguous().cpu()
-        if freq_cis_master.dtype != torch.float32:
-            freq_cis_master = freq_cis_master.to(torch.float32)
-
-        for dev in devices:
-            self.freq_cis_by_device[dev] = freq_cis_master.to(
-                device=dev,
-                dtype=self.backbone_store.dtype,
-            )
+        self.ensure_freq_cis_by_device()
 
         tokens_capacity = max_batch_size * max_seq_len
         num_pages = int(tokens_capacity * 1.1 / page_size)
