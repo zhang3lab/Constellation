@@ -175,7 +175,6 @@ def main():
         session.backbone_store = preload_non_moe_backbone(
             session,
             dtype=torch.bfloat16,
-            mapped_store=mapped_store,
             load_attention=False,
             load_dense_prefix=False,
             load_shared_expert=False,
