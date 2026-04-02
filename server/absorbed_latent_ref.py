@@ -249,11 +249,20 @@ def run_attention_block_ref(
 
     layer_id = int(layer_id)
     layer_entry = session.backbone_store.layer(layer_id)
-    ws = layer_entry["attention"]
     dev = str(layer_entry["device"])
     mla_cfg = session.backbone_store.mla_cfg
 
     ref_dtype = torch.float32
+
+    model_loader = session.get_deepseek_model_loader()
+    ws_cpu = model_loader.load_attention_block_weights_fp32(layer_id)
+
+    ws = {}
+    for k, v in ws_cpu.items():
+        if isinstance(v, torch.Tensor):
+            ws[k] = v.to(device=dev, dtype=ref_dtype)
+        else:
+            ws[k] = v
 
     if isinstance(hidden_in, torch.Tensor):
         x0 = hidden_in.detach()

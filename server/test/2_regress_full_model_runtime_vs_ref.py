@@ -113,12 +113,14 @@ def run_reference_path(
     session.full_model_executor = DeepseekFullModelReference(session)
 
     kv_cache_cfg = session.cfg["kv_cache"]
+
     session.ensure_full_model_runtime(
         tensor_cache_dir="tmp/non_moe_backbone_cache",
         split_layer=30,
         backbone_dtype=torch.bfloat16,
         kv_cache_cfg=kv_cache_cfg,
     )
+
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
@@ -171,21 +173,6 @@ def main():
         )
 
     with InferenceSession(coord, cfg) as ref_sess:
-        ref_sess.full_model_executor = DeepseekFullModelExecutor(ref_sess)
-     
-        ref_sess.backbone_store = preload_non_moe_backbone(
-            ref_sess,
-            mapped_store=MappedTensorStore("tmp/non_moe_backbone_cache"),
-            plan=BackboneLoadPlan.full(
-                default_dtype=torch.float32,
-                router_dtype=torch.float32,
-            ),
-        )
-     
-        ref_sess.ensure_freq_cis_by_device(
-            max_seq_len=int(cfg["kv_cache"]["max_seq_len"]),
-        )
-     
         ref_out = run_reference_path(
             ref_sess,
             prompt=args.prompt,
