@@ -30,7 +30,7 @@ def stats_str(name, x):
             f"mean={float(af.mean().item()):.6e} std={float(af.std(unbiased=False).item()):.6e}"
         )
 
-    a = np.asarray(x, dtype=np.float32)
+    a = to_numpy_f32(x)
     finite = np.isfinite(a)
     finite_count = int(finite.sum())
     total = a.size
@@ -51,8 +51,8 @@ def print_stats(name, x):
 
 
 def compare_arrays(name, ref, got):
-    ref = np.asarray(ref, dtype=np.float32).reshape(-1)
-    got = np.asarray(got, dtype=np.float32).reshape(-1)
+    ref = to_numpy_f32(ref).reshape(-1)
+    got = to_numpy_f32(got).reshape(-1)
 
     diff = np.abs(ref - got)
     max_abs = float(diff.max())
@@ -71,8 +71,8 @@ def compare_arrays(name, ref, got):
 
 
 def compare_stability(name, a, b):
-    a = np.asarray(a, dtype=np.float32).reshape(-1)
-    b = np.asarray(b, dtype=np.float32).reshape(-1)
+    a = to_numpy_f32(a).reshape(-1)
+    b = to_numpy_f32(b).reshape(-1)
 
     diff = np.abs(a - b)
     max_abs = float(diff.max())
