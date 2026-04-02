@@ -24,73 +24,6 @@ def _get_full_model_executor(session) -> DeepseekFullModelExecutorBase:
     return ref
 
 
-def _normalize_model_exec_result(result: ModelExecResult, name: str) -> ModelExecResult:
-    if not isinstance(result.output, torch.Tensor):
-        raise TypeError(
-            f"{name}.output expected torch.Tensor, got {type(result.output).__name__}"
-        )
-
-    dtype_name = torch_dtype_name(result.output.dtype)
-    dev = str(result.output.device)
-
-    result.output = as_array(
-        result.output,
-        f"{name}.output",
-        ARRCFG_HIDDEN_TORCH(dtype_name, dev),
-    )
-    return result
-
-
-def _normalize_attention_shared_result(
-    result: AttentionSharedSegmentResult,
-    hidden_shape,
-    name: str,
-) -> AttentionSharedSegmentResult:
-    if not isinstance(result.attention_output, torch.Tensor):
-        raise TypeError(
-            f"{name}.attention_output expected torch.Tensor, "
-            f"got {type(result.attention_output).__name__}"
-        )
-    if not isinstance(result.shared_expert_output, torch.Tensor):
-        raise TypeError(
-            f"{name}.shared_expert_output expected torch.Tensor, "
-            f"got {type(result.shared_expert_output).__name__}"
-        )
-
-    attn_cfg = ARRCFG_HIDDEN_TORCH(
-        torch_dtype_name(result.attention_output.dtype),
-        str(result.attention_output.device),
-    )
-    shared_cfg = ARRCFG_HIDDEN_TORCH(
-        torch_dtype_name(result.shared_expert_output.dtype),
-        str(result.shared_expert_output.device),
-    )
-
-    result.attention_output = as_array(
-        result.attention_output,
-        f"{name}.attention_output",
-        attn_cfg,
-    )
-    result.shared_expert_output = as_array(
-        result.shared_expert_output,
-        f"{name}.shared_expert_output",
-        shared_cfg,
-    )
-
-    if tuple(result.attention_output.shape) != tuple(hidden_shape):
-        raise RuntimeError(
-            f"{name}.attention_output shape mismatch: "
-            f"got={tuple(result.attention_output.shape)} expected={tuple(hidden_shape)}"
-        )
-    if tuple(result.shared_expert_output.shape) != tuple(hidden_shape):
-        raise RuntimeError(
-            f"{name}.shared_expert_output shape mismatch: "
-            f"got={tuple(result.shared_expert_output.shape)} expected={tuple(hidden_shape)}"
-        )
-
-    return result
-
-
 def run_dense_layer(
     session,
     hidden_in,
@@ -128,9 +61,18 @@ def run_dense_layer(
         kv_cache=kv_cache,
         return_aux=return_aux,
     )
-    attn = _normalize_model_exec_result(attn, f"dense_layer{layer_id}.attention")
+    if not isinstance(attn.output, torch.Tensor):
+        raise TypeError(
+            f"dense_layer{layer_id}.attention.output expected torch.Tensor, "
+            f"got {type(attn.output).__name__}"
+        )
+    attn_out = as_array(
+        attn.output,
+        f"dense_layer{layer_id}.attention.output",
+        hidden_cfg,
+    )
 
-    post_attn_hidden = hidden_in + attn.output
+    post_attn_hidden = hidden_in + attn_out
     post_attn_hidden = as_array(
         post_attn_hidden,
         f"dense_layer{layer_id}.post_attention_hidden",
@@ -142,12 +84,18 @@ def run_dense_layer(
         layer_id,
         return_aux=return_aux,
     )
-    dense_ffn = _normalize_model_exec_result(
-        dense_ffn,
-        f"dense_layer{layer_id}.dense_ffn",
+    if not isinstance(dense_ffn.output, torch.Tensor):
+        raise TypeError(
+            f"dense_layer{layer_id}.dense_ffn.output expected torch.Tensor, "
+            f"got {type(dense_ffn.output).__name__}"
+        )
+    dense_ffn_out = as_array(
+        dense_ffn.output,
+        f"dense_layer{layer_id}.dense_ffn.output",
+        hidden_cfg,
     )
 
-    output = post_attn_hidden + dense_ffn.output
+    output = post_attn_hidden + dense_ffn_out
     output = as_array(
         output,
         f"dense_layer{layer_id}.output",
@@ -158,8 +106,8 @@ def run_dense_layer(
         "layer_id": layer_id,
         "layer_type": "dense",
         "output": output,
-        "attention_output": attn.output,
-        "dense_ffn_output": dense_ffn.output,
+        "attention_output": attn_out,
+        "dense_ffn_output": dense_ffn_out,
     }
     if return_aux:
         result["attention_aux"] = attn.aux
@@ -208,9 +156,18 @@ def run_sparse_layer(
         kv_cache=kv_cache,
         return_aux=return_aux,
     )
-    attn = _normalize_model_exec_result(attn, f"sparse_layer{layer_id}.attention")
+    if not isinstance(attn.output, torch.Tensor):
+        raise TypeError(
+            f"sparse_layer{layer_id}.attention.output expected torch.Tensor, "
+            f"got {type(attn.output).__name__}"
+        )
+    attn_out = as_array(
+        attn.output,
+        f"sparse_layer{layer_id}.attention.output",
+        hidden_cfg,
+    )
 
-    post_attn_hidden = hidden_in + attn.output
+    post_attn_hidden = hidden_in + attn_out
     post_attn_hidden = as_array(
         post_attn_hidden,
         f"sparse_layer{layer_id}.post_attention_hidden",
@@ -233,9 +190,15 @@ def run_sparse_layer(
         layer_id,
         return_aux=return_aux,
     )
-    shared = _normalize_model_exec_result(
-        shared,
-        f"sparse_layer{layer_id}.shared_expert",
+    if not isinstance(shared.output, torch.Tensor):
+        raise TypeError(
+            f"sparse_layer{layer_id}.shared_expert.output expected torch.Tensor, "
+            f"got {type(shared.output).__name__}"
+        )
+    shared_out = as_array(
+        shared.output,
+        f"sparse_layer{layer_id}.shared_expert.output",
+        hidden_cfg,
     )
 
     # routed MoE 仍然走单 token 协议；2D 时按 seq 维逐 token 调用
@@ -305,8 +268,8 @@ def run_sparse_layer(
         "layer_id": layer_id,
         "layer_type": "sparse",
         "output": output,
-        "attention_output": attn.output,
-        "shared_expert_output": shared.output,
+        "attention_output": attn_out,
+        "shared_expert_output": shared_out,
         "routed_output": routed_out,
     }
     if return_aux:
@@ -369,8 +332,18 @@ def run_full_model(
             kv_cache=kv_cache,
             return_aux=collect_per_layer,
         )
-        prefix = _normalize_model_exec_result(prefix, "full_model.prefix_segment")
-        cur = prefix.output
+        if not isinstance(prefix.output, torch.Tensor):
+            raise TypeError(
+                f"full_model.prefix_segment.output expected torch.Tensor, "
+                f"got {type(prefix.output).__name__}"
+            )
+        prefix_layer_dev = str(session.backbone_store.layer(dense_prefix_end - 1)["device"])
+        prefix_cfg = ARRCFG_HIDDEN_TORCH(dtype_name, prefix_layer_dev)
+        cur = as_array(
+            prefix.output,
+            "full_model.prefix_segment.output",
+            prefix_cfg,
+        )
         print_stats(f"layer{dense_prefix_end - 1}_output", cur)
 
         if collect_per_layer:

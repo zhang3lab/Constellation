@@ -139,8 +139,16 @@ class DeepseekFullModelExecutorBase(FullModelRefBase):
             kv_cache=kv_cache,
             return_aux=return_aux,
         )
-        attn = _normalize_model_exec_result(attn, f"attention_shared.layer{layer_id}.attention")
-        attn_out = attn.output
+        if not isinstance(attn.output, torch.Tensor):
+            raise TypeError(
+                f"attention_shared.layer{layer_id}.attention.output expected torch.Tensor, "
+                f"got {type(attn.output).__name__}"
+            )
+        attn_out = as_array(
+            attn.output,
+            f"attention_shared.layer{layer_id}.attention.output",
+            hidden_cfg,
+        )
      
         if tuple(attn_out.shape) != tuple(hidden_in.shape):
             raise RuntimeError(
@@ -160,11 +168,16 @@ class DeepseekFullModelExecutorBase(FullModelRefBase):
             layer_id,
             return_aux=return_aux,
         )
-        shared = _normalize_model_exec_result(
-            shared,
-            f"attention_shared.layer{layer_id}.shared_expert",
+        if not isinstance(shared.output, torch.Tensor):
+            raise TypeError(
+                f"attention_shared.layer{layer_id}.shared_expert.output expected torch.Tensor, "
+                f"got {type(shared.output).__name__}"
+            )
+        shared_out = as_array(
+            shared.output,
+            f"attention_shared.layer{layer_id}.shared_expert.output",
+            hidden_cfg,
         )
-        shared_out = shared.output
      
         if tuple(shared_out.shape) != tuple(hidden_in.shape):
             raise RuntimeError(
@@ -255,8 +268,16 @@ class DeepseekFullModelExecutorBase(FullModelRefBase):
                 kv_cache=kv_cache,
                 return_aux=return_aux,
             )
-            attn = _normalize_model_exec_result(attn, f"prefix.layer{layer_id}.attention")
-            attn_out = attn.output
+            if not isinstance(attn.output, torch.Tensor):
+                raise TypeError(
+                    f"prefix.layer{layer_id}.attention.output expected torch.Tensor, "
+                    f"got {type(attn.output).__name__}"
+                )
+            attn_out = as_array(
+                attn.output,
+                f"prefix.layer{layer_id}.attention.output",
+                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
+            )
      
             if tuple(attn_out.shape) != tuple(cur.shape):
                 raise RuntimeError(
@@ -276,8 +297,16 @@ class DeepseekFullModelExecutorBase(FullModelRefBase):
                 layer_id,
                 return_aux=return_aux,
             )
-            ffn = _normalize_model_exec_result(ffn, f"prefix.layer{layer_id}.dense_ffn")
-            ffn_out = ffn.output
+            if not isinstance(ffn.output, torch.Tensor):
+                raise TypeError(
+                    f"prefix.layer{layer_id}.dense_ffn.output expected torch.Tensor, "
+                    f"got {type(ffn.output).__name__}"
+                )
+            ffn_out = as_array(
+                ffn.output,
+                f"prefix.layer{layer_id}.dense_ffn.output",
+                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
+            )
      
             if tuple(ffn_out.shape) != tuple(cur.shape):
                 raise RuntimeError(
