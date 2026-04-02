@@ -15,6 +15,7 @@ from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
+from server.tensor_cache import MappedTensorStore
 from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
@@ -181,7 +182,9 @@ def main():
             ),
         )
      
-        ref_sess.ensure_freq_cis_for_full_model_runtime()
+        ref_sess.ensure_freq_cis_by_device(
+            max_seq_len=int(cfg["kv_cache"]["max_seq_len"]),
+        )
      
         ref_out = run_reference_path(
             ref_sess,
