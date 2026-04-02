@@ -127,6 +127,11 @@ def preload_non_moe_backbone(
     dtype: torch.dtype = torch.bfloat16,
     partition: LayerPartition | None = None,
     mapped_store=None,
+    load_attention: bool = True,
+    load_dense_prefix: bool = True,
+    load_shared_expert: bool = True,
+    load_router: bool = True,
+    load_embed_head: bool = True,
 ) -> BackboneStore:
     model_loader = session.get_deepseek_model_loader()
     if partition is None:
@@ -138,36 +143,39 @@ def preload_non_moe_backbone(
         partition=partition,
     )
 
-    store.set_embed_tokens(
-        _load_gpu_tensor(
-            "model.embed_tokens.weight",
-            device=partition.embed_device(),
-            dtype=dtype,
-            model_loader=model_loader,
-            mapped_store=mapped_store,
+    if load_embed_head:
+        store.set_embed_tokens(
+            _load_gpu_tensor(
+                "model.embed_tokens.weight",
+                device=partition.embed_device(),
+                dtype=dtype,
+                model_loader=model_loader,
+                mapped_store=mapped_store,
+            )
         )
-    )
 
     for layer_id in range(61):
         dev = partition.layer_device(layer_id)
-
         entry = {
             "device": dev,
-            "input_layernorm": _load_gpu_tensor(
+        }
+
+        if load_attention:
+            entry["input_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.input_layernorm.weight",
                 device=dev,
                 dtype=dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
-            ),
-            "post_attention_layernorm": _load_gpu_tensor(
+            )
+            entry["post_attention_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.post_attention_layernorm.weight",
                 device=dev,
                 dtype=dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
-            ),
-            "attention": {
+            )
+            entry["attention"] = {
                 "input_layernorm": _load_gpu_tensor(
                     f"model.layers.{layer_id}.input_layernorm.weight",
                     device=dev,
@@ -224,10 +232,9 @@ def preload_non_moe_backbone(
                     model_loader=model_loader,
                     mapped_store=mapped_store,
                 ),
-            },
-        }
+            }
 
-        if layer_id < 3:
+        if load_dense_prefix and layer_id < 3:
             entry["dense_ffn"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.up_proj.weight",
@@ -252,7 +259,7 @@ def preload_non_moe_backbone(
                 ),
             }
 
-        if layer_id >= 3:
+        if load_shared_expert and layer_id >= 3:
             entry["shared_expert"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.shared_experts.up_proj.weight",
@@ -276,6 +283,8 @@ def preload_non_moe_backbone(
                     mapped_store=mapped_store,
                 ),
             }
+
+        if load_router and layer_id >= 3:
             entry["router"] = {
                 "gate_weight": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.gate.weight",
@@ -295,23 +304,24 @@ def preload_non_moe_backbone(
 
         store.set_layer(layer_id, entry)
 
-    store.set_model_norm(
-        _load_gpu_tensor(
-            "model.norm.weight",
-            device=partition.final_norm_device(),
-            dtype=dtype,
-            model_loader=model_loader,
-            mapped_store=mapped_store,
+    if load_embed_head:
+        store.set_model_norm(
+            _load_gpu_tensor(
+                "model.norm.weight",
+                device=partition.final_norm_device(),
+                dtype=dtype,
+                model_loader=model_loader,
+                mapped_store=mapped_store,
+            )
         )
-    )
-    store.set_lm_head(
-        _load_gpu_tensor(
-            "lm_head.weight",
-            device=partition.lm_head_device(),
-            dtype=dtype,
-            model_loader=model_loader,
-            mapped_store=mapped_store,
+        store.set_lm_head(
+            _load_gpu_tensor(
+                "lm_head.weight",
+                device=partition.lm_head_device(),
+                dtype=dtype,
+                model_loader=model_loader,
+                mapped_store=mapped_store,
+            )
         )
-    )
 
     return store
