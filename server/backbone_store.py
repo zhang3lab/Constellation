@@ -252,6 +252,47 @@ def preload_non_moe_backbone(
                 ),
             }
 
+        if layer_id >= 3:
+            entry["shared_expert"] = {
+                "w_up": _load_gpu_tensor(
+                    f"model.layers.{layer_id}.mlp.shared_experts.up_proj.weight",
+                    device=dev,
+                    dtype=dtype,
+                    model_loader=model_loader,
+                    mapped_store=mapped_store,
+                ),
+                "w_gate": _load_gpu_tensor(
+                    f"model.layers.{layer_id}.mlp.shared_experts.gate_proj.weight",
+                    device=dev,
+                    dtype=dtype,
+                    model_loader=model_loader,
+                    mapped_store=mapped_store,
+                ),
+                "w_down": _load_gpu_tensor(
+                    f"model.layers.{layer_id}.mlp.shared_experts.down_proj.weight",
+                    device=dev,
+                    dtype=dtype,
+                    model_loader=model_loader,
+                    mapped_store=mapped_store,
+                ),
+            }
+            entry["router"] = {
+                "gate_weight": _load_gpu_tensor(
+                    f"model.layers.{layer_id}.mlp.gate.weight",
+                    device=dev,
+                    dtype=torch.float32,
+                    model_loader=model_loader,
+                    mapped_store=mapped_store,
+                ),
+                "e_score_correction_bias": _load_gpu_tensor(
+                    f"model.layers.{layer_id}.mlp.gate.e_score_correction_bias",
+                    device=dev,
+                    dtype=torch.float32,
+                    model_loader=model_loader,
+                    mapped_store=mapped_store,
+                ),
+            }
+
         store.set_layer(layer_id, entry)
 
     store.set_model_norm(

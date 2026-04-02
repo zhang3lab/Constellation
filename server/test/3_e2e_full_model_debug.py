@@ -44,7 +44,7 @@ def main():
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
         prepared = session.full_model_executor.prepare_prompt_hidden_input(args.prompt)
-        hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+        hidden = to_numpy_f32(prepared["hidden_in"])
 
         hidden_size = int(session.get_router_config()["hidden_size"])
         if hidden.shape != (hidden_size,):
@@ -70,7 +70,7 @@ def main():
             collect_per_layer=collect_per_layer,
         )
 
-        out = np.asarray(result["output"], dtype=np.float32)
+        out = to_numpy_f32(result["output"])
         print_stats("e2e.final_hidden", out)
 
         if not np.isfinite(out).all():
@@ -80,7 +80,7 @@ def main():
             out,
             return_aux=False,
         )
-        logits = np.asarray(logits_result.output, dtype=np.float32)
+        logits = to_numpy_f32(logits_result.output)
         print_stats("e2e.logits", logits)
 
         if not np.isfinite(logits).all():

@@ -57,7 +57,7 @@ def run_runtime_attention(
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+    hidden = to_numpy_f32(prepared["hidden_in"])
 
     pos = np.asarray([position_id], dtype=np.int64)
 
@@ -72,7 +72,7 @@ def run_runtime_attention(
 
     return {
         "hidden_in": hidden,
-        "output": np.asarray(out.output, dtype=np.float32),
+        "output": to_numpy_f32(out.output),
         "aux": out.aux,
     }
 
@@ -96,7 +96,7 @@ def run_reference_attention(
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+    hidden = to_numpy_f32(prepared["hidden_in"])
 
     pos = np.asarray([position_id], dtype=np.int64)
 
@@ -111,7 +111,7 @@ def run_reference_attention(
 
     return {
         "hidden_in": hidden,
-        "output": np.asarray(out.output, dtype=np.float32),
+        "output": to_numpy_f32(out.output),
         "aux": out.aux,
     }
 

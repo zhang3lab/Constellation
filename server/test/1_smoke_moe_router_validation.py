@@ -37,7 +37,7 @@ def run_real_router_demo(session, layer_id: int, repeats: int = 10):
         print("[router] topk_weight_sum =", float(np.sum(topk_weight)))
     print("[router] output[:8] =", result["output"][:8])
 
-    out = np.asarray(result["output"], dtype=np.float32)
+    out = to_numpy_f32(result["output"])
     finite = np.isfinite(out)
     finite_count = int(finite.sum())
     total = out.size
@@ -69,7 +69,7 @@ def run_real_router_stability_test(session, layer_id: int, repeats: int = 10):
 
         routes = result.get("routes", aux.get("routes"))
         local_routes = result.get("local_routes", aux.get("local_routes"))
-        out = np.asarray(result["output"], dtype=np.float32)
+        out = to_numpy_f32(result["output"])
 
         topk_idx = aux.get("topk_idx")
         topk_weight = aux.get("topk_weight")

@@ -37,7 +37,7 @@ def main():
         executor = session.full_model_executor
         prepared = executor.prepare_prompt_hidden_input(args.prompt)
 
-        hidden_in = np.asarray(prepared["hidden_in"], dtype=np.float32)
+        hidden_in = to_numpy_f32(prepared["hidden_in"])
         input_ids = [int(x) for x in prepared["input_ids"]]
         last_token_id = int(input_ids[-1])
 

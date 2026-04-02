@@ -31,6 +31,14 @@ def collect_non_moe_backbone_tensor_names_deepseek() -> list[str]:
         names.append(f"model.layers.{layer_id}.mlp.gate_proj.weight")
         names.append(f"model.layers.{layer_id}.mlp.down_proj.weight")
 
+    for layer_id in range(3, 61):
+        names.append(f"model.layers.{layer_id}.mlp.shared_experts.up_proj.weight")
+        names.append(f"model.layers.{layer_id}.mlp.shared_experts.gate_proj.weight")
+        names.append(f"model.layers.{layer_id}.mlp.shared_experts.down_proj.weight")
+
+        names.append(f"model.layers.{layer_id}.mlp.gate.weight")
+        names.append(f"model.layers.{layer_id}.mlp.gate.e_score_correction_bias")
+
     return list(dict.fromkeys(names))
 
 
@@ -111,7 +119,6 @@ class TensorCacheBuilder:
                 "model_root": str(model_loader.model_root),
                 "weights_file": "weights.bin",
                 "num_tensors": len(index),
-                "dtype": "float32",
                 "tensors": index,
             }
             tmp_index_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")

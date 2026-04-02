@@ -136,14 +136,25 @@ def combine_outputs(weighted_outputs):
     return combined
 
 
-def run_topk_moe_layer(session, hidden: np.ndarray, routes):
-    weighted_outputs = dispatch_topk_experts(session, hidden, routes)
+def run_topk_moe_layer(session, hidden, routes):
+    if not isinstance(hidden, torch.Tensor):
+        raise TypeError(f"hidden must be torch.Tensor, got {type(hidden).__name__}")
+    if hidden.ndim != 1:
+        raise RuntimeError(f"hidden must be 1D, got shape={tuple(hidden.shape)}")
+
+    hidden_np = hidden.detach().cpu().numpy()
+    if hidden_np.dtype != np.float32:
+        hidden_np = hidden_np.astype(np.float32, copy=False)
+    if not hidden_np.flags["C_CONTIGUOUS"]:
+        hidden_np = np.ascontiguousarray(hidden_np)
+
+    weighted_outputs = dispatch_topk_experts(session, hidden_np, routes)
     combined = combine_outputs(weighted_outputs)
     return combined, weighted_outputs
 
 
 def route_token_real(
-    hidden: np.ndarray,
+    hidden,
     gate_weight: torch.Tensor,
     e_score_correction_bias: torch.Tensor,
     *,
@@ -163,13 +174,45 @@ def route_token_real(
     if topk_method != "noaux_tc":
         raise RuntimeError(f"unsupported topk_method={topk_method}")
 
-    h = torch.from_numpy(hidden.astype(np.float32))
+    if not isinstance(hidden, torch.Tensor):
+        raise TypeError(f"hidden must be torch.Tensor, got {type(hidden).__name__}")
+    if not isinstance(gate_weight, torch.Tensor):
+        raise TypeError(f"gate_weight must be torch.Tensor, got {type(gate_weight).__name__}")
+    if not isinstance(e_score_correction_bias, torch.Tensor):
+        raise TypeError(
+            f"e_score_correction_bias must be torch.Tensor, got {type(e_score_correction_bias).__name__}"
+        )
 
+    if hidden.ndim != 1:
+        raise RuntimeError(f"hidden must be 1D, got shape={tuple(hidden.shape)}")
     if gate_weight.ndim != 2:
         raise RuntimeError(f"gate_weight must be 2D, got shape={tuple(gate_weight.shape)}")
     if e_score_correction_bias.ndim != 1:
         raise RuntimeError(
             f"e_score_correction_bias must be 1D, got shape={tuple(e_score_correction_bias.shape)}"
+        )
+
+    dev = str(gate_weight.device)
+
+    if str(hidden.device) != dev:
+        raise RuntimeError(
+            f"hidden device mismatch: hidden={hidden.device} gate_weight={gate_weight.device}"
+        )
+    if str(e_score_correction_bias.device) != dev:
+        raise RuntimeError(
+            f"bias device mismatch: bias={e_score_correction_bias.device} gate_weight={gate_weight.device}"
+        )
+
+    if gate_weight.dtype != torch.float32:
+        raise TypeError(f"gate_weight must be float32, got {gate_weight.dtype}")
+    if e_score_correction_bias.dtype != torch.float32:
+        raise TypeError(
+            f"e_score_correction_bias must be float32, got {e_score_correction_bias.dtype}"
+        )
+    if hidden.dtype != torch.float32:
+        raise TypeError(
+            f"hidden must be float32 for router scoring, got {hidden.dtype}. "
+            f"Cast it explicitly in the caller."
         )
 
     num_experts, gate_hidden = gate_weight.shape
@@ -185,11 +228,11 @@ def route_token_real(
         raise RuntimeError(
             f"gate_weight shape {tuple(gate_weight.shape)} inconsistent with hidden_size={hidden_size}"
         )
-    if h.shape[0] != hidden_size:
+    if int(hidden.shape[0]) != hidden_size:
         raise RuntimeError(
-            f"hidden dim {h.shape[0]} inconsistent with hidden_size={hidden_size}"
+            f"hidden dim {int(hidden.shape[0])} inconsistent with hidden_size={hidden_size}"
         )
-    if e_score_correction_bias.shape[0] != num_experts:
+    if int(e_score_correction_bias.shape[0]) != num_experts:
         raise RuntimeError(
             f"bias shape {tuple(e_score_correction_bias.shape)} incompatible with num_experts={num_experts}"
         )
@@ -199,15 +242,15 @@ def route_token_real(
     experts_per_group = num_experts // n_group
 
     with torch.no_grad():
-        logits = gate_weight @ h
+        logits = gate_weight @ hidden
         scores = torch.sigmoid(logits)
 
     scores_for_choice = scores + e_score_correction_bias
 
     if resident_expert_ids is None:
-        resident_mask = torch.ones(num_experts, dtype=torch.bool)
+        resident_mask = torch.ones(num_experts, dtype=torch.bool, device=hidden.device)
     else:
-        resident_mask = torch.zeros(num_experts, dtype=torch.bool)
+        resident_mask = torch.zeros(num_experts, dtype=torch.bool, device=hidden.device)
         for eid in resident_expert_ids:
             eid = int(eid)
             if 0 <= eid < num_experts:
@@ -226,11 +269,10 @@ def route_token_real(
 
     selected_group_idx = torch.topk(group_scores, k=topk_group, dim=-1).indices
 
-    group_mask = torch.zeros(n_group, dtype=torch.bool)
+    group_mask = torch.zeros(n_group, dtype=torch.bool, device=hidden.device)
     group_mask[selected_group_idx] = True
 
     expert_mask = group_mask.unsqueeze(-1).expand(n_group, experts_per_group).reshape(num_experts)
-
     masked_scores_for_choice = scores_for_choice.masked_fill(~expert_mask, float("-inf"))
 
     effective_top_k = min(top_k, int(resident_mask.sum().item()))
@@ -259,31 +301,61 @@ def route_token_real(
     return routes, aux
 
 
-def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: bool = False):
-    if not isinstance(hidden, np.ndarray):
-        raise TypeError(f"hidden must be a numpy.ndarray, got {type(hidden)}")
-
-    if hidden.ndim != 1:
-        raise RuntimeError(f"hidden must be 1-D, got shape={hidden.shape}")
-
-    if hidden.dtype != np.float32:
-        raise RuntimeError(f"hidden must have dtype float32, got {hidden.dtype}")
-
-    if not hidden.flags["C_CONTIGUOUS"]:
-        hidden = np.ascontiguousarray(hidden)
-
+def run_moe_layer(session, hidden, layer_id: int, *, return_aux: bool = False):
     layer_id = int(layer_id)
 
-    router_cfg = session.get_router_config()
-    gate_weight, e_score_correction_bias = (
-        session.get_deepseek_model_loader().load_router_tensors_fp32(layer_id)
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+
+    layer_entry = session.backbone_store.layer(layer_id)
+    dev = str(layer_entry["device"])
+    runtime_dtype = session.backbone_store.dtype
+    dtype_name = torch_dtype_name(runtime_dtype)
+
+    hidden = as_array(
+        hidden,
+        f"moe.layer{layer_id}.hidden",
+        ARRCFG_VECTOR_TORCH(dtype_name, dev),
     )
 
+    router_cfg = session.get_router_config()
     hidden_size = int(router_cfg["hidden_size"])
-    if hidden.shape[0] != hidden_size:
+    if int(hidden.shape[0]) != hidden_size:
         raise RuntimeError(
-            f"hidden size mismatch: got={hidden.shape[0]} expected={hidden_size}"
+            f"hidden size mismatch: got={int(hidden.shape[0])} expected={hidden_size}"
         )
+
+    if "router" not in layer_entry:
+        raise RuntimeError(f"router weights are not loaded for layer {layer_id}")
+
+    router_entry = layer_entry["router"]
+    gate_weight = router_entry["gate_weight"]
+    e_score_correction_bias = router_entry["e_score_correction_bias"]
+
+    if not isinstance(gate_weight, torch.Tensor):
+        raise TypeError(f"gate_weight must be torch.Tensor, got {type(gate_weight).__name__}")
+    if not isinstance(e_score_correction_bias, torch.Tensor):
+        raise TypeError(
+            f"e_score_correction_bias must be torch.Tensor, got {type(e_score_correction_bias).__name__}"
+        )
+
+    if str(gate_weight.device) != dev:
+        raise RuntimeError(
+            f"router gate_weight expected device={dev}, got device={gate_weight.device}"
+        )
+    if str(e_score_correction_bias.device) != dev:
+        raise RuntimeError(
+            f"router bias expected device={dev}, got device={e_score_correction_bias.device}"
+        )
+    if gate_weight.dtype != torch.float32:
+        raise TypeError(f"router gate_weight must be float32, got {gate_weight.dtype}")
+    if e_score_correction_bias.dtype != torch.float32:
+        raise TypeError(
+            f"router e_score_correction_bias must be float32, got {e_score_correction_bias.dtype}"
+        )
+
+    # router 明确在当前 layer device 上用 fp32 跑
+    router_hidden = hidden.to(dtype=torch.float32)
 
     experts_per_layer = int(session.cfg["run"]["experts_per_layer"])
 
@@ -308,7 +380,7 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         raise RuntimeError(f"no resident experts found for layer {layer_id}")
 
     routes, aux = route_token_real(
-        hidden,
+        router_hidden,
         gate_weight,
         e_score_correction_bias,
         n_group=int(router_cfg["n_group"]),
@@ -335,11 +407,22 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         for local_expert_id, weight in routes
     ]
 
-    combined, weighted_outputs = run_topk_moe_layer(session, hidden, global_routes)
+    combined, weighted_outputs = run_topk_moe_layer(session, router_hidden, global_routes)
+
+    combined_t = torch.as_tensor(
+        combined,
+        dtype=runtime_dtype,
+        device=dev,
+    )
+    combined_t = as_array(
+        combined_t,
+        f"moe.layer{layer_id}.output",
+        ARRCFG_VECTOR_TORCH(dtype_name, dev),
+    )
 
     if return_aux:
         return {
-            "output": combined,
+            "output": combined_t,
             "aux": {
                 **aux,
                 "layer_id": layer_id,
@@ -351,7 +434,7 @@ def run_moe_layer(session, hidden: np.ndarray, layer_id: int, *, return_aux: boo
         }
 
     return {
-        "output": combined,
+        "output": combined_t,
     }
 
 

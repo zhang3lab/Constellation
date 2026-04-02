@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 
+from server.array_utils import ARRCFG_HIDDEN_TORCH, as_array, torch_dtype_name
 from server.full_model_runtime import run_full_model
 
 
@@ -28,7 +30,11 @@ def run_decode(
     tokenizer = session.get_deepseek_model_loader().load_tokenizer()
 
     prepared = executor.prepare_prompt_hidden_input(prompt)
-    current_hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+    current_hidden = prepared["hidden_in"]
+    if not isinstance(current_hidden, torch.Tensor):
+        raise TypeError(
+            f'prepared["hidden_in"] expected torch.Tensor, got {type(current_hidden).__name__}'
+        )
 
     prompt_token_ids = [int(x) for x in prepared["input_ids"]]
     generated_ids = list(prompt_token_ids)
@@ -48,22 +54,52 @@ def run_decode(
             collect_per_layer=False,
         )
 
-        final_hidden = np.asarray(result["output"], dtype=np.float32)
-        if not np.isfinite(final_hidden).all():
+        final_hidden = result["output"]
+        if not isinstance(final_hidden, torch.Tensor):
+            raise TypeError(
+                f'run_full_model(... )["output"] expected torch.Tensor, got {type(final_hidden).__name__}'
+            )
+
+        final_hidden = as_array(
+            final_hidden,
+            f"decode.step{step}.final_hidden",
+            ARRCFG_HIDDEN_TORCH(
+                torch_dtype_name(final_hidden.dtype),
+                str(final_hidden.device),
+            ),
+        )
+        if not torch.all(torch.isfinite(final_hidden)).item():
             raise RuntimeError(f"non-finite final_hidden at decode step {step}")
 
         logits_result = executor.run_final_norm_and_lm_head(
             final_hidden,
             return_aux=False,
         )
-        logits = np.asarray(logits_result.output, dtype=np.float32)
-        if not np.isfinite(logits).all():
+        logits = logits_result.output
+        if not isinstance(logits, torch.Tensor):
+            raise TypeError(
+                f"logits_result.output expected torch.Tensor, got {type(logits).__name__}"
+            )
+
+        logits = as_array(
+            logits,
+            f"decode.step{step}.logits",
+            ARRCFG_HIDDEN_TORCH(
+                torch_dtype_name(logits.dtype),
+                str(logits.device),
+            ),
+        )
+        if not torch.all(torch.isfinite(logits)).item():
             raise RuntimeError(f"non-finite logits at decode step {step}")
 
+        if logits.ndim != 1:
+            raise RuntimeError(
+                f"decode step {step} expected 1D logits for single-token decode, got shape={tuple(logits.shape)}"
+            )
+
         if strategy == "greedy":
-            topk_ids = np.argsort(logits)[-int(topk):][::-1]
-            topk_vals = logits[topk_ids]
-            next_token_id = int(topk_ids[0])
+            topk_vals, topk_ids = torch.topk(logits, k=int(topk))
+            next_token_id = int(topk_ids[0].item())
         else:
             raise RuntimeError(f"unsupported decode strategy: {strategy}")
 
@@ -74,9 +110,9 @@ def run_decode(
                 {
                     "step": step,
                     "position": current_pos,
-                    "final_hidden": final_hidden.copy(),
-                    "logits_top_ids": topk_ids.tolist(),
-                    "logits_top_vals": topk_vals.tolist(),
+                    "final_hidden": final_hidden.detach().clone(),
+                    "logits_top_ids": [int(x) for x in topk_ids.detach().cpu().tolist()],
+                    "logits_top_vals": [float(x) for x in topk_vals.detach().cpu().tolist()],
                     "next_token_id": next_token_id,
                     "next_token_text": tokenizer.decode([next_token_id]),
                     "text_so_far": tokenizer.decode(generated_ids),

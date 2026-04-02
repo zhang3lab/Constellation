@@ -72,7 +72,7 @@ def run_runtime_path(
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+    hidden = to_numpy_f32(prepared["hidden_in"])
 
     result = run_full_model(
         session,
@@ -93,9 +93,9 @@ def run_runtime_path(
     return {
         "prepared": prepared,
         "hidden_in": hidden,
-        "final_hidden": np.asarray(result["output"], dtype=np.float32),
+        "final_hidden": to_numpy_f32(result["output"]),
         "per_layer": result.get("per_layer", []),
-        "logits": np.asarray(logits_result.output, dtype=np.float32),
+        "logits": to_numpy_f32(logits_result.output),
     }
 
 
@@ -119,7 +119,7 @@ def run_reference_path(
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = np.asarray(prepared["hidden_in"], dtype=np.float32)
+    hidden = to_numpy_f32(prepared["hidden_in"])
 
     result = run_full_model(
         session,
@@ -140,9 +140,9 @@ def run_reference_path(
     return {
         "prepared": prepared,
         "hidden_in": hidden,
-        "final_hidden": np.asarray(result["output"], dtype=np.float32),
+        "final_hidden": to_numpy_f32(result["output"]),
         "per_layer": result.get("per_layer", []),
-        "logits": np.asarray(logits_result.output, dtype=np.float32),
+        "logits": to_numpy_f32(logits_result.output),
     }
 
 

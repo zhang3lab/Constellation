@@ -13,10 +13,24 @@ def make_safe_input(hidden_dim: int):
 
 def stats_str(name, x):
     if isinstance(x, torch.Tensor):
-        a = x.detach().cpu().float().numpy()
-    else:
-        a = np.asarray(x, dtype=np.float32)
+        a = x.detach()
+        if a.dtype != torch.float32:
+            a = a.to(torch.float32)
+        finite = torch.isfinite(a)
+        finite_count = int(finite.sum().item())
+        total = a.numel()
 
+        if finite_count == 0:
+            return f"[stats] {name}: shape={tuple(a.shape)} finite=0/{total} all non-finite"
+
+        af = a[finite]
+        return (
+            f"[stats] {name}: shape={tuple(a.shape)} finite={finite_count}/{total} "
+            f"min={float(af.min().item()):.6e} max={float(af.max().item()):.6e} "
+            f"mean={float(af.mean().item()):.6e} std={float(af.std(unbiased=False).item()):.6e}"
+        )
+
+    a = np.asarray(x, dtype=np.float32)
     finite = np.isfinite(a)
     finite_count = int(finite.sum())
     total = a.size
@@ -73,3 +87,9 @@ def compare_stability(name, a, b):
         f"mean_abs={mean_abs:.6e} "
         f"cos={cos:.8f}"
     )
+
+
+def to_numpy_f32(x):
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().float().numpy()
+    return np.asarray(x, dtype=np.float32)
