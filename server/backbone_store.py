@@ -255,24 +255,33 @@ def preload_non_moe_backbone(
         entry = {
             "device": dev,
         }
-
+     
         load_this_layer = (layer_ids is None or layer_id in layer_ids)
-
-        if load_this_layer and plan.attention.enabled:
+     
+        need_attention = load_this_layer and plan.attention.enabled
+        need_dense_prefix = load_this_layer and plan.dense_prefix.enabled and layer_id < 3
+        need_shared_expert = load_this_layer and plan.shared_expert.enabled and layer_id >= 3
+        need_router = load_this_layer and plan.router.enabled and layer_id >= 3
+     
+        if need_attention:
             entry["input_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.input_layernorm.weight",
                 device=dev,
-                dtype=plan.attention.dtype,
+                dtype=plan.runtime_dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )
+     
+        if need_attention or need_dense_prefix or need_shared_expert:
             entry["post_attention_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.post_attention_layernorm.weight",
                 device=dev,
-                dtype=plan.attention.dtype,
+                dtype=plan.runtime_dtype,
                 model_loader=model_loader,
                 mapped_store=mapped_store,
             )
+     
+        if need_attention:
             entry["attention"] = {
                 "input_layernorm": _load_gpu_tensor(
                     f"model.layers.{layer_id}.input_layernorm.weight",
@@ -331,8 +340,8 @@ def preload_non_moe_backbone(
                     mapped_store=mapped_store,
                 ),
             }
-
-        if load_this_layer and plan.dense_prefix.enabled and layer_id < 3:
+     
+        if need_dense_prefix:
             entry["dense_ffn"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.up_proj.weight",
@@ -356,8 +365,8 @@ def preload_non_moe_backbone(
                     mapped_store=mapped_store,
                 ),
             }
-
-        if load_this_layer and plan.shared_expert.enabled and layer_id >= 3:
+     
+        if need_shared_expert:
             entry["shared_expert"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.shared_experts.up_proj.weight",
@@ -381,8 +390,8 @@ def preload_non_moe_backbone(
                     mapped_store=mapped_store,
                 ),
             }
-
-        if load_this_layer and plan.router.enabled and layer_id >= 3:
+     
+        if need_router:
             entry["router"] = {
                 "gate_weight": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.gate.weight",
@@ -399,7 +408,7 @@ def preload_non_moe_backbone(
                     mapped_store=mapped_store,
                 ),
             }
-
+     
         store.set_layer(layer_id, entry)
 
     if plan.norm.enabled:
