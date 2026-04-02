@@ -43,19 +43,12 @@ ARRCFG_VECTOR_NUMPY_F32 = ArrayConfig(
 )
 
 
-def ARRCFG_HIDDEN_TORCH(dtype: torch.dtype, device: str) -> ArrayConfig:
-    if dtype == torch.float32:
-        dtype_name = "float32"
-    elif dtype == torch.float16:
-        dtype_name = "float16"
-    elif dtype == torch.bfloat16:
-        dtype_name = "bfloat16"
-    else:
+def ARRCFG_HIDDEN_TORCH(dtype: str, device: str) -> ArrayConfig:
+    if dtype not in ("float32", "float16", "bfloat16"):
         raise ValueError(f"unsupported torch dtype: {dtype}")
-
     return ArrayConfig(
         backend="torch",
-        dtype=dtype_name,
+        dtype=dtype,
         device=device,
         allow_1d=True,
         allow_2d=True,
@@ -65,19 +58,12 @@ def ARRCFG_HIDDEN_TORCH(dtype: torch.dtype, device: str) -> ArrayConfig:
     )
 
 
-def ARRCFG_VECTOR_TORCH(dtype: torch.dtype, device: str) -> ArrayConfig:
-    if dtype == torch.float32:
-        dtype_name = "float32"
-    elif dtype == torch.float16:
-        dtype_name = "float16"
-    elif dtype == torch.bfloat16:
-        dtype_name = "bfloat16"
-    else:
+def ARRCFG_VECTOR_TORCH(dtype: str, device: str) -> ArrayConfig:
+    if dtype not in ("float32", "float16", "bfloat16"):
         raise ValueError(f"unsupported torch dtype: {dtype}")
-
     return ArrayConfig(
         backend="torch",
-        dtype=dtype_name,
+        dtype=dtype,
         device=device,
         allow_1d=True,
         allow_2d=False,
