@@ -154,7 +154,6 @@ class InferenceSession:
                 device=dev,
                 dtype=self.backbone_store.dtype,
             )
-        print(self.freq_cis_by_device.keys())
 
 
     def ensure_full_model_runtime(
@@ -198,7 +197,6 @@ class InferenceSession:
         )
      
         self.page_attention_cache_managers = {}
-        self.freq_cis_by_device = {}
 
         max_batch_size = int(kv_cache_cfg["max_batch_size"])
         max_seq_len = int(kv_cache_cfg["max_seq_len"])
