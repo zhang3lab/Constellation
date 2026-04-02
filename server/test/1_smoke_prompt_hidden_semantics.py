@@ -41,7 +41,7 @@ def main():
         input_ids = [int(x) for x in prepared["input_ids"]]
         last_token_id = int(input_ids[-1])
 
-        embed_hidden = executor.embed_token_id(last_token_id)
+        embed_hidden = to_numpy_f32(executor.embed_token_id(last_token_id))
 
         print(f"[semantics] prompt={args.prompt!r}")
         print(f"[semantics] input_ids={input_ids}")
