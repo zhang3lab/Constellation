@@ -75,12 +75,14 @@ class BackboneLoadPlan:
     embed: LoadSpec
     norm: LoadSpec
     lm_head: LoadSpec
+    layer_ids: frozenset[int] | None = None
 
     @staticmethod
     def full(
         *,
         default_dtype: torch.dtype = torch.bfloat16,
         router_dtype: torch.dtype = torch.float32,
+        layer_ids: set[int] | frozenset[int] | None = None,
     ) -> "BackboneLoadPlan":
         return BackboneLoadPlan(
             attention=LoadSpec(True, default_dtype),
@@ -90,12 +92,14 @@ class BackboneLoadPlan:
             embed=LoadSpec(True, default_dtype),
             norm=LoadSpec(True, default_dtype),
             lm_head=LoadSpec(True, default_dtype),
+            layer_ids=None if layer_ids is None else frozenset(int(x) for x in layer_ids),
         )
 
     @staticmethod
     def router_only(
         *,
         router_dtype: torch.dtype = torch.float32,
+        layer_ids: set[int] | frozenset[int] | None = None,
     ) -> "BackboneLoadPlan":
         off = LoadSpec(False, torch.bfloat16)
         return BackboneLoadPlan(
@@ -106,6 +110,7 @@ class BackboneLoadPlan:
             embed=off,
             norm=off,
             lm_head=off,
+            layer_ids=None if layer_ids is None else frozenset(int(x) for x in layer_ids),
         )
 
     @staticmethod
@@ -113,6 +118,7 @@ class BackboneLoadPlan:
         *,
         attention_dtype: torch.dtype = torch.float32,
         embed_dtype: torch.dtype = torch.float32,
+        layer_ids: set[int] | frozenset[int] | None = None,
     ) -> "BackboneLoadPlan":
         off = LoadSpec(False, torch.bfloat16)
         return BackboneLoadPlan(
@@ -123,6 +129,7 @@ class BackboneLoadPlan:
             embed=LoadSpec(True, embed_dtype),
             norm=off,
             lm_head=off,
+            layer_ids=None if layer_ids is None else frozenset(int(x) for x in layer_ids),
         )
 
 
@@ -201,6 +208,8 @@ def preload_non_moe_backbone(
     if plan is None:
         plan = BackboneLoadPlan.full()
 
+    layer_ids = None if plan.layer_ids is None else {int(x) for x in plan.layer_ids}
+
     # store.dtype 代表主 hidden/runtime dtype；router 可单独是 fp32
     store = BackboneStore(
         mla_cfg=model_loader.mla_config(),
@@ -225,7 +234,9 @@ def preload_non_moe_backbone(
             "device": dev,
         }
 
-        if plan.attention.enabled:
+        load_this_layer = (layer_ids is None or layer_id in layer_ids)
+
+        if load_this_layer and plan.attention.enabled:
             entry["input_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.input_layernorm.weight",
                 device=dev,
@@ -299,7 +310,7 @@ def preload_non_moe_backbone(
                 ),
             }
 
-        if plan.dense_prefix.enabled and layer_id < 3:
+        if load_this_layer and plan.dense_prefix.enabled and layer_id < 3:
             entry["dense_ffn"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.up_proj.weight",
@@ -324,7 +335,7 @@ def preload_non_moe_backbone(
                 ),
             }
 
-        if plan.shared_expert.enabled and layer_id >= 3:
+        if load_this_layer and plan.shared_expert.enabled and layer_id >= 3:
             entry["shared_expert"] = {
                 "w_up": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.shared_experts.up_proj.weight",
@@ -349,7 +360,7 @@ def preload_non_moe_backbone(
                 ),
             }
 
-        if plan.router.enabled and layer_id >= 3:
+        if load_this_layer and plan.router.enabled and layer_id >= 3:
             entry["router"] = {
                 "gate_weight": _load_gpu_tensor(
                     f"model.layers.{layer_id}.mlp.gate.weight",

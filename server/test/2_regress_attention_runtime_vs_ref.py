@@ -168,6 +168,7 @@ def main():
             plan=BackboneLoadPlan.attention_only(
                 attention_dtype=torch.float32,
                 embed_dtype=torch.float32,
+                layer_ids={int(args.layer_id)},
             ),
         )
         ref_sess.ensure_freq_cis_for_full_model_runtime()
