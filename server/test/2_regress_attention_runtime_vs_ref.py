@@ -7,12 +7,14 @@ import numpy as np
 import torch
 
 from server.absorbed_latent_ref import run_attention_block_ref
+from server.backbone_store import BackboneLoadPlan, preload_non_moe_backbone
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
 from server.inference_session import InferenceSession
+from server.tensor_cache import MappedTensorStore
 from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
@@ -158,6 +160,18 @@ def main():
         )
 
     with InferenceSession(coord, cfg) as ref_sess:
+        ref_sess.full_model_executor = DeepseekFullModelExecutor(ref_sess)
+     
+        ref_sess.backbone_store = preload_non_moe_backbone(
+            ref_sess,
+            mapped_store=MappedTensorStore("tmp/non_moe_backbone_cache"),
+            plan=BackboneLoadPlan.full(
+                default_dtype=torch.float32,
+                router_dtype=torch.float32,
+            ),
+        )
+        ref_sess.ensure_freq_cis_for_full_model_runtime()
+     
         ref_out = run_reference_attention(
             ref_sess,
             prompt=args.prompt,
