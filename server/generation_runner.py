@@ -46,6 +46,19 @@ class GenerationRunner:
         if sampling_config is None:
             sampling_config = SamplingConfig()
 
+        sampling_config = SamplingConfig(
+            strategy=sampling_config.strategy,
+            max_new_tokens=sampling_config.max_new_tokens,
+            stop_token_ids=list(sampling_config.stop_token_ids),
+            stop_strings=list(sampling_config.stop_strings),
+        )
+
+        if not sampling_config.stop_token_ids:
+            tokenizer = self.inference_session.get_deepseek_model_loader().load_tokenizer()
+            eos_token_id = tokenizer.eos_token_id
+            if eos_token_id is not None:
+                sampling_config.stop_token_ids.append(int(eos_token_id))
+
         if debug_config is None:
             debug_config = DebugConfig()
 
@@ -396,8 +409,16 @@ class GenerationRunner:
         generate_finished_at: float,
     ) -> GenerationResult:
         output_token_ids = list(gen.generated_token_ids)
+     
+        if (
+            gen.finish_reason == "stop_token"
+            and output_token_ids
+            and output_token_ids[-1] in gen.sampling_config.stop_token_ids
+        ):
+            output_token_ids = output_token_ids[:-1]
+     
         output_text = self._decode_output_tokens(output_token_ids)
-
+     
         return GenerationResult(
             request_id=gen.request_id,
             model_name=gen.model_name,
