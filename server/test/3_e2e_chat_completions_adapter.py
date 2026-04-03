@@ -5,11 +5,15 @@ import json
 
 import torch
 
-from server.chat_completions_adapter import run_chat_completions
+from server.chat_completions_adapter import (
+    chat_completions_request_to_generation_inputs,
+    generation_result_to_chat_completions_response,
+)
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
+from server.generation_runner import GenerationRunner
 from server.inference_session import InferenceSession
 
 
@@ -52,10 +56,45 @@ def main():
         )
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
-        response = run_chat_completions(session, request)
+        tokenizer = session.get_deepseek_model_loader().load_tokenizer()
+        runner = GenerationRunner(session)
+
+        input_ids, sampling_config = chat_completions_request_to_generation_inputs(
+            session,
+            request,
+        )
+
+        result = runner.generate(
+            input_ids=input_ids,
+            sampling_config=sampling_config,
+        )
+        response = generation_result_to_chat_completions_response(result)
 
         print("[chat] request =")
         print(json.dumps(request, ensure_ascii=False, indent=2))
+        print()
+
+        print("[chat] templated input_ids =")
+        print(input_ids)
+        print()
+
+        print("[chat] templated decoded prompt =")
+        print(repr(tokenizer.decode(input_ids)))
+        print(tokenizer.decode(input_ids))
+        print()
+
+        print("[chat] output_token_ids =")
+        print(result.output_token_ids)
+        print()
+
+        if hasattr(tokenizer, "convert_ids_to_tokens"):
+            print("[chat] output_tokens =")
+            print(tokenizer.convert_ids_to_tokens(result.output_token_ids))
+            print()
+
+        print("[chat] output_text =")
+        print(repr(result.output_text))
+        print(result.output_text)
         print()
 
         print("[chat] response =")
