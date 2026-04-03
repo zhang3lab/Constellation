@@ -4,6 +4,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+import torch
+
 from .decode_runtime import (
     run_decode_step_logits,
     sample_greedy_from_logits,
