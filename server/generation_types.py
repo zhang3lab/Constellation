@@ -24,10 +24,24 @@ FinishReason = Literal[
 ]
 
 
+class SamplingStrategy:
+    pass
+
+
 @dataclass(slots=True)
-class SamplingConfig:
+class GreedySampling(SamplingStrategy):
+    pass
+
+
+@dataclass(slots=True)
+class TemperatureTopPSampling(SamplingStrategy):
     temperature: float = 1.0
     top_p: float = 1.0
+
+
+@dataclass(slots=True)
+class SamplingConfig:
+    strategy: SamplingStrategy = field(default_factory=GreedySampling)
     max_new_tokens: int = 16
     stop_token_ids: list[int] = field(default_factory=list)
     stop_strings: list[str] = field(default_factory=list)

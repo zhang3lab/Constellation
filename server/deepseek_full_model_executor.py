@@ -628,9 +628,7 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         return [int(x) for x in ids]
 
 
-    def embed_token_id(self, token_id: int):
-        token_id = int(token_id)
-     
+    def embed_token_ids(self, token_ids):
         if self.session.backbone_store is None:
             raise RuntimeError("session.backbone_store is not initialized")
      
@@ -640,16 +638,49 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         if not isinstance(emb, torch.Tensor):
             raise TypeError(f"embed_tokens expected torch.Tensor, got {type(emb).__name__}")
      
-        if token_id < 0 or token_id >= int(emb.shape[0]):
-            raise RuntimeError(
-                f"token_id out of range: got={token_id} vocab_size={int(emb.shape[0])}"
+        squeeze = False
+     
+        if isinstance(token_ids, int):
+            ids = [int(token_ids)]
+            squeeze = True
+        elif isinstance(token_ids, list):
+            if not token_ids:
+                raise RuntimeError("embed_token_ids requires non-empty token_ids")
+            ids = []
+            for i, x in enumerate(token_ids):
+                if not isinstance(x, int):
+                    raise TypeError(
+                        f"token_ids[{i}] expected int, got {type(x).__name__}"
+                    )
+                ids.append(int(x))
+        else:
+            raise TypeError(
+                f"token_ids expected int or list[int], got {type(token_ids).__name__}"
             )
      
-        x = emb[token_id]
+        vocab_size = int(emb.shape[0])
+        for i, token_id in enumerate(ids):
+            if token_id < 0 or token_id >= vocab_size:
+                raise RuntimeError(
+                    f"token_ids[{i}] out of range: got={token_id} vocab_size={vocab_size}"
+                )
+     
+        index = torch.tensor(ids, device=emb.device, dtype=torch.long)
+        x = emb.index_select(0, index)
+     
+        if squeeze:
+            x = x[0]
+            x = as_array(
+                x,
+                f"embed_token_ids[{ids[0]}]",
+                ARRCFG_VECTOR_TORCH(torch_dtype_name(emb.dtype), str(emb.device)),
+            )
+            return x
+     
         x = as_array(
             x,
-            f"embed_token_id[{token_id}]",
-            ARRCFG_VECTOR_TORCH(torch_dtype_name(emb.dtype), str(emb.device)),
+            f"embed_token_ids[len={len(ids)}]",
+            ARRCFG_HIDDEN_TORCH(torch_dtype_name(emb.dtype), str(emb.device)),
         )
         return x
 
@@ -672,7 +703,7 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
             raise RuntimeError("prompt encoded to empty input_ids")
      
         last_id = int(input_ids[-1])
-        hidden = self.embed_token_id(last_id)
+        hidden = self.embed_token_ids(last_id)
      
         return {
             "prompt": prompt,

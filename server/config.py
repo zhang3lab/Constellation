@@ -96,6 +96,7 @@ def load_config(path: str) -> Dict[str, Any]:
         _require_int(node, "control_port", where=f"nodes[{i}]")
 
     model = _require_object(obj, "model")
+    _require_nonempty_str(model, "name", where="model")
     _require_nonempty_str(model, "family", where="model")
     _require_nonempty_str(model, "root", where="model")
     _require_int(model, "chunk_size", where="model")
