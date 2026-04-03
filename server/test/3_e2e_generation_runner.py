@@ -16,15 +16,6 @@ from server.generation_types import (
 from server.inference_session import InferenceSession
 
 
-def _encode_prompt(session: InferenceSession, prompt: str) -> list[int]:
-    tokenizer = session.get_deepseek_model_loader().load_tokenizer()
-    input_ids = tokenizer.encode(prompt, add_special_tokens=True)
-    input_ids = [int(x) for x in input_ids]
-    if not input_ids:
-        raise RuntimeError("prompt encoded to empty input_ids")
-    return input_ids
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
@@ -46,7 +37,9 @@ def main():
             max_new_tokens=int(args.max_new_tokens),
         )
 
-        input_ids = _encode_prompt(session, args.prompt)
+        input_ids = session.full_model_executor.encode(args.prompt)
+        if not input_ids:
+            raise RuntimeError("prompt encoded to empty input_ids")
         print(f"[runner] prompt={args.prompt!r}")
         print(f"[runner] input_ids={input_ids}")
 

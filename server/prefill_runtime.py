@@ -20,7 +20,13 @@ def run_prefill(
     if not isinstance(prompt, str):
         raise TypeError(f"prompt expected str, got {type(prompt).__name__}")
 
-    input_ids = _encode_prompt(session, prompt)
+    executor = session.full_model_executor
+    if executor is None:
+        raise RuntimeError("session.full_model_executor is not initialized")
+
+    input_ids = executor.encode(prompt)
+    if not input_ids:
+        raise RuntimeError("prompt encoded to empty input_ids")
     return run_prefill_from_input_ids(
         session,
         input_ids=input_ids,
@@ -139,18 +145,6 @@ def _validate_prefill_args(
         raise RuntimeError(
             f"end_layer must be >= start_layer, got start={start_layer} end={end_layer}"
         )
-
-
-def _encode_prompt(session, prompt: str) -> list[int]:
-    loader = session.get_deepseek_model_loader()
-    tokenizer = loader.load_tokenizer()
-    input_ids = tokenizer.encode(prompt, add_special_tokens=True)
-    input_ids = [int(x) for x in input_ids]
-
-    if not input_ids:
-        raise RuntimeError("prompt encoded to empty input_ids")
-
-    return input_ids
 
 
 def _build_prefill_position_ids(input_ids: list[int]) -> np.ndarray:

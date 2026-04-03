@@ -341,18 +341,19 @@ class GenerationRunner:
         gen: GenerationState,
         token_id: int,
     ) -> FinishReason | None:
-        # TODO:
-        # 1. eos_token
-        # 2. stop_token
-        # 3. stop_string
-        # 4. max_new_tokens
-        #
-        # The exact priority/order should stay consistent with the chosen
-        # generation semantics. For now we only implement stop_token and
-        # max_new_tokens.
+        tokenizer = self.inference_session.get_deepseek_model_loader().load_tokenizer()
+        eos_token_id = tokenizer.eos_token_id
+
+        if eos_token_id is not None and int(token_id) == int(eos_token_id):
+            return "eos_token"
+
         if token_id in gen.sampling_config.stop_token_ids:
             return "stop_token"
 
+        # TODO:
+        # - stop_string
+        #   This likely needs checking the visible decoded tail rather than
+        #   only the current token id.
         if gen.completion_tokens_count >= gen.sampling_config.max_new_tokens:
             return "max_new_tokens"
 
@@ -409,16 +410,25 @@ class GenerationRunner:
         generate_finished_at: float,
     ) -> GenerationResult:
         output_token_ids = list(gen.generated_token_ids)
-     
-        if (
-            gen.finish_reason == "stop_token"
-            and output_token_ids
-            and output_token_ids[-1] in gen.sampling_config.stop_token_ids
-        ):
-            output_token_ids = output_token_ids[:-1]
-     
+
+        if output_token_ids:
+            tokenizer = self.inference_session.get_deepseek_model_loader().load_tokenizer()
+            eos_token_id = tokenizer.eos_token_id
+         
+            if (
+                gen.finish_reason == "eos_token"
+                and eos_token_id is not None
+                and output_token_ids[-1] == int(eos_token_id)
+            ):
+                output_token_ids = output_token_ids[:-1]
+            elif (
+                gen.finish_reason == "stop_token"
+                and output_token_ids[-1] in gen.sampling_config.stop_token_ids
+            ):
+                output_token_ids = output_token_ids[:-1]
+
         output_text = self._decode_output_tokens(output_token_ids)
-     
+
         return GenerationResult(
             request_id=gen.request_id,
             model_name=gen.model_name,
