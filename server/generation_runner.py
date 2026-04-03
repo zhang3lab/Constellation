@@ -343,20 +343,22 @@ class GenerationRunner:
     ) -> FinishReason | None:
         tokenizer = self.inference_session.get_deepseek_model_loader().load_tokenizer()
         eos_token_id = tokenizer.eos_token_id
-
+     
         if eos_token_id is not None and int(token_id) == int(eos_token_id):
             return "eos_token"
-
+     
         if token_id in gen.sampling_config.stop_token_ids:
             return "stop_token"
-
-        # TODO:
-        # - stop_string
-        #   This likely needs checking the visible decoded tail rather than
-        #   only the current token id.
+     
+        if gen.sampling_config.stop_strings:
+            generated_text = self._decode_output_tokens(list(gen.generated_token_ids))
+            for stop_string in gen.sampling_config.stop_strings:
+                if generated_text.endswith(stop_string):
+                    return "stop_string"
+     
         if gen.completion_tokens_count >= gen.sampling_config.max_new_tokens:
             return "max_new_tokens"
-
+     
         return None
 
     def _forward_one_token(
@@ -410,11 +412,11 @@ class GenerationRunner:
         generate_finished_at: float,
     ) -> GenerationResult:
         output_token_ids = list(gen.generated_token_ids)
-
+     
         if output_token_ids:
             tokenizer = self.inference_session.get_deepseek_model_loader().load_tokenizer()
             eos_token_id = tokenizer.eos_token_id
-         
+     
             if (
                 gen.finish_reason == "eos_token"
                 and eos_token_id is not None
@@ -426,9 +428,15 @@ class GenerationRunner:
                 and output_token_ids[-1] in gen.sampling_config.stop_token_ids
             ):
                 output_token_ids = output_token_ids[:-1]
-
+     
         output_text = self._decode_output_tokens(output_token_ids)
-
+     
+        if gen.finish_reason == "stop_string" and gen.sampling_config.stop_strings:
+            for stop_string in gen.sampling_config.stop_strings:
+                if output_text.endswith(stop_string):
+                    output_text = output_text[: -len(stop_string)]
+                    break
+     
         return GenerationResult(
             request_id=gen.request_id,
             model_name=gen.model_name,
