@@ -6,6 +6,7 @@ from server.array_utils import (
     ARRCFG_VECTOR_NUMPY_F32,
     ARRCFG_HIDDEN_TORCH,
     ARRCFG_VECTOR_TORCH,
+    ARRCFG_PARAM_TORCH,
     as_array,
     torch_dtype_name,
 )
