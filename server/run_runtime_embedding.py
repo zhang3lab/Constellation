@@ -50,9 +50,17 @@ def main() -> None:
     cfg = load_config(args.config)
     coord = Coordinator(cfg["nodes"])
     setup_control_plane(coord, cfg)
+    kv_cache_cfg = cfg["kv_cache"]
 
     with InferenceSession(coord, cfg) as session:
         session.full_model_executor = DeepseekFullModelExecutor(session)
+
+        session.ensure_full_model_runtime(
+            tensor_cache_dir="tmp/non_moe_backbone_cache",
+            split_layer=30,
+            backbone_dtype=torch.bfloat16,
+            kv_cache_cfg=kv_cache_cfg,
+        )
 
         executor = session.full_model_executor
         hidden = executor.embed_token_ids(input_ids)
