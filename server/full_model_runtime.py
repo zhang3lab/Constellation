@@ -12,7 +12,7 @@ from server.array_utils import (
 from server.deepseek_full_model_executor import (
     DeepseekFullModelExecutorBase,
 )
-from server.full_model_types import AttentionSharedSegmentResult, ModelExecResult
+from server.full_model_types import ModelExecResult
 from server.moe_layer_runtime import run_moe_layer
 from server.test.utils import print_stats
 
