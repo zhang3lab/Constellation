@@ -40,6 +40,11 @@ def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
     }
 
 
+def expand_half_to_interleaved_full(x_half: torch.Tensor) -> torch.Tensor:
+    # [L, D/2] -> [L, D] as [x0, x0, x1, x1, ...]
+    return torch.stack([x_half, x_half], dim=-1).reshape(x_half.shape[0], -1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hf-dir", type=str, required=True)
@@ -51,25 +56,21 @@ def main() -> None:
     rt_dir = Path(args.runtime_dir)
 
     freq_cis = torch.load(rt_dir / "freq_cis.pt", map_location="cpu").float()
-    rope_cos = torch.load(hf_dir / "rope_cos.pt", map_location="cpu").float()
-    rope_sin = torch.load(hf_dir / "rope_sin.pt", map_location="cpu").float()
+    rope_cos = torch.load(hf_dir / "rope_cos.pt", map_location="cpu").float().squeeze()
+    rope_sin = torch.load(hf_dir / "rope_sin.pt", map_location="cpu").float().squeeze()
 
     # runtime freq_cis: [L, D/2, 2]
-    freq_cos = freq_cis[..., 0]
-    freq_sin = freq_cis[..., 1]
+    freq_cos_half = freq_cis[..., 0]   # [L, D/2]
+    freq_sin_half = freq_cis[..., 1]   # [L, D/2]
 
-    # Normalize HF cos/sin to [L, D/2]
-    # Common cases:
-    #   [1, 1, L, D/2] -> squeeze -> [L, D/2]
-    #   [1, L, 1, D/2] -> squeeze -> [L, D/2]
-    #   [L, D/2] -> unchanged
-    rope_cos_n = rope_cos.squeeze()
-    rope_sin_n = rope_sin.squeeze()
+    # expand to HF full interleaved layout [L, D]
+    freq_cos_full = expand_half_to_interleaved_full(freq_cos_half)
+    freq_sin_full = expand_half_to_interleaved_full(freq_sin_half)
 
     out = {
         "comparisons": {
-            "rope_cos": compare_tensors(freq_cos, rope_cos_n, "rope_cos"),
-            "rope_sin": compare_tensors(freq_sin, rope_sin_n, "rope_sin"),
+            "rope_cos": compare_tensors(freq_cos_full, rope_cos, "rope_cos"),
+            "rope_sin": compare_tensors(freq_sin_full, rope_sin, "rope_sin"),
         }
     }
 
