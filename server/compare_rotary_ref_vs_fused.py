@@ -6,7 +6,10 @@ from pathlib import Path
 
 import torch
 
-from server.shallow_mla_wrapper import precompute_freqs_cis  # adjust if your project uses another helper
+from server.config import load_config
+from server.control_plane import setup_control_plane
+from server.coordinator import Coordinator
+from server.inference_session import InferenceSession
 from server.mla_runtime import fused_apply_rotary_emb
 
 
@@ -35,37 +38,16 @@ def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(torch.nn.functional.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item())
 
 
-def make_freqs(
-    *,
-    seq_len: int,
-    rope_dim: int,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    # DeepSeek / ShallowMLA-style defaults used elsewhere in your project.
-    freqs = precompute_freqs_cis(
-        dim=rope_dim,
-        end=seq_len,
-        theta=10000.0,
-        rope_factor=40.0,
-        beta_fast=32.0,
-        beta_slow=1.0,
-        original_seq_len=4096,
-    )
-    if not isinstance(freqs, torch.Tensor):
-        freqs = torch.as_tensor(freqs)
-    return freqs.to(device=device, dtype=dtype)
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--batch-size", type=int, default=1)
+    ap.add_argument("--config", type=str, default="server/test/config.json")
     ap.add_argument("--seq-len", type=int, default=12)
     ap.add_argument("--num-heads", type=int, default=128)
     ap.add_argument("--rope-dim", type=int, default=64)
     ap.add_argument("--dtype", type=str, default="bfloat16", choices=["float16", "bfloat16", "float32"])
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--save-dir", type=str, default="")
+    ap.add_argument("--device", type=str, default="cuda:0")
     args = ap.parse_args()
 
     if not torch.cuda.is_available():
@@ -77,21 +59,34 @@ def main() -> None:
         "float32": torch.float32,
     }
     dtype = dtype_map[args.dtype]
-    device = torch.device("cuda")
+    device = torch.device(args.device)
 
     torch.manual_seed(args.seed)
 
+    cfg = load_config(args.config)
+    coord = Coordinator(cfg["nodes"])
+    setup_control_plane(coord, cfg)
+
+    with InferenceSession(coord, cfg) as session:
+        kv_cache_cfg = cfg["kv_cache"]
+        session.ensure_full_model_runtime(
+            tensor_cache_dir="tmp/non_moe_backbone_cache",
+            split_layer=30,
+            backbone_dtype=dtype,
+            kv_cache_cfg=kv_cache_cfg,
+        )
+        session.ensure_freq_cis_by_device(
+            max_seq_len=max(int(kv_cache_cfg["max_seq_len"]), args.seq_len),
+        )
+
+        freqs_all = session.freq_cis_by_device[str(device)]
+        freqs_cis = freqs_all[: args.seq_len, : args.rope_dim // 2, :].to(device=device, dtype=dtype)
+
     x = torch.randn(
-        args.batch_size,
+        1,
         args.seq_len,
         args.num_heads,
         args.rope_dim,
-        device=device,
-        dtype=dtype,
-    )
-    freqs_cis = make_freqs(
-        seq_len=args.seq_len,
-        rope_dim=args.rope_dim,
         device=device,
         dtype=dtype,
     )
