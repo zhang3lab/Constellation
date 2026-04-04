@@ -289,6 +289,14 @@ def main() -> None:
         "attn_output_final",
         "attn_output_pre_o_proj__vs__attn_output_final",
     )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "scores_nope",
+        "scores_nope",
+        "scores_nope__vs__scores_nope",
+    )
 
     logits_diff = (eager_logits - absorbed_logits).abs()
     report["comparisons"]["final_logits"] = {

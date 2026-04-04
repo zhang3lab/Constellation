@@ -1001,6 +1001,11 @@ class DeepseekV3Attention(nn.Module):
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
 
+        scores_nope_dbg = torch.matmul(
+            q_nope.float(),
+            k_nope.transpose(2, 3).float(),
+        )
+
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
         q_pe_post_rope_dbg = q_pe.detach().cpu().clone()
 
@@ -1069,6 +1074,7 @@ class DeepseekV3Attention(nn.Module):
             "k_nope": k_nope.detach().cpu(),
             "value_states": value_states.detach().cpu(),
             "attn_output_pre_o_proj": attn_output.detach().cpu(),
+            "scores_nope": scores_nope_dbg.detach().cpu().clone(),
         }
         return attn_output, attn_weights, past_key_value
 

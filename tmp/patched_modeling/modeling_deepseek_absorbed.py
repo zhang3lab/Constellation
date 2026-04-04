@@ -1487,6 +1487,15 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             raise NotImplementedError(
                 f"_absorbed_attention_no_cache currently only supports bsz=1, got {bsz}"
             )
+
+        cache_latent_f = cache_latent.float()  # [B, T, K]
+        q_nope_absorb_f = q_nope_absorb.float()  # [B, T, H, K]
+
+        scores_nope_abs_dbg = torch.einsum(
+            "bthk,bsk->bhts",
+            q_nope_absorb_f,
+            cache_latent_f,
+        )
      
         # NOTE:
         # HF passes an expanded attention_mask in prefill. For the current single-sequence
@@ -1600,6 +1609,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         }
         self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu()
         self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu()
+        self._last_absorbed_inner_debug["scores_nope"] = scores_nope_abs_dbg.detach().cpu().clone()
         return torch.stack(outputs, dim=1)  # [1, T, hidden]
 
     def forward(
