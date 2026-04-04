@@ -130,7 +130,8 @@ def main() -> None:
             "cache_k_rope",
             "q_nope_absorb",
             "last_value_heads",
-            "scores_nope",
+            "scores_pre_softmax",
+            "scores_post_softmax",
         ]:
             if name in aux:
                 saved.append(_save_numpy_or_tensor(outdir, name, aux[name]))
