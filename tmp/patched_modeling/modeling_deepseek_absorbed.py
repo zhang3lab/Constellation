@@ -1604,11 +1604,11 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             outputs.append(hidden_t)
 
         self._last_absorbed_inner_debug = {
-            "q_nope_absorb": q_nope_absorb.detach().cpu(),
-            "q_pe_post_rope": q_pe_post_rope_dbg,
+            "q_nope_absorb": q_nope_absorb.detach().cpu().clone(),
+            "q_pe_post_rope": q_pe_post_rope_dbg.detach().cpu().clone(),
         }
-        self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu()
-        self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu()
+        self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu().clone()
+        self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu().clone()
         self._last_absorbed_inner_debug["scores_nope"] = scores_nope_abs_dbg.detach().cpu().clone()
         return torch.stack(outputs, dim=1)  # [1, T, hidden]
 
@@ -1653,8 +1653,10 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         q_latent_pre_norm = self.q_a_proj(hidden_states)
         q_a = self.q_a_layernorm(q_latent_pre_norm)
         q_latent_post_norm = q_a
+     
         q = self.q_b_proj(q_a)
         q_pre_split = q
+     
         q = q.view(bsz, q_len, self.num_heads, self.q_head_dim)
         q_nope, q_pe = q.split(
             [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
@@ -1667,7 +1669,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             [self.kv_lora_rank, self.qk_rope_head_dim],
             dim=-1,
         )
-
+     
         cache_latent = self.kv_a_layernorm(cache_latent_raw)
      
         attn_output = self._absorbed_attention_no_cache(
@@ -1686,19 +1688,20 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             )
      
         self.last_debug = {
-            "hidden_states": hidden_states.detach().cpu(),
+            "hidden_states": hidden_states.detach().cpu().clone(),
             "q_a": q_a.detach().cpu().clone(),
-            "q_latent_pre_norm": q_latent_pre_norm.detach().float().cpu().numpy(),
-            "q_latent_post_norm": q_latent_post_norm.detach().float().cpu().numpy(),
-            "q_pre_split": q_pre_split.detach().float().cpu().numpy(),
+            "q_latent_pre_norm": q_latent_pre_norm.detach().cpu().clone(),
+            "q_latent_post_norm": q_latent_post_norm.detach().cpu().clone(),
+            "q_pre_split": q_pre_split.detach().cpu().clone(),
             "q_pe_pre_rope": q_pe_pre_rope_dbg,
-            "cache_latent_raw": cache_latent_raw.detach().cpu(),
-            "cache_latent": cache_latent.detach().cpu(),
-            "cache_k_rope": cache_k_rope.detach().cpu(),
-            "attn_output_final": attn_output.detach().cpu(),
+            "cache_latent_raw": cache_latent_raw.detach().cpu().clone(),
+            "cache_latent": cache_latent.detach().cpu().clone(),
+            "cache_k_rope": cache_k_rope.detach().cpu().clone(),
+            "attn_output_final": attn_output.detach().cpu().clone(),
         }
         if hasattr(self, "_last_absorbed_inner_debug"):
             self.last_debug.update(self._last_absorbed_inner_debug)
+     
         return attn_output, None, past_key_value
 
 
