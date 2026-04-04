@@ -1488,15 +1488,8 @@ class DeepseekV3AbsorbedAttention(nn.Module):
                 f"_absorbed_attention_no_cache currently only supports bsz=1, got {bsz}"
             )
      
-        # NOTE:
-        # HF passes an expanded attention_mask in prefill. For the current single-sequence
-        # no-cache debug path we already enforce causality by restricting each query t to
-        # keys [: t + 1], so we ignore attention_mask here.
         _ = attention_mask
      
-        # q_a -> q_nope_absorb
-        # q_b_proj weight shape: [num_heads * q_head_dim, q_lora_rank]
-        # take only the qk_nope part for each head
         q_b = self.q_b_proj.weight.view(
             self.num_heads,
             self.q_head_dim,
@@ -1504,8 +1497,6 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         )
         q_b_nope = q_b[:, : self.qk_nope_head_dim, :]  # [H, D_nope, q_rank]
      
-        # absorbed q_nope into kv latent space
-        # q_nope_absorb: [B, T, H, kv_lora_rank]
         kv_b = self.kv_b_proj.weight.view(
             self.num_heads,
             self.qk_nope_head_dim + self.v_head_dim,
@@ -1513,8 +1504,6 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         )
         k_up_nope = kv_b[:, : self.qk_nope_head_dim, :]  # [H, D_nope, kv_rank]
      
-        # combine q_b_nope and k_up_nope to map q_a -> absorbed latent query
-        # q_nope_absorb[b,t,h,k] = sum_r q_a[b,t,r] * sum_d q_b_nope[h,d,r] * k_up_nope[h,d,k]
         q_nope_absorb_kernel = torch.einsum(
             "hdr,hdk->hrk",
             q_b_nope.float(),
@@ -1526,18 +1515,14 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             q_a.float(),
             q_nope_absorb_kernel,
         ).to(q_a.dtype)  # [B, T, H, kv_rank]
-
-        cache_latent_f = cache_latent.float()  # [B, T, K]
-        q_nope_absorb_f = q_nope_absorb.float()  # [B, T, H, K]
-
-        scores_nope_abs_dbg = torch.einsum(
+     
+        # Full nope-only score tensor for debug: [B, H, T, T]
+        scores_nope_full_dbg = torch.einsum(
             "bthk,bsk->bhts",
-            q_nope_absorb_f,
-            cache_latent_f,
+            q_nope_absorb.float(),
+            cache_latent.float(),
         )
      
-        # apply RoPE on q_pe / cache_k_rope
-        # reshape to HF rotary helper expected layout
         q_pe_hf = q_pe.permute(0, 2, 1, 3).contiguous()  # [B, H, T, rope_dim]
         k_pe_hf = cache_k_rope.view(bsz, q_len, 1, self.qk_rope_head_dim).permute(0, 2, 1, 3).contiguous()
      
@@ -1556,8 +1541,14 @@ class DeepseekV3AbsorbedAttention(nn.Module):
      
         outputs = []
      
+        scores_nope_last_dbg = None
+        scores_rope_last_dbg = None
+        scores_pre_softmax_last_dbg = None
+        scores_post_softmax_last_dbg = None
+        latent_out_last_dbg = None
+        value_heads_last_dbg = None
+     
         for t in range(q_len):
-            # causal prefix up to t
             latent_prefix = cache_latent[0, : t + 1, :]       # [Tcur, kv_rank]
             k_rope_prefix = k_pe_rot[0, 0, : t + 1, :]        # [Tcur, rope_dim]
      
@@ -1568,17 +1559,18 @@ class DeepseekV3AbsorbedAttention(nn.Module):
                 "bhk,tk->bht",
                 q_abs_t.float(),
                 latent_prefix.float(),
-            )
+            )  # [1, H, Tcur]
             scores_rope = torch.einsum(
                 "bhr,tr->bht",
                 q_rope_t.float(),
                 k_rope_prefix.float(),
-            )
+            )  # [1, H, Tcur]
             scores = (scores_latent + scores_rope) / math.sqrt(
                 self.kv_lora_rank + self.qk_rope_head_dim
-            )
+            )  # [1, H, Tcur]
      
-            probs = torch.softmax(scores, dim=-1, dtype=torch.float32)
+            probs = torch.softmax(scores, dim=-1, dtype=torch.float32)  # [1, H, Tcur]
+     
             latent_out = torch.einsum(
                 "bht,tk->bhk",
                 probs,
@@ -1599,19 +1591,31 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             )
             if self.o_proj.bias is not None:
                 hidden_t = hidden_t + self.o_proj.bias.float()
-            hidden_t = hidden_t.to(hidden_states_dtype := q_a.dtype)  # [1, hidden]
+            hidden_t = hidden_t.to(q_a.dtype)  # [1, hidden]
      
             outputs.append(hidden_t)
-
+     
+            if t == q_len - 1:
+                scores_nope_last_dbg = scores_latent.detach().cpu().clone()         # [1, H, T]
+                scores_rope_last_dbg = scores_rope.detach().cpu().clone()           # [1, H, T]
+                scores_pre_softmax_last_dbg = scores.detach().cpu().clone()         # [1, H, T]
+                scores_post_softmax_last_dbg = probs.detach().cpu().clone()         # [1, H, T]
+                latent_out_last_dbg = latent_out.detach().cpu().clone()             # [1, H, K]
+                value_heads_last_dbg = value_heads.detach().cpu().clone()           # [1, H, V]
+     
         self._last_absorbed_inner_debug = {
             "rope_cos": cos.detach().cpu().clone(),
             "rope_sin": sin.detach().cpu().clone(),
             "q_nope_absorb": q_nope_absorb.detach().cpu().clone(),
             "q_pe_post_rope": q_pe_post_rope_dbg.detach().cpu().clone(),
+            "scores_nope_full": scores_nope_full_dbg.detach().cpu().clone(),   # [B, H, T, T]
+            "scores_nope": scores_nope_last_dbg,                               # [1, H, T]
+            "scores_rope": scores_rope_last_dbg,                               # [1, H, T]
+            "scores_pre_softmax": scores_pre_softmax_last_dbg,                 # [1, H, T]
+            "scores_post_softmax": scores_post_softmax_last_dbg,               # [1, H, T]
+            "last_latent_out": latent_out_last_dbg,                            # [1, H, K]
+            "last_value_heads": value_heads_last_dbg,                          # [1, H, V]
         }
-        self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu().clone()
-        self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu().clone()
-        self._last_absorbed_inner_debug["scores_nope"] = scores_nope_abs_dbg.detach().cpu().clone()
         return torch.stack(outputs, dim=1)  # [1, T, hidden]
 
     def forward(

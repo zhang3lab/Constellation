@@ -120,6 +120,12 @@ def main() -> None:
         save_tensor_if_present(saved, outdir, dbg, "q_pe_pre_rope", "q_rope_pre_rotary.pt")
         save_tensor_if_present(saved, outdir, dbg, "q_pe_post_rope", "q_rope_post_rotary.pt")
 
+        save_tensor_if_present(saved, outdir, dbg, "scores_nope_full")
+        save_tensor_if_present(saved, outdir, dbg, "scores_nope")
+        save_tensor_if_present(saved, outdir, dbg, "scores_rope")
+        save_tensor_if_present(saved, outdir, dbg, "scores_pre_softmax")
+        save_tensor_if_present(saved, outdir, dbg, "scores_post_softmax")
+
         report = {
             "backend": "hf_absorbed",
             "input_ids": input_ids,

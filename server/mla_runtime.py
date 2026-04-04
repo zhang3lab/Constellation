@@ -257,7 +257,12 @@ class MLARuntime:
             kernel_version=2,
             dtype=kernel_dtype,
         )
+        dbg.add("scores_pre_softmax", x)
      
+        if return_aux:
+            # optional: pure nope-only score for exact HF compare
+            scores_nope_only = torch.einsum("blhk,btk->blht", q_nrope_absorb, stacked_kv_latent)
+            dbg.add("scores_nope_only", scores_nope_only)
         print("[MLA] using causal mask", mask is None, start_pos, seq_len, end_pos)
         if mask is None:
             q_pos = torch.arange(start_pos, end_pos, device=x.device)
@@ -285,7 +290,7 @@ class MLARuntime:
      
         print("[MLA] mask stats", mask.shape, mask.dtype, float(mask.min().item()), float(mask.max().item()))
         fused_mask_softmax(x, mask)
-        dbg.add("scores_nope", x)
+        dbg.add("scores_post_softmax", x)
      
         x = torch.einsum("blht,btk->blhk", x, stacked_kv_latent)
         x = torch.einsum("blhk,hdk->blhd", x, v_w)
