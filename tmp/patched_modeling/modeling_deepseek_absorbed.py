@@ -1604,6 +1604,8 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             outputs.append(hidden_t)
 
         self._last_absorbed_inner_debug = {
+            "rope_cos": cos.detach().cpu().clone(),
+            "rope_sin": sin.detach().cpu().clone(),
             "q_nope_absorb": q_nope_absorb.detach().cpu().clone(),
             "q_pe_post_rope": q_pe_post_rope_dbg.detach().cpu().clone(),
         }
