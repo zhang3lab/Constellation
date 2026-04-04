@@ -174,6 +174,7 @@ class MLARuntime:
             dtype=kernel_dtype,
         )
      
+        print("[MLA] using causal mask", mask is None, start_pos, seq_len, end_pos)
         if mask is None:
             # Build causal additive mask of shape [1, L, 1, T]
             # Query positions are [start_pos, ..., end_pos - 1]
@@ -202,6 +203,7 @@ class MLARuntime:
             if mask.device != scores.device:
                 mask = mask.to(device=scores.device)
 
+        print("[MLA] mask stats", mask.shape, mask.dtype, float(mask.min().item()), float(mask.max().item()))
         fused_mask_softmax(scores, mask)
      
         x = torch.einsum("blht,btk->blhk", scores, stacked_kv_latent)
