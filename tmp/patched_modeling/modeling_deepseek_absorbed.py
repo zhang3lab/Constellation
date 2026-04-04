@@ -1657,7 +1657,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         q_pre_split = q
         q = q.view(bsz, q_len, self.num_heads, self.q_head_dim)
         q_nope, q_pe = q.split(
-            [self.qk_nrope_head_dim, self.qk_rope_head_dim], dim=-1
+            [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
         )
         q_pe_pre_rope_dbg = q_pe.detach().cpu().clone()
      
