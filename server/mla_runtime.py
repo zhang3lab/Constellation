@@ -218,6 +218,7 @@ class MLARuntime:
             return x
      
         aux = {
+            "freq_cis": freq_cis.detach().float().cpu().numpy(),
             "q_latent_pre_norm": q_latent_pre_norm.detach().float().cpu().numpy(),
             "q_latent_post_norm": q_latent_post_norm.detach().float().cpu().numpy(),
             "q_pre_split": q_pre_split.detach().float().cpu().numpy(),
