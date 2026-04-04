@@ -152,6 +152,42 @@ def main() -> None:
             torch.save(x.detach().float().cpu(), p)
             saved.append(str(p))
 
+        x = dbg.get("cache_latent_raw")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "cache_latent_raw.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
+        x = dbg.get("cache_latent")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "cache_latent.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
+        x = dbg.get("cache_k_rope")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "cache_k_rope.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
+        x = dbg.get("q_nope_absorb")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "q_nope_absorb.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
+        x = dbg.get("last_value_heads")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "last_value_heads.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
+        x = dbg.get("scores_nope")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "scores_nope.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
         report = {
             "backend": "hf_absorbed",
             "input_ids": input_ids,
