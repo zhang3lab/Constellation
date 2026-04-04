@@ -125,6 +125,12 @@ def main() -> None:
             "q_rope_pre_rotary",
             "q_rope_post_rotary",
             "freq_cis",
+            "cache_latent_raw",
+            "cache_latent",
+            "cache_k_rope",
+            "q_nope_absorb",
+            "last_value_heads",
+            "scores_nope",
         ]:
             if name in aux:
                 saved.append(_save_numpy_or_tensor(outdir, name, aux[name]))
