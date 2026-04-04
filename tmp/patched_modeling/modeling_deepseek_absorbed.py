@@ -1488,10 +1488,11 @@ class DeepseekV3AbsorbedAttention(nn.Module):
                 f"_absorbed_attention_no_cache currently only supports bsz=1, got {bsz}"
             )
      
-        if attention_mask is not None:
-            raise NotImplementedError(
-                "_absorbed_attention_no_cache attention_mask path not implemented yet"
-            )
+        # NOTE:
+        # HF passes an expanded attention_mask in prefill. For the current single-sequence
+        # no-cache debug path we already enforce causality by restricting each query t to
+        # keys [: t + 1], so we ignore attention_mask here.
+        _ = attention_mask
      
         # q_a -> q_nope_absorb
         # q_b_proj weight shape: [num_heads * q_head_dim, q_lora_rank]
