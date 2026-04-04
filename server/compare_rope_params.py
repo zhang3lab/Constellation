@@ -60,17 +60,23 @@ def main() -> None:
     rope_sin = torch.load(hf_dir / "rope_sin.pt", map_location="cpu").float().squeeze()
 
     # runtime freq_cis: [L, D/2, 2]
-    freq_cos_half = freq_cis[..., 0]   # [L, D/2]
-    freq_sin_half = freq_cis[..., 1]   # [L, D/2]
+    freq_cos_half = freq_cis[..., 0]
+    freq_sin_half = freq_cis[..., 1]
 
-    # expand to HF full interleaved layout [L, D]
+    # Expand to HF full interleaved layout [L, D]
     freq_cos_full = expand_half_to_interleaved_full(freq_cos_half)
     freq_sin_full = expand_half_to_interleaved_full(freq_sin_half)
 
     out = {
         "comparisons": {
-            "rope_cos": compare_tensors(freq_cos_full, rope_cos, "rope_cos"),
-            "rope_sin": compare_tensors(freq_sin_full, rope_sin, "rope_sin"),
+            "runtime_cos__vs__hf_cos": compare_tensors(freq_cos_full, rope_cos, "runtime_cos__vs__hf_cos"),
+            "runtime_cos__vs__hf_sin": compare_tensors(freq_cos_full, rope_sin, "runtime_cos__vs__hf_sin"),
+            "runtime_sin__vs__hf_cos": compare_tensors(freq_sin_full, rope_cos, "runtime_sin__vs__hf_cos"),
+            "runtime_sin__vs__hf_sin": compare_tensors(freq_sin_full, rope_sin, "runtime_sin__vs__hf_sin"),
+            "runtime_cos__vs__neg_hf_cos": compare_tensors(freq_cos_full, -rope_cos, "runtime_cos__vs__neg_hf_cos"),
+            "runtime_cos__vs__neg_hf_sin": compare_tensors(freq_cos_full, -rope_sin, "runtime_cos__vs__neg_hf_sin"),
+            "runtime_sin__vs__neg_hf_cos": compare_tensors(freq_sin_full, -rope_cos, "runtime_sin__vs__neg_hf_cos"),
+            "runtime_sin__vs__neg_hf_sin": compare_tensors(freq_sin_full, -rope_sin, "runtime_sin__vs__neg_hf_sin"),
         }
     }
 
