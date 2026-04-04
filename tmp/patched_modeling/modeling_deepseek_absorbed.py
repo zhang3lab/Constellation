@@ -1650,9 +1650,10 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         if self.q_lora_rank is None:
             raise NotImplementedError("q_lora_rank=None path is not implemented for absorbed attention")
      
-        q_a = self.q_a_proj(hidden_states)
-        q_a = self.q_a_layernorm(q_a)
-        q = self.q_b_proj(q_a)
+        q_latent_pre_norm = self.q_a_proj(hidden_states)
+        q_latent_post_norm = self.q_a_layernorm(q_latent_pre_norm)
+        q = self.q_b_proj(q_latent_post_norm)
+        q_pre_split = q
         q = q.view(bsz, q_len, self.num_heads, self.q_head_dim)
      
         q_nope, q_pe = torch.split(
@@ -1690,7 +1691,11 @@ class DeepseekV3AbsorbedAttention(nn.Module):
      
         self.last_debug = {
             "hidden_states": hidden_states.detach().cpu(),
-            "q_a": q_a.detach().cpu(),
+            "q_latent_pre_norm": q_latent_pre_norm.detach().float().cpu().numpy(),
+            "q_latent_post_norm": q_latent_post_norm.detach().float().cpu().numpy(),
+            "q_pre_split": q_pre_split.detach().float().cpu().numpy(),
+            "q_rope_pre_rotary": q_rope_pre_rotary_dbg.detach().float().cpu().numpy(),
+            "q_rope_post_rotary": q_rope_post_rotary_dbg.detach().float().cpu().numpy(),
             "q_nope": q_nope_dbg,
             "q_pe_pre_rope": q_pe_pre_rope_dbg,
             "cache_latent_raw": cache_latent_raw.detach().cpu(),

@@ -92,7 +92,9 @@ class MLARuntime:
      
         x_norm = x
 
+        q_latent_pre_norm = q_latent
         q_latent = torch.matmul(x_norm, weights["q_a_proj"].t())
+        q_latent_post_norm = q_latent
         q_latent = fused_rms_norm(
             q_latent,
             (q_latent.shape[-1],),
@@ -100,12 +102,15 @@ class MLARuntime:
             self.eps,
         )
         q = torch.matmul(q_latent, weights["q_b_proj"].t())
+        q_pre_split = q
      
         q = q.view(batch_size, seq_len, self.num_heads, self.qk_head_dim)
         q_nrope, q_rope = q.split(
             [self.qk_nrope_head_dim, self.qk_rope_head_dim], dim=-1
         )
+        q_rope_pre_rotary = q_rope
         q_rope = fused_apply_rotary_emb(q_rope, freq_cis)
+        q_rope_post_rotary = q_rope
      
         kv_down = torch.matmul(x_norm, weights["kv_a_proj_with_mqa"].t())
         kv_latent, k_rope = kv_down.split(
@@ -210,6 +215,11 @@ class MLARuntime:
             return x
      
         aux = {
+            "q_latent_pre_norm": q_latent_pre_norm.detach().float().cpu().numpy(),
+            "q_latent_post_norm": q_latent_post_norm.detach().float().cpu().numpy(),
+            "q_pre_split": q_pre_split.detach().float().cpu().numpy(),
+            "q_rope_pre_rotary": q_rope_pre_rotary.detach().float().cpu().numpy(),
+            "q_rope_post_rotary": q_rope_post_rotary.detach().float().cpu().numpy(),
             "q_flash": q_flash.detach().float().cpu().numpy(),
             "blocked_k_token": blocked_k_token.detach().float().cpu().numpy(),
         }
