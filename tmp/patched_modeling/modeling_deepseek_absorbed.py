@@ -1648,6 +1648,9 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             [self.qk_nope_head_dim, self.qk_rope_head_dim],
             dim=-1,
         )  # [B, T, H, D_nope], [B, T, H, D_rope]
+
+        q_nope_dbg = q_nope.detach().cpu().clone()
+        q_pe_dbg = q_pe.detach().cpu().clone()
      
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
         cache_latent, cache_k_rope = torch.split(
@@ -1674,8 +1677,8 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         self.last_debug = {
             "hidden_states": hidden_states.detach().cpu(),
             "q_a": q_a.detach().cpu(),
-            "q_nope": q_nope.detach().cpu(),
-            "q_pe": q_pe.detach().cpu(),
+            "q_nope": q_nope_dbg,
+            "q_pe": q_pe_dbg,
             "cache_latent": cache_latent.detach().cpu(),
             "cache_k_rope": cache_k_rope.detach().cpu(),
             "attn_output_final": attn_output.detach().cpu(),
