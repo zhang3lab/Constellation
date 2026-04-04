@@ -30,6 +30,9 @@ def summarize_tensor(name: str, x: torch.Tensor) -> dict:
 def compare_optional(a: dict, b: dict, key: str) -> dict | None:
     if key not in a or key not in b:
         return None
+    if not isinstance(a[key], torch.Tensor) or not isinstance(b[key], torch.Tensor):
+        return None
+
     xa = a[key].float()
     xb = b[key].float()
     if xa.shape != xb.shape:
@@ -39,6 +42,7 @@ def compare_optional(a: dict, b: dict, key: str) -> dict | None:
             "shape_b": list(xb.shape),
             "shape_match": False,
         }
+
     diff = (xa - xb).abs()
     return {
         "key": key,
@@ -64,6 +68,38 @@ def load_model(model_dir: str, device: str):
     return model
 
 
+def run_and_collect(
+    *,
+    model_dir: str,
+    device: str,
+    input_ids: list[int],
+) -> tuple[dict, torch.Tensor]:
+    model = load_model(model_dir, device)
+    model_device = next(model.parameters()).device
+    ids = torch.tensor([input_ids], dtype=torch.long, device=model_device)
+
+    with torch.no_grad():
+        out = model(input_ids=ids, use_cache=False, return_dict=True)
+
+    layer0 = model.model.layers[0].self_attn
+    dbg = dict(getattr(layer0, "last_debug", {}))
+    logits = out.logits[0, -1].detach().float().cpu()
+
+    # Move debug tensors to CPU copies explicitly
+    dbg_cpu = {}
+    for k, v in dbg.items():
+        if isinstance(v, torch.Tensor):
+            dbg_cpu[k] = v.detach().cpu()
+        else:
+            dbg_cpu[k] = v
+
+    del out
+    del model
+    torch.cuda.empty_cache()
+
+    return dbg_cpu, logits
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--eager-model-dir", type=str, required=True)
@@ -80,26 +116,22 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.eager_model_dir, trust_remote_code=True)
     print("[debug] decoded =", repr(tokenizer.decode(input_ids)))
 
-    eager_model = load_model(args.eager_model_dir, args.device)
-    absorbed_model = load_model(args.absorbed_model_dir, args.device)
+    print("[debug] loading eager...")
+    eager_dbg, eager_logits = run_and_collect(
+        model_dir=args.eager_model_dir,
+        device=args.device,
+        input_ids=input_ids,
+    )
+    print("[debug] eager done")
 
-    eager_device = next(eager_model.parameters()).device
-    absorbed_device = next(absorbed_model.parameters()).device
+    print("[debug] loading absorbed...")
+    absorbed_dbg, absorbed_logits = run_and_collect(
+        model_dir=args.absorbed_model_dir,
+        device=args.device,
+        input_ids=input_ids,
+    )
+    print("[debug] absorbed done")
 
-    eager_ids = torch.tensor([input_ids], dtype=torch.long, device=eager_device)
-    absorbed_ids = torch.tensor([input_ids], dtype=torch.long, device=absorbed_device)
-
-    with torch.no_grad():
-        eager_out = eager_model(input_ids=eager_ids, use_cache=False, return_dict=True)
-        absorbed_out = absorbed_model(input_ids=absorbed_ids, use_cache=False, return_dict=True)
-
-    eager_layer0 = eager_model.model.layers[0].self_attn
-    absorbed_layer0 = absorbed_model.model.layers[0].self_attn
-
-    eager_dbg = dict(getattr(eager_layer0, "last_debug", {}))
-    absorbed_dbg = dict(getattr(absorbed_layer0, "last_debug", {}))
-
-    keys = sorted(set(eager_dbg.keys()) | set(absorbed_dbg.keys()))
     print("[debug] eager keys =", sorted(eager_dbg.keys()))
     print("[debug] absorbed keys =", sorted(absorbed_dbg.keys()))
 
@@ -110,8 +142,8 @@ def main() -> None:
         "absorbed_debug_keys": sorted(absorbed_dbg.keys()),
         "tensor_summaries": {},
         "comparisons": {},
-        "eager_logits_argmax": int(torch.argmax(eager_out.logits[0, -1]).item()),
-        "absorbed_logits_argmax": int(torch.argmax(absorbed_out.logits[0, -1]).item()),
+        "eager_logits_argmax": int(torch.argmax(eager_logits).item()),
+        "absorbed_logits_argmax": int(torch.argmax(absorbed_logits).item()),
     }
 
     for key, val in eager_dbg.items():
@@ -123,14 +155,19 @@ def main() -> None:
 
     compare_keys = [
         "hidden_states",
+        "q_a",
         "q_nope",
         "q_pe",
+        "compressed_kv",
         "k_nope",
+        "value_states",
         "cache_latent",
         "cache_k_rope",
         "q_nope_absorb",
         "attn_output_pre_o_proj",
         "attn_output_final",
+        "last_latent_out",
+        "last_value_heads",
     ]
 
     for key in compare_keys:
@@ -138,9 +175,6 @@ def main() -> None:
         if cmp_result is not None:
             report["comparisons"][key] = cmp_result
 
-    # also compare final logits directly
-    eager_logits = eager_out.logits[0, -1].float().cpu()
-    absorbed_logits = absorbed_out.logits[0, -1].float().cpu()
     logits_diff = (eager_logits - absorbed_logits).abs()
     report["comparisons"]["final_logits"] = {
         "shape": list(eager_logits.shape),
