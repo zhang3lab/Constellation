@@ -158,14 +158,14 @@ class MLARuntime:
         )
 
         q_rope_pre_rotary = q_rope
-        q_rope = apply_rotary_emb_halfsplit_torch(q_rope, freq_cis)
+        q_rope = fused_apply_rotary_emb(q_rope, freq_cis)
         q_rope_post_rotary = q_rope
      
         kv_down = torch.matmul(x_norm, weights["kv_a_proj_with_mqa"].t())
         kv_latent, k_rope = kv_down.split(
             [self.kv_latent_rank, self.qk_rope_head_dim], dim=-1
         )
-        k_rope = apply_rotary_emb_halfsplit_torch(k_rope.unsqueeze(2), freq_cis).squeeze(2)
+        k_rope = fused_apply_rotary_emb(k_rope.unsqueeze(2), freq_cis).squeeze(2)
      
         normalized_kv_latent = fused_rms_norm(
             kv_latent,
