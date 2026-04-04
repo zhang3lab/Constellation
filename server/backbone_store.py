@@ -263,7 +263,7 @@ def preload_non_moe_backbone(
         need_shared_expert = load_this_layer and plan.shared_expert.enabled and layer_id >= 3
         need_router = load_this_layer and plan.router.enabled and layer_id >= 3
      
-        if need_attention:
+        if need_attention or need_dense_prefix or need_shared_expert or need_router:
             entry["input_layernorm"] = _load_gpu_tensor(
                 f"model.layers.{layer_id}.input_layernorm.weight",
                 device=dev,
