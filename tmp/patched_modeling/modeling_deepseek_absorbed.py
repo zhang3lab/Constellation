@@ -1038,6 +1038,7 @@ class DeepseekV3Attention(nn.Module):
             attn_weights, p=self.attention_dropout, training=self.training
         )
         attn_output = torch.matmul(attn_weights, value_states)
+        attn_output_heads = attn_output
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
             raise ValueError(
@@ -1590,7 +1591,12 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             hidden_t = hidden_t.to(hidden_states_dtype := q_a.dtype)  # [1, hidden]
      
             outputs.append(hidden_t)
-     
+
+        self._last_absorbed_inner_debug = {
+            "q_nope_absorb": q_nope_absorb.detach().cpu(),
+        }
+        self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu()
+        self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu()
         return torch.stack(outputs, dim=1)  # [1, T, hidden]
 
     def forward(
@@ -1664,6 +1670,17 @@ class DeepseekV3AbsorbedAttention(nn.Module):
                 f"`attn_output` should be of size {(bsz, q_len, self.hidden_size)}, but is {attn_output.size()}"
             )
      
+        self.last_debug = {
+            "hidden_states": hidden_states.detach().cpu(),
+            "q_a": q_a.detach().cpu(),
+            "q_nope": q_nope.detach().cpu(),
+            "q_pe": q_pe.detach().cpu(),
+            "cache_latent": cache_latent.detach().cpu(),
+            "cache_k_rope": cache_k_rope.detach().cpu(),
+            "attn_output_final": attn_output.detach().cpu(),
+        }
+        if hasattr(self, "_last_absorbed_inner_debug"):
+            self.last_debug.update(self._last_absorbed_inner_debug)
         return attn_output, None, past_key_value
 
 

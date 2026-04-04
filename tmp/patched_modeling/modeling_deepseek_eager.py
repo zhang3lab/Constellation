@@ -1038,6 +1038,7 @@ class DeepseekV3Attention(nn.Module):
             attn_weights, p=self.attention_dropout, training=self.training
         )
         attn_output = torch.matmul(attn_weights, value_states)
+        attn_output_heads = attn_output
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
             raise ValueError(
@@ -1054,6 +1055,16 @@ class DeepseekV3Attention(nn.Module):
         if not output_attentions:
             attn_weights = None
 
+        self.last_debug = {
+            "hidden_states": hidden_states.detach().cpu(),
+            "q_nope": q_nope.detach().cpu(),
+            "q_pe": q_pe.detach().cpu(),
+            "compressed_kv": compressed_kv.detach().cpu(),
+            "k_pe_pre_rope": k_pe.detach().cpu(),
+            "k_nope": k_nope.detach().cpu(),
+            "value_states": value_states.detach().cpu(),
+            "attn_output_pre_o_proj": attn_output.detach().cpu(),
+        }
         return attn_output, attn_weights, past_key_value
 
 
