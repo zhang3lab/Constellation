@@ -67,6 +67,14 @@ def layer0_attention_names() -> list[str]:
     ]
 
 
+def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, dst: str | None = None) -> None:
+    x = dbg.get(src)
+    if isinstance(x, torch.Tensor):
+        p = outdir / (dst or f"{src}.pt")
+        torch.save(x.detach().float().cpu(), p)
+        saved.append(str(p))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", type=str, required=True)
@@ -98,20 +106,12 @@ def main() -> None:
 
         dbg = getattr(model.model.layers[0].self_attn, "last_debug", {}) or {}
 
-        saved = []
-
-        for src, dst in [
-            ("q_latent_pre_norm", "q_latent_pre_norm.pt"),
-            ("q_latent_post_norm", "q_latent_post_norm.pt"),
-            ("q_pre_split", "q_pre_split.pt"),
-            ("q_pe_pre_rope", "q_rope_pre_rotary.pt"),
-            ("q_pe_post_rope", "q_rope_post_rotary.pt"),
-        ]:
-            x = dbg.get(src)
-            if isinstance(x, torch.Tensor):
-                p = outdir / dst
-                torch.save(x.detach().float().cpu(), p)
-                saved.append(str(p))
+        saved: list[str] = []
+        save_tensor_if_present(saved, outdir, dbg, "q_latent_pre_norm")
+        save_tensor_if_present(saved, outdir, dbg, "q_latent_post_norm")
+        save_tensor_if_present(saved, outdir, dbg, "q_pre_split")
+        save_tensor_if_present(saved, outdir, dbg, "q_pe_pre_rope", "q_rope_pre_rotary.pt")
+        save_tensor_if_present(saved, outdir, dbg, "q_pe_post_rope", "q_rope_post_rotary.pt")
 
         report = {
             "backend": "hf_absorbed",
