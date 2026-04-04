@@ -53,7 +53,11 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from transformers.utils.import_utils import is_torch_fx_available
+try:
+    from transformers.utils.import_utils import is_torch_fx_available
+except ImportError:
+    def is_torch_fx_available():
+        return False
 from .configuration_deepseek import DeepseekV3Config
 import torch.distributed as dist
 import numpy as np
