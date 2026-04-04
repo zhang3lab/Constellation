@@ -1596,7 +1596,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
 
         self._last_absorbed_inner_debug = {
             "q_nope_absorb": q_nope_absorb.detach().cpu(),
-            "q_pe_post_rope_dbg": q_pe_post_rope_dbg,
+            "q_pe_post_rope": q_pe_post_rope_dbg,
         }
         self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu()
         self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu()
@@ -1680,7 +1680,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             "hidden_states": hidden_states.detach().cpu(),
             "q_a": q_a.detach().cpu(),
             "q_nope": q_nope_dbg,
-            "q_pe": q_pe_dbg,
+            "q_pe_pre_rope": q_pe_pre_rope_dbg,
             "cache_latent": cache_latent.detach().cpu(),
             "cache_k_rope": cache_k_rope.detach().cpu(),
             "attn_output_final": attn_output.detach().cpu(),
