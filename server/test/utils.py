@@ -99,6 +99,8 @@ def prenorm_hidden_for_attention(
     hidden_in,
     layer_id: int,
 ):
+    import torch
+
     if session.backbone_store is None:
         raise RuntimeError("session.backbone_store is not initialized")
 
@@ -125,4 +127,4 @@ def prenorm_hidden_for_attention(
     if hidden_norm.shape[0] == 1:
         hidden_norm = hidden_norm[0]
 
-    return hidden_norm.detach().cpu().numpy().astype(np.float32, copy=False)
+    return hidden_norm.detach()
