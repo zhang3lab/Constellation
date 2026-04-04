@@ -12,6 +12,7 @@ from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.inference_session import InferenceSession
+from server.test.utils import prenorm_hidden_for_attention
 
 
 def _normalize_hidden(x):
@@ -44,16 +45,30 @@ def _extract_aux(out) -> dict:
     return {}
 
 
+def _save_numpy_or_tensor(outdir: Path, name: str, x) -> str:
+    if isinstance(x, np.ndarray):
+        t = torch.from_numpy(x).float().cpu()
+    elif isinstance(x, torch.Tensor):
+        t = x.detach().float().cpu()
+    else:
+        raise TypeError(f"{name}: unsupported type {type(x).__name__}")
+    p = outdir / f"{name}.pt"
+    torch.save(t, p)
+    return str(p)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-dir", type=str, required=True)
+    ap.add_argument("--layer-id", type=int, default=0)
     args = ap.parse_args()
 
     with open(args.input_json, "r", encoding="utf-8") as f:
         inp = json.load(f)
     input_ids = inp["input_ids"]
+    layer_id = int(args.layer_id)
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -78,12 +93,13 @@ def main() -> None:
 
         hidden = executor.embed_token_ids(input_ids)
         hidden = _normalize_hidden(hidden)
+        hidden_prenorm = prenorm_hidden_for_attention(session, hidden, layer_id)
 
         pos = np.arange(len(input_ids), dtype=np.int64)
 
         out = executor.run_attention_block(
-            hidden,
-            0,
+            hidden_prenorm,
+            layer_id,
             position_ids=pos,
             attention_mask=None,
             kv_cache=session.page_attention_cache_managers,
@@ -94,27 +110,27 @@ def main() -> None:
             out_hidden = out_hidden.unsqueeze(0)
 
         aux = _extract_aux(out)
-
         saved = []
 
         p = outdir / "layer0_attn_output.pt"
         torch.save(out_hidden, p)
         saved.append(str(p))
 
-        if "q_flash" in aux:
-            q_flash = torch.from_numpy(aux["q_flash"]).float().cpu()
-            p = outdir / "q_flash.pt"
-            torch.save(q_flash, p)
-            saved.append(str(p))
-
-        if "blocked_k_token" in aux:
-            blocked_k_token = torch.from_numpy(aux["blocked_k_token"]).float().cpu()
-            p = outdir / "blocked_k_token.pt"
-            torch.save(blocked_k_token, p)
-            saved.append(str(p))
+        for name in [
+            "q_flash",
+            "blocked_k_token",
+            "q_latent_pre_norm",
+            "q_latent_post_norm",
+            "q_pre_split",
+            "q_rope_pre_rotary",
+            "q_rope_post_rotary",
+        ]:
+            if name in aux:
+                saved.append(_save_numpy_or_tensor(outdir, name, aux[name]))
 
         report = {
             "backend": "runtime",
+            "layer_id": layer_id,
             "input_ids": input_ids,
             "saved": saved,
             "aux_keys": sorted(list(aux.keys())),
@@ -123,7 +139,7 @@ def main() -> None:
             json.dump(report, f, ensure_ascii=False, indent=2)
             f.write("\n")
 
-        print(f"[runtime-attn0-aux] wrote {outdir / 'runtime_layer0_attention_aux.json'}")
+        print(f"[runtime-attn-aux] wrote {outdir / 'runtime_layer0_attention_aux.json'}")
 
 
 if __name__ == "__main__":

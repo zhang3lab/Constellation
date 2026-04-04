@@ -12,6 +12,7 @@ from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.inference_session import InferenceSession
+from server.test.utils import prenorm_hidden_for_attention
 
 
 def _normalize_hidden(x):
@@ -44,16 +45,30 @@ def _extract_aux(out) -> dict:
     return {}
 
 
+def _save_numpy_or_tensor(outdir: Path, name: str, x) -> str:
+    if isinstance(x, np.ndarray):
+        t = torch.from_numpy(x).float().cpu()
+    elif isinstance(x, torch.Tensor):
+        t = x.detach().float().cpu()
+    else:
+        raise TypeError(f"{name}: unsupported type {type(x).__name__}")
+    p = outdir / f"{name}.pt"
+    torch.save(t, p)
+    return str(p)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-dir", type=str, required=True)
+    ap.add_argument("--layer-id", type=int, default=0)
     args = ap.parse_args()
 
     with open(args.input_json, "r", encoding="utf-8") as f:
         inp = json.load(f)
     input_ids = inp["input_ids"]
+    layer_id = int(args.layer_id)
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -75,14 +90,16 @@ def main() -> None:
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
         executor = session.full_model_executor
+
         hidden = executor.embed_token_ids(input_ids)
         hidden = _normalize_hidden(hidden)
+        hidden_prenorm = prenorm_hidden_for_attention(session, hidden, layer_id)
 
         pos = np.arange(len(input_ids), dtype=np.int64)
 
         out = executor.run_attention_block(
-            hidden,
-            0,
+            hidden_prenorm,
+            layer_id,
             position_ids=pos,
             attention_mask=None,
             kv_cache=session.page_attention_cache_managers,
@@ -91,7 +108,6 @@ def main() -> None:
         aux = _extract_aux(out)
 
         saved = []
-
         for name in [
             "q_latent_pre_norm",
             "q_latent_post_norm",
@@ -100,19 +116,14 @@ def main() -> None:
             "q_rope_post_rotary",
         ]:
             if name in aux:
-                x = aux[name]
-                if isinstance(x, np.ndarray):
-                    x = torch.from_numpy(x)
-                x = x.detach().float().cpu()
-                p = outdir / f"{name}.pt"
-                torch.save(x, p)
-                saved.append(str(p))
+                saved.append(_save_numpy_or_tensor(outdir, name, aux[name]))
 
         report = {
             "backend": "runtime",
+            "layer_id": layer_id,
             "input_ids": input_ids,
-            "aux_keys": sorted(list(aux.keys())),
             "saved": saved,
+            "aux_keys": sorted(list(aux.keys())),
         }
         with (outdir / "runtime_layer0_q_chain.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)

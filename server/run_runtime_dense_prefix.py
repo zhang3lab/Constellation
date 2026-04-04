@@ -65,7 +65,6 @@ def main() -> None:
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
         executor = session.full_model_executor
-
         hidden = executor.embed_token_ids(input_ids)
         hidden = _normalize_hidden(hidden)
 
@@ -75,21 +74,22 @@ def main() -> None:
             "saved": [],
         }
 
-        pos = torch.arange(len(input_ids), dtype=torch.long).cpu().numpy()
-
         for layer_id in [0, 1, 2]:
             hidden = run_dense_layer(
                 session,
                 hidden,
                 layer_id,
-                position_ids=pos,
+                position_ids=None,
                 attention_mask=None,
                 kv_cache=session.page_attention_cache_managers,
                 return_aux=False,
-            )
+            )["output"]
             hidden = _normalize_hidden(hidden)
 
             hidden_cpu = hidden.detach().float().cpu()
+            if hidden_cpu.ndim == 2:
+                hidden_cpu = hidden_cpu.unsqueeze(0)
+
             p = outdir / f"layer_{layer_id}_output.pt"
             torch.save(hidden_cpu, p)
             report["saved"].append(str(p))
