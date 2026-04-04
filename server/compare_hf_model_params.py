@@ -68,6 +68,16 @@ def get_param(model, dotted_name: str) -> torch.Tensor:
     return obj
 
 
+def read_param_from_model_dir(model_dir: str, device: str, dotted_name: str) -> torch.Tensor:
+    model = load_model(model_dir, device)
+    try:
+        tensor = get_param(model, dotted_name).detach().cpu().clone()
+    finally:
+        del model
+        torch.cuda.empty_cache()
+    return tensor
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--eager-model-dir", type=str, required=True)
@@ -93,14 +103,6 @@ def main() -> None:
         "model.layers.0.mlp.shared_experts.down_proj.weight",
     ]
 
-    print("[param-compare] loading eager...")
-    eager_model = load_model(args.eager_model_dir, args.device)
-    print("[param-compare] eager ok")
-
-    print("[param-compare] loading absorbed...")
-    absorbed_model = load_model(args.absorbed_model_dir, args.device)
-    print("[param-compare] absorbed ok")
-
     report = {
         "eager_model_dir": args.eager_model_dir,
         "absorbed_model_dir": args.absorbed_model_dir,
@@ -109,8 +111,12 @@ def main() -> None:
 
     for name in param_names:
         try:
-            a = get_param(eager_model, name)
-            b = get_param(absorbed_model, name)
+            print(f"[param-compare] reading eager {name} ...")
+            a = read_param_from_model_dir(args.eager_model_dir, args.device, name)
+
+            print(f"[param-compare] reading absorbed {name} ...")
+            b = read_param_from_model_dir(args.absorbed_model_dir, args.device, name)
+
             report["comparisons"][name] = compare_param(a, b, name)
             print(
                 f"[param-compare] {name}: "
@@ -123,10 +129,6 @@ def main() -> None:
                 "error": f"{type(exc).__name__}: {exc}",
             }
             print(f"[param-compare] {name}: ERROR {exc}")
-
-    del eager_model
-    del absorbed_model
-    torch.cuda.empty_cache()
 
     output_path = Path(args.output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
