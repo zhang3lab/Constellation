@@ -74,6 +74,7 @@ def rewrite_config_json(
 ) -> None:
     cfg = load_json(src_config_path)
     cfg["resident_expert_ids"] = list(resident_expert_ids)
+    cfg.pop("quantization_config", None)
     dump_json(dst_config_path, cfg)
 
 
