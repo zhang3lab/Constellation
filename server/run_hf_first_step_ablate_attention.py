@@ -26,16 +26,16 @@ def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
 def run_one(
     model_dir: str,
     *,
-    attn_impl: str,
     input_ids: list[int],
     device: str,
     topk: int,
+    label: str,
 ) -> dict:
     config = AutoConfig.from_pretrained(
         model_dir,
         trust_remote_code=True,
     )
-    config._attn_implementation = attn_impl
+    config._attn_implementation = "eager"
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
@@ -56,7 +56,8 @@ def run_one(
     topk_ids, topk_vals = topk_summary(logits, topk)
 
     return {
-        "attn_impl": attn_impl,
+        "label": label,
+        "model_dir": model_dir,
         "argmax": int(torch.argmax(logits).item()),
         "topk_ids": topk_ids,
         "topk_vals": topk_vals,
@@ -66,7 +67,8 @@ def run_one(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model-dir", type=str, required=True)
+    ap.add_argument("--eager-model-dir", type=str, required=True)
+    ap.add_argument("--absorbed-model-dir", type=str, required=True)
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-json", type=str, required=True)
     ap.add_argument("--topk", type=int, default=10)
@@ -83,7 +85,7 @@ def main() -> None:
         raise ValueError("input_json must contain non-empty list input_ids")
 
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_dir,
+        args.eager_model_dir,
         trust_remote_code=True,
     )
     print("[ablate] tokenizer ok")
@@ -91,20 +93,20 @@ def main() -> None:
     print(f"[ablate] decoded = {tokenizer.decode(input_ids)!r}")
 
     eager = run_one(
-        args.model_dir,
-        attn_impl="eager",
+        args.eager_model_dir,
         input_ids=input_ids,
         device=args.device,
         topk=args.topk,
+        label="eager",
     )
     print("[ablate] eager ok")
 
     absorbed = run_one(
-        args.model_dir,
-        attn_impl="absorbed",
+        args.absorbed_model_dir,
         input_ids=input_ids,
         device=args.device,
         topk=args.topk,
+        label="absorbed",
     )
     print("[ablate] absorbed ok")
 

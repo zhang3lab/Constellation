@@ -1668,9 +1668,9 @@ class DeepseekV3AbsorbedAttention(nn.Module):
 
 
 ATTENTION_CLASSES = {
-    "eager": DeepseekV3Attention,
+    #"eager": DeepseekV3Attention,
+    "eager": DeepseekV3AbsorbedAttention,
     "flash_attention_2": DeepseekV3FlashAttention2,
-    "absorbed": DeepseekV3AbsorbedAttention,
 }
 
 
