@@ -75,14 +75,16 @@ def main() -> None:
             "saved": [],
         }
 
+        pos = torch.arange(len(input_ids), dtype=torch.long).cpu().numpy()
+
         for layer_id in [0, 1, 2]:
             hidden = run_dense_layer(
                 session,
                 hidden,
                 layer_id,
-                position_ids=None,
+                position_ids=pos,
                 attention_mask=None,
-                kv_cache=session.full_model_kv_cache,
+                kv_cache=session.page_attention_cache_managers,
                 return_aux=False,
             )
             hidden = _normalize_hidden(hidden)
