@@ -16,7 +16,6 @@ from server.array_utils import (
 )
 from server.fp8_utils import dequant_fp8_weight_blockwise
 from server.full_model_types import (
-    AttentionSharedSegmentResult,
     FullModelRefBase,
     ModelExecResult,
 )
