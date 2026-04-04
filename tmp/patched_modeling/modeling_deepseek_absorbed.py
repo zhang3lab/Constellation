@@ -1665,11 +1665,13 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         q_pe_pre_rope_dbg = q_pe.detach().cpu().clone()
      
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        cache_latent, cache_k_rope = torch.split(
+        cache_latent_raw, cache_k_rope = torch.split(
             compressed_kv,
             [self.kv_lora_rank, self.qk_rope_head_dim],
             dim=-1,
-        )  # [B, T, kv_rank], [B, T, rope_dim]
+        )
+
+        cache_latent = self.kv_a_layernorm(cache_latent_raw)
      
         attn_output = self._absorbed_attention_no_cache(
             q_a=q_a,
@@ -1691,6 +1693,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             "q_a": q_a.detach().cpu(),
             "q_nope": q_nope_dbg,
             "q_pe_pre_rope": q_pe_pre_rope_dbg,
+            "cache_latent_raw": cache_latent_raw.detach().cpu(),
             "cache_latent": cache_latent.detach().cpu(),
             "cache_k_rope": cache_k_rope.detach().cpu(),
             "attn_output_final": attn_output.detach().cpu(),
