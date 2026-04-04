@@ -90,12 +90,7 @@ class MLARuntime:
         if x.dtype != self.dtype:
             x = x.to(self.dtype)
      
-        x_norm = fused_rms_norm(
-            x,
-            (x.shape[-1],),
-            weights["input_layernorm"],
-            self.eps,
-        )
+        x_norm = x
 
         q_latent = torch.matmul(x_norm, weights["q_a_proj"].t())
         q_latent = fused_rms_norm(
