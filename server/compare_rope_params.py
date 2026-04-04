@@ -40,9 +40,9 @@ def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
     }
 
 
-def expand_half_to_interleaved_full(x_half: torch.Tensor) -> torch.Tensor:
-    # [L, D/2] -> [L, D] as [x0, x0, x1, x1, ...]
-    return torch.stack([x_half, x_half], dim=-1).reshape(x_half.shape[0], -1)
+def expand_half_to_halfsplit_full(x_half: torch.Tensor) -> torch.Tensor:
+    # [L, D/2] -> [L, D] as [x0, x1, ..., x31, x0, x1, ..., x31]
+    return torch.cat([x_half, x_half], dim=-1)
 
 
 def main() -> None:
@@ -63,20 +63,20 @@ def main() -> None:
     freq_cos_half = freq_cis[..., 0]
     freq_sin_half = freq_cis[..., 1]
 
-    # Expand to HF full interleaved layout [L, D]
-    freq_cos_full = expand_half_to_interleaved_full(freq_cos_half)
-    freq_sin_full = expand_half_to_interleaved_full(freq_sin_half)
+    # HF half-split full layout [L, D]
+    freq_cos_full = expand_half_to_halfsplit_full(freq_cos_half)
+    freq_sin_full = expand_half_to_halfsplit_full(freq_sin_half)
 
     out = {
         "comparisons": {
             "runtime_cos__vs__hf_cos": compare_tensors(freq_cos_full, rope_cos, "runtime_cos__vs__hf_cos"),
+            "runtime_sin__vs__hf_sin": compare_tensors(freq_sin_full, rope_sin, "runtime_sin__vs__hf_sin"),
             "runtime_cos__vs__hf_sin": compare_tensors(freq_cos_full, rope_sin, "runtime_cos__vs__hf_sin"),
             "runtime_sin__vs__hf_cos": compare_tensors(freq_sin_full, rope_cos, "runtime_sin__vs__hf_cos"),
-            "runtime_sin__vs__hf_sin": compare_tensors(freq_sin_full, rope_sin, "runtime_sin__vs__hf_sin"),
             "runtime_cos__vs__neg_hf_cos": compare_tensors(freq_cos_full, -rope_cos, "runtime_cos__vs__neg_hf_cos"),
+            "runtime_sin__vs__neg_hf_sin": compare_tensors(freq_sin_full, -rope_sin, "runtime_sin__vs__neg_hf_sin"),
             "runtime_cos__vs__neg_hf_sin": compare_tensors(freq_cos_full, -rope_sin, "runtime_cos__vs__neg_hf_sin"),
             "runtime_sin__vs__neg_hf_cos": compare_tensors(freq_sin_full, -rope_cos, "runtime_sin__vs__neg_hf_cos"),
-            "runtime_sin__vs__neg_hf_sin": compare_tensors(freq_sin_full, -rope_sin, "runtime_sin__vs__neg_hf_sin"),
         }
     }
 
