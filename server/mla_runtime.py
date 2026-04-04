@@ -285,7 +285,13 @@ class MLARuntime:
             "q_pre_split": q_pre_split.detach().float().cpu().numpy(),
             "q_rope_pre_rotary": q_rope_pre_rotary.detach().float().cpu().numpy(),
             "q_rope_post_rotary": q_rope_post_rotary.detach().float().cpu().numpy(),
+            "cache_latent_raw": kv_latent.detach().float().cpu().numpy(),
+            "cache_latent": normalized_kv_latent.detach().float().cpu().numpy(),
+            "cache_k_rope": k_rope.detach().float().cpu().numpy(),
+            "q_nope_absorb": q_nrope_absorb.detach().float().cpu().numpy(),
             "q_flash": q_flash.detach().float().cpu().numpy(),
             "blocked_k_token": blocked_k_token.detach().float().cpu().numpy(),
+            "last_value_heads": x.detach().float().cpu().numpy(),
+            "scores_nope": scores.detach().float().cpu().numpy(),
         }
         return x, aux
