@@ -1691,7 +1691,6 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             "q_latent_pre_norm": q_latent_pre_norm.detach().float().cpu().numpy(),
             "q_latent_post_norm": q_latent_post_norm.detach().float().cpu().numpy(),
             "q_pre_split": q_pre_split.detach().float().cpu().numpy(),
-            "q_nope": q_nope_dbg,
             "q_pe_pre_rope": q_pe_pre_rope_dbg,
             "cache_latent_raw": cache_latent_raw.detach().cpu(),
             "cache_latent": cache_latent.detach().cpu(),
