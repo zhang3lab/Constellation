@@ -44,47 +44,6 @@ def _rms_norm(hidden, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return y
 
 
-def _post_attention_ffn_input(
-    session,
-    hidden,
-    layer_id: int,
-):
-    layer_id = int(layer_id)
-
-    if session.backbone_store is None:
-        raise RuntimeError("session.backbone_store is not initialized")
-
-    layer_entry = session.backbone_store.layer(layer_id)
-    dev = str(layer_entry["device"])
-    runtime_dtype = session.backbone_store.dtype
-    dtype_name = torch_dtype_name(runtime_dtype)
-
-    norm_weight = layer_entry["post_attention_layernorm"]
-    if not isinstance(norm_weight, torch.Tensor):
-        raise TypeError(
-            f"post_attention_ffn_input.layer{layer_id}.norm_weight expected torch.Tensor, "
-            f"got {type(norm_weight).__name__}"
-        )
-
-    vector_cfg = ARRCFG_VECTOR_TORCH(dtype_name, dev)
-    hidden_cfg = ARRCFG_HIDDEN_TORCH(dtype_name, dev)
-
-    norm_weight = as_array(
-        norm_weight,
-        f"post_attention_ffn_input.layer{layer_id}.norm_weight",
-        vector_cfg,
-    )
-    hidden = as_array(
-        hidden,
-        "post_attention_ffn_input.hidden",
-        hidden_cfg,
-    )
-
-    y = _rms_norm(hidden, norm_weight)
-    y = as_array(y, f"post_attention_ffn_input.layer{layer_id}", hidden_cfg)
-    return y
-
-
 class DeepseekFullModelExecutorBase(FullModelRefBase):
     """
     DeepSeek-specific model-structure helpers and default composed segments.
@@ -92,9 +51,6 @@ class DeepseekFullModelExecutorBase(FullModelRefBase):
     Assumptions for the current first version:
       - layers [0, dense_layer_count) are dense decoder layers
       - layers >= dense_layer_count are sparse decoder layers
-      - run_attention_shared_segment() may be composed from attention/shared blocks
-      - run_prefix_segment() may be composed from attention + dense-ffn blocks
-        for the dense prefix range
     """
 
     def dense_layer_count(self) -> int:
@@ -102,240 +58,6 @@ class DeepseekFullModelExecutorBase(FullModelRefBase):
 
     def is_sparse_layer(self, layer_id: int) -> bool:
         return int(layer_id) >= self.dense_layer_count()
-
-    def run_attention_shared_segment(
-        self,
-        hidden_in,
-        layer_id: int,
-        *,
-        position_ids=None,
-        attention_mask=None,
-        kv_cache=None,
-        return_aux: bool = False,
-    ) -> AttentionSharedSegmentResult:
-        layer_id = int(layer_id)
-     
-        if self.session.backbone_store is None:
-            raise RuntimeError("session.backbone_store is not initialized")
-     
-        layer_entry = self.session.backbone_store.layer(layer_id)
-        dev = str(layer_entry["device"])
-        runtime_dtype = self.session.backbone_store.dtype
-        dtype_name = torch_dtype_name(runtime_dtype)
-     
-        hidden_cfg = ARRCFG_HIDDEN_TORCH(dtype_name, dev)
-     
-        hidden_in = as_array(
-            hidden_in,
-            "attention_shared.hidden_in",
-            hidden_cfg,
-        )
-     
-        attn = self.run_attention_block(
-            hidden_in,
-            layer_id,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            kv_cache=kv_cache,
-            return_aux=return_aux,
-        )
-        if not isinstance(attn.output, torch.Tensor):
-            raise TypeError(
-                f"attention_shared.layer{layer_id}.attention.output expected torch.Tensor, "
-                f"got {type(attn.output).__name__}"
-            )
-        attn_out = as_array(
-            attn.output,
-            f"attention_shared.layer{layer_id}.attention.output",
-            hidden_cfg,
-        )
-     
-        if tuple(attn_out.shape) != tuple(hidden_in.shape):
-            raise RuntimeError(
-                f"attention output shape mismatch at layer {layer_id}: "
-                f"got={tuple(attn_out.shape)} expected={tuple(hidden_in.shape)}"
-            )
-     
-        post_attn_hidden = hidden_in + attn_out
-        post_attn_hidden = as_array(
-            post_attn_hidden,
-            f"attention_shared.layer{layer_id}.post_attn_hidden",
-            hidden_cfg,
-        )
-     
-        shared = self.run_shared_expert_block(
-            post_attn_hidden,
-            layer_id,
-            return_aux=return_aux,
-        )
-        if not isinstance(shared.output, torch.Tensor):
-            raise TypeError(
-                f"attention_shared.layer{layer_id}.shared_expert.output expected torch.Tensor, "
-                f"got {type(shared.output).__name__}"
-            )
-        shared_out = as_array(
-            shared.output,
-            f"attention_shared.layer{layer_id}.shared_expert.output",
-            hidden_cfg,
-        )
-     
-        if tuple(shared_out.shape) != tuple(hidden_in.shape):
-            raise RuntimeError(
-                f"shared expert output shape mismatch at layer {layer_id}: "
-                f"got={tuple(shared_out.shape)} expected={tuple(hidden_in.shape)}"
-            )
-     
-        aux: dict[str, Any] = {}
-        if return_aux:
-            aux = {
-                "attention": attn.aux,
-                "shared_expert": shared.aux,
-                "post_attn_hidden": post_attn_hidden.clone(),
-            }
-     
-        return AttentionSharedSegmentResult(
-            attention_output=attn_out,
-            shared_expert_output=shared_out,
-            aux=aux,
-        )
-
-    def run_prefix_segment(
-        self,
-        hidden_in,
-        *,
-        start_layer: int,
-        end_layer: int,
-        position_ids=None,
-        attention_mask=None,
-        kv_cache=None,
-        return_aux: bool = False,
-    ) -> ModelExecResult:
-        """
-        Default DeepSeek prefix implementation:
-        compose dense decoder layers using attention + dense_ffn blocks.
-     
-        This is intended for the dense prefix (currently first 3 layers).
-        A future fused/device implementation can override this method directly.
-        """
-        start_layer = int(start_layer)
-        end_layer = int(end_layer)
-        if end_layer < start_layer:
-            raise RuntimeError(
-                f"invalid layer range: start_layer={start_layer}, end_layer={end_layer}"
-            )
-        if start_layer < 0:
-            raise RuntimeError(f"start_layer must be >= 0, got {start_layer}")
-        if end_layer >= self.dense_layer_count():
-            raise RuntimeError(
-                f"default DeepSeek prefix path only supports dense prefix layers, "
-                f"got start_layer={start_layer}, end_layer={end_layer}, "
-                f"dense_layer_count={self.dense_layer_count()}"
-            )
-     
-        if self.session.backbone_store is None:
-            raise RuntimeError("session.backbone_store is not initialized")
-     
-        runtime_dtype = self.session.backbone_store.dtype
-        dtype_name = torch_dtype_name(runtime_dtype)
-     
-        first_layer_entry = self.session.backbone_store.layer(start_layer)
-        first_dev = str(first_layer_entry["device"])
-     
-        hidden_in = as_array(
-            hidden_in,
-            "prefix.hidden_in",
-            ARRCFG_HIDDEN_TORCH(dtype_name, first_dev),
-        )
-     
-        cur = hidden_in
-        per_layer = []
-     
-        for layer_id in range(start_layer, end_layer + 1):
-            layer_entry = self.session.backbone_store.layer(layer_id)
-            layer_dev = str(layer_entry["device"])
-     
-            cur = as_array(
-                cur,
-                f"prefix.layer{layer_id}.input",
-                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
-            )
-     
-            attn = self.run_attention_block(
-                cur,
-                layer_id,
-                position_ids=position_ids,
-                attention_mask=attention_mask,
-                kv_cache=kv_cache,
-                return_aux=return_aux,
-            )
-            if not isinstance(attn.output, torch.Tensor):
-                raise TypeError(
-                    f"prefix.layer{layer_id}.attention.output expected torch.Tensor, "
-                    f"got {type(attn.output).__name__}"
-                )
-            attn_out = as_array(
-                attn.output,
-                f"prefix.layer{layer_id}.attention.output",
-                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
-            )
-     
-            if tuple(attn_out.shape) != tuple(cur.shape):
-                raise RuntimeError(
-                    f"attention output shape mismatch at layer {layer_id}: "
-                    f"got={tuple(attn_out.shape)} expected={tuple(cur.shape)}"
-                )
-     
-            cur = cur + attn_out
-            cur = as_array(
-                cur,
-                f"prefix.layer{layer_id}.post_attention_hidden",
-                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
-            )
-     
-            ffn = self.run_dense_ffn_block(
-                cur,
-                layer_id,
-                return_aux=return_aux,
-            )
-            if not isinstance(ffn.output, torch.Tensor):
-                raise TypeError(
-                    f"prefix.layer{layer_id}.dense_ffn.output expected torch.Tensor, "
-                    f"got {type(ffn.output).__name__}"
-                )
-            ffn_out = as_array(
-                ffn.output,
-                f"prefix.layer{layer_id}.dense_ffn.output",
-                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
-            )
-     
-            if tuple(ffn_out.shape) != tuple(cur.shape):
-                raise RuntimeError(
-                    f"dense ffn output shape mismatch at layer {layer_id}: "
-                    f"got={tuple(ffn_out.shape)} expected={tuple(cur.shape)}"
-                )
-     
-            cur = cur + ffn_out
-            cur = as_array(
-                cur,
-                f"prefix.layer{layer_id}.output",
-                ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
-            )
-     
-            if return_aux:
-                per_layer.append(
-                    {
-                        "layer_id": layer_id,
-                        "attention": attn.aux,
-                        "dense_ffn": ffn.aux,
-                    }
-                )
-     
-        aux: dict[str, Any] = {}
-        if return_aux:
-            aux["per_layer"] = per_layer
-     
-        return ModelExecResult(output=cur, aux=aux)
-
 
 
 class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
@@ -504,28 +226,26 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
             raise RuntimeError(f"dense_ffn weights are not loaded for layer {layer_id}")
      
         dense_ffn_entry = layer_entry["dense_ffn"]
-        norm_weight = layer_entry["post_attention_layernorm"]
         w_up = dense_ffn_entry["w_up"]
         w_gate = dense_ffn_entry["w_gate"]
         w_down = dense_ffn_entry["w_down"]
      
         hidden_cfg = ARRCFG_HIDDEN_TORCH(dtype_name, dev)
-        vector_cfg = ARRCFG_VECTOR_TORCH(dtype_name, dev)
      
         hidden_in = as_array(hidden_in, "dense_ffn.hidden_in", hidden_cfg)
         was_1d = (hidden_in.ndim == 1)
         hidden_2d = hidden_in.unsqueeze(0) if was_1d else hidden_in
      
-        norm_weight = as_array(norm_weight, f"dense_ffn.layer{layer_id}.norm_weight", vector_cfg)
         w_up = as_array(w_up, f"dense_ffn.layer{layer_id}.w_up", hidden_cfg)
         w_gate = as_array(w_gate, f"dense_ffn.layer{layer_id}.w_gate", hidden_cfg)
         w_down = as_array(w_down, f"dense_ffn.layer{layer_id}.w_down", hidden_cfg)
      
-        x_t = _rms_norm(hidden_2d, norm_weight)   # (T, H)
-        up = x_t @ w_up.T                         # (T, I)
-        gate = x_t @ w_gate.T                     # (T, I)
-        fused = up * F.silu(gate)                 # (T, I)
-        out = fused @ w_down.T                    # (T, H)
+        # hidden_in is already post_attention_layernorm(hidden)
+        x_t = hidden_2d                            # (T, H)
+        up = x_t @ w_up.T                          # (T, I)
+        gate = x_t @ w_gate.T                      # (T, I)
+        fused = up * F.silu(gate)                  # (T, I)
+        out = fused @ w_down.T                     # (T, H)
      
         out = as_array(out, f"dense_ffn.layer{layer_id}.output", hidden_cfg)
         if was_1d:

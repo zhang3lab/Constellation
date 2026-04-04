@@ -11,7 +11,6 @@ from server.array_utils import (
 )
 from server.deepseek_full_model_executor import (
     DeepseekFullModelExecutorBase,
-    _post_attention_ffn_input,
 )
 from server.full_model_types import AttentionSharedSegmentResult, ModelExecResult
 from server.moe_layer_runtime import run_moe_layer
@@ -54,8 +53,46 @@ def run_dense_layer(
         hidden_cfg,
     )
 
-    attn = ref.run_attention_block(
+    input_ln_weight = layer_entry["input_layernorm"]
+    post_attn_ln_weight = layer_entry["post_attention_layernorm"]
+
+    if not isinstance(input_ln_weight, torch.Tensor):
+        raise TypeError(
+            f"dense_layer{layer_id}.input_layernorm expected torch.Tensor, "
+            f"got {type(input_ln_weight).__name__}"
+        )
+    if not isinstance(post_attn_ln_weight, torch.Tensor):
+        raise TypeError(
+            f"dense_layer{layer_id}.post_attention_layernorm expected torch.Tensor, "
+            f"got {type(post_attn_ln_weight).__name__}"
+        )
+
+    input_ln_weight = as_array(
+        input_ln_weight,
+        f"dense_layer{layer_id}.input_layernorm",
+        ARRCFG_PARAM_TORCH(dtype_name, attn_dev),
+    )
+    post_attn_ln_weight = as_array(
+        post_attn_ln_weight,
+        f"dense_layer{layer_id}.post_attention_layernorm",
+        ARRCFG_PARAM_TORCH(dtype_name, attn_dev),
+    )
+
+    # HF-style prenorm before attention
+    attn_in = torch.nn.functional.rms_norm(
         hidden_in,
+        (hidden_in.shape[-1],),
+        input_ln_weight,
+        1e-6,
+    )
+    attn_in = as_array(
+        attn_in,
+        f"dense_layer{layer_id}.attention.input",
+        hidden_cfg,
+    )
+
+    attn = ref.run_attention_block(
+        attn_in,
         layer_id,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -80,8 +117,21 @@ def run_dense_layer(
         hidden_cfg,
     )
 
-    dense_ffn = ref.run_dense_ffn_block(
+    # HF-style prenorm before dense FFN
+    dense_ffn_in = torch.nn.functional.rms_norm(
         post_attn_hidden,
+        (post_attn_hidden.shape[-1],),
+        post_attn_ln_weight,
+        1e-6,
+    )
+    dense_ffn_in = as_array(
+        dense_ffn_in,
+        f"dense_layer{layer_id}.dense_ffn.input",
+        hidden_cfg,
+    )
+
+    dense_ffn = ref.run_dense_ffn_block(
+        dense_ffn_in,
         layer_id,
         return_aux=return_aux,
     )
@@ -107,7 +157,9 @@ def run_dense_layer(
         "layer_id": layer_id,
         "layer_type": "dense",
         "output": output,
+        "attention_input": attn_in,
         "attention_output": attn_out,
+        "dense_ffn_input": dense_ffn_in,
         "dense_ffn_output": dense_ffn_out,
     }
     if return_aux:
@@ -140,6 +192,7 @@ def run_sparse_layer(
 
     hidden_cfg = ARRCFG_HIDDEN_TORCH(dtype_name, attn_dev)
     vector_cfg = ARRCFG_VECTOR_TORCH(dtype_name, attn_dev)
+    param_cfg = ARRCFG_PARAM_TORCH(dtype_name, attn_dev)
 
     hidden_in = as_array(
         hidden_in,
@@ -149,8 +202,46 @@ def run_sparse_layer(
     was_1d = (hidden_in.ndim == 1)
     seq_len = 1 if was_1d else int(hidden_in.shape[0])
 
-    attn = ref.run_attention_block(
+    input_ln_weight = layer_entry["input_layernorm"]
+    post_attn_ln_weight = layer_entry["post_attention_layernorm"]
+
+    if not isinstance(input_ln_weight, torch.Tensor):
+        raise TypeError(
+            f"sparse_layer{layer_id}.input_layernorm expected torch.Tensor, "
+            f"got {type(input_ln_weight).__name__}"
+        )
+    if not isinstance(post_attn_ln_weight, torch.Tensor):
+        raise TypeError(
+            f"sparse_layer{layer_id}.post_attention_layernorm expected torch.Tensor, "
+            f"got {type(post_attn_ln_weight).__name__}"
+        )
+
+    input_ln_weight = as_array(
+        input_ln_weight,
+        f"sparse_layer{layer_id}.input_layernorm",
+        param_cfg,
+    )
+    post_attn_ln_weight = as_array(
+        post_attn_ln_weight,
+        f"sparse_layer{layer_id}.post_attention_layernorm",
+        param_cfg,
+    )
+
+    # HF-style prenorm before attention
+    attn_in = torch.nn.functional.rms_norm(
         hidden_in,
+        (hidden_in.shape[-1],),
+        input_ln_weight,
+        1e-6,
+    )
+    attn_in = as_array(
+        attn_in,
+        f"sparse_layer{layer_id}.attention.input",
+        hidden_cfg,
+    )
+
+    attn = ref.run_attention_block(
+        attn_in,
         layer_id,
         position_ids=position_ids,
         attention_mask=attention_mask,
@@ -175,10 +266,12 @@ def run_sparse_layer(
         hidden_cfg,
     )
 
-    ffn_hidden = _post_attention_ffn_input(
-        session,
+    # HF-style prenorm before sparse FFN / experts
+    ffn_hidden = torch.nn.functional.rms_norm(
         post_attn_hidden,
-        layer_id,
+        (post_attn_hidden.shape[-1],),
+        post_attn_ln_weight,
+        1e-6,
     )
     ffn_hidden = as_array(
         ffn_hidden,
@@ -251,7 +344,7 @@ def run_sparse_layer(
             f"got={tuple(routed_out.shape)} expected={tuple(hidden_in.shape)}"
         )
 
-    ffn_total = shared.output + routed_out
+    ffn_total = shared_out + routed_out
     ffn_total = as_array(
         ffn_total,
         f"sparse_layer{layer_id}.ffn_total",
@@ -269,18 +362,107 @@ def run_sparse_layer(
         "layer_id": layer_id,
         "layer_type": "sparse",
         "output": output,
+        "attention_input": attn_in,
         "attention_output": attn_out,
         "shared_expert_output": shared_out,
         "routed_output": routed_out,
+        "ffn_hidden": ffn_hidden,
     }
     if return_aux:
         result["attention_aux"] = attn.aux
         result["shared_expert_aux"] = shared.aux
         result["routed_aux"] = routed_aux
         result["post_attention_hidden"] = post_attn_hidden.clone()
-        result["ffn_hidden"] = ffn_hidden.clone()
         result["ffn_total"] = ffn_total.clone()
     return result
+
+
+def run_prefix_segment(
+    session,
+    hidden_in,
+    *,
+    start_layer: int,
+    end_layer: int,
+    position_ids=None,
+    attention_mask=None,
+    kv_cache=None,
+    return_aux: bool = False,
+):
+    ref = _get_full_model_executor(session)
+
+    start_layer = int(start_layer)
+    end_layer = int(end_layer)
+    if end_layer < start_layer:
+        raise RuntimeError(
+            f"invalid layer range: start_layer={start_layer}, end_layer={end_layer}"
+        )
+    if start_layer < 0:
+        raise RuntimeError(f"start_layer must be >= 0, got {start_layer}")
+    if end_layer >= ref.dense_layer_count():
+        raise RuntimeError(
+            f"default DeepSeek prefix path only supports dense prefix layers, "
+            f"got start_layer={start_layer}, end_layer={end_layer}, "
+            f"dense_layer_count={ref.dense_layer_count()}"
+        )
+
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+
+    runtime_dtype = session.backbone_store.dtype
+    dtype_name = torch_dtype_name(runtime_dtype)
+
+    first_layer_entry = session.backbone_store.layer(start_layer)
+    first_dev = str(first_layer_entry["device"])
+
+    cur = as_array(
+        hidden_in,
+        "prefix.hidden_in",
+        ARRCFG_HIDDEN_TORCH(dtype_name, first_dev),
+    )
+
+    per_layer = []
+
+    for layer_id in range(start_layer, end_layer + 1):
+        layer_entry = session.backbone_store.layer(layer_id)
+        layer_dev = str(layer_entry["device"])
+
+        cur = as_array(
+            cur,
+            f"prefix.layer{layer_id}.input",
+            ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
+        )
+
+        layer_result = run_dense_layer(
+            session,
+            cur,
+            layer_id,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            kv_cache=kv_cache,
+            return_aux=return_aux,
+        )
+
+        cur = layer_result["output"]
+        cur = as_array(
+            cur,
+            f"prefix.layer{layer_id}.output",
+            ARRCFG_HIDDEN_TORCH(dtype_name, layer_dev),
+        )
+
+        if return_aux:
+            per_layer.append(
+                {
+                    "layer_id": layer_id,
+                    "attention": layer_result.get("attention_aux", {}),
+                    "dense_ffn": layer_result.get("dense_ffn_aux", {}),
+                }
+            )
+
+    aux: dict[str, Any] = {}
+    if return_aux:
+        aux["per_layer"] = per_layer
+
+    return ModelExecResult(output=cur, aux=aux)
 
 
 def run_full_model(
@@ -294,8 +476,6 @@ def run_full_model(
     kv_cache=None,
     collect_per_layer: bool = False,
 ):
-    ref = _get_full_model_executor(session)
-
     start_layer = int(start_layer)
     end_layer = int(end_layer)
     if end_layer < start_layer:
@@ -324,7 +504,8 @@ def run_full_model(
     dense_prefix_end = min(end_layer + 1, ref.dense_layer_count())
 
     if start_layer < dense_prefix_end:
-        prefix = ref.run_prefix_segment(
+        prefix = run_prefix_segment(
+            session,
             cur,
             start_layer=start_layer,
             end_layer=dense_prefix_end - 1,

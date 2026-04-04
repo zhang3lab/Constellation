@@ -93,3 +93,36 @@ def to_numpy_f32(x):
     if isinstance(x, torch.Tensor):
         return x.detach().cpu().float().numpy()
     return np.asarray(x, dtype=np.float32)
+
+def prenorm_hidden_for_attention(
+    session,
+    hidden_in,
+    layer_id: int,
+):
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+
+    layer_entry = session.backbone_store.layer(int(layer_id))
+    norm_weight = layer_entry["input_layernorm"]
+
+    if not isinstance(norm_weight, torch.Tensor):
+        raise TypeError(
+            f"layer{layer_id}.input_layernorm expected torch.Tensor, got {type(norm_weight).__name__}"
+        )
+
+    hidden_t = torch.as_tensor(hidden_in, dtype=torch.float32, device=norm_weight.device)
+    if hidden_t.ndim == 1:
+        hidden_t = hidden_t.unsqueeze(0)
+
+    norm_weight = norm_weight.to(device=hidden_t.device, dtype=hidden_t.dtype)
+    hidden_norm = torch.nn.functional.rms_norm(
+        hidden_t,
+        (hidden_t.shape[-1],),
+        norm_weight,
+        1e-6,
+    )
+
+    if hidden_norm.shape[0] == 1:
+        hidden_norm = hidden_norm[0]
+
+    return hidden_norm.detach().cpu().numpy().astype(np.float32, copy=False)

@@ -35,7 +35,7 @@ def apply_rope_1tok(x: torch.Tensor, freq_cis_1tok: torch.Tensor) -> torch.Tenso
 
 
 def build_one_token_q_and_cache_entry(
-    x_token_norm: torch.Tensor,
+    x_token_prenorm: torch.Tensor,
     ws: Dict[str, torch.Tensor],
     *,
     num_heads: int,
@@ -52,7 +52,7 @@ def build_one_token_q_and_cache_entry(
       q_flash:       [1, H, kv_lora_rank + qk_rope_head_dim]
       blocked_k:     [1, 1, kv_lora_rank + qk_rope_head_dim]
     """
-    q_latent = x_token_norm @ ws["q_a_proj"].t()
+    q_latent = x_token_prenorm @ ws["q_a_proj"].t()
     q_latent = rms_norm_t(q_latent, ws["q_a_layernorm"])
     q_full = q_latent @ ws["q_b_proj"].t()
     q_full = q_full.view(1, num_heads, qk_nope_head_dim + qk_rope_head_dim)
@@ -61,7 +61,7 @@ def build_one_token_q_and_cache_entry(
     q_rope = q_full[..., qk_nope_head_dim:]
     q_rope = apply_rope_1tok(q_rope, freq_t)
 
-    kv_down = x_token_norm @ ws["kv_a_proj_with_mqa"].t()
+    kv_down = x_token_prenorm @ ws["kv_a_proj_with_mqa"].t()
     kv_latent = kv_down[:, :kv_lora_rank]
     k_rope = kv_down[:, kv_lora_rank:]
     kv_latent_norm = rms_norm_t(kv_latent, ws["kv_a_layernorm"])
@@ -169,23 +169,13 @@ def build_ref_state_for_one_token(
     freq_t: torch.Tensor,
 ):
     """
-    Convenience helper used by higher-level compare scripts.
-
     Args:
-      x_token: [1,1,hidden]
-
-    Returns a dict with:
-      x_token_norm
-      q_nope_absorb
-      q_rope
-      q_flash
-      blocked_k_token
-      cache_latent_1tok
-      cache_k_rope_1tok
+      x_token: [1,1,hidden], already prenormed by caller
     """
-    x_token_norm = rms_norm_t(x_token[:, 0, :], ws["input_layernorm"])
+    x_token_prenorm = x_token[:, 0, :]
+
     q_nope_absorb, q_rope, q_flash, blocked_k_token = build_one_token_q_and_cache_entry(
-        x_token_norm,
+        x_token_prenorm,
         ws,
         num_heads=num_heads,
         kv_lora_rank=kv_lora_rank,
@@ -194,12 +184,13 @@ def build_ref_state_for_one_token(
         v_head_dim=v_head_dim,
         freq_t=freq_t,
     )
+
     cache_latent_1tok, cache_k_rope_1tok = split_blocked_k(
         blocked_k_token,
         kv_lora_rank=kv_lora_rank,
     )
     return {
-        "x_token_norm": x_token_norm,
+        "x_token_prenorm": x_token_prenorm,
         "q_nope_absorb": q_nope_absorb,
         "q_rope": q_rope,
         "q_flash": q_flash,

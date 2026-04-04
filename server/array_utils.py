@@ -73,6 +73,27 @@ def ARRCFG_VECTOR_TORCH(dtype: str, device: str) -> ArrayConfig:
     )
 
 
+def ARRCFG_PARAM_TORCH(dtype: str, device: str) -> ArrayConfig:
+    """
+    Torch parameter/config tensor:
+    - allow 1D for norm weights
+    - allow 2D for linear weights
+    - no implicit cast/move
+    """
+    if dtype not in ("float32", "float16", "bfloat16"):
+        raise ValueError(f"unsupported torch dtype: {dtype}")
+    return ArrayConfig(
+        backend="torch",
+        dtype=dtype,
+        device=device,
+        allow_1d=True,
+        allow_2d=True,
+        require_finite=True,
+        contiguous=True,
+        allow_cast=False,
+    )
+
+
 def torch_dtype_name(dtype: torch.dtype) -> str:
     if dtype == torch.float32:
         return "float32"

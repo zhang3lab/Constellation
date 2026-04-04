@@ -13,7 +13,7 @@ from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
 from server.inference_session import InferenceSession
-from server.test.utils import compare_arrays, print_stats, to_numpy_f32
+from server.test.utils import compare_arrays, prenorm_hidden_for_attention, print_stats, to_numpy_f32
 
 
 class DeepseekFullModelReference(DeepseekFullModelExecutor):
@@ -58,11 +58,12 @@ def run_runtime_attention(
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
     hidden = prepared["hidden_in"]
+    hidden_prenorm = prenorm_hidden_for_attention(session, hidden, layer_id)
 
     pos = np.asarray([position_id], dtype=np.int64)
 
     out = session.full_model_executor.run_attention_block(
-        hidden,
+        hidden_prenorm,
         layer_id,
         position_ids=pos,
         attention_mask=None,
@@ -72,6 +73,7 @@ def run_runtime_attention(
 
     return {
         "hidden_in": hidden,
+        "hidden_prenorm": hidden_prenorm,
         "output": to_numpy_f32(out.output),
         "aux": out.aux,
     }
@@ -97,11 +99,12 @@ def run_reference_attention(
 
     prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
     hidden = prepared["hidden_in"]
+    hidden_prenorm = prenorm_hidden_for_attention(session, hidden, layer_id)
 
     pos = np.asarray([position_id], dtype=np.int64)
 
     out = session.full_model_executor.run_attention_block(
-        hidden,
+        hidden_prenorm,
         layer_id,
         position_ids=pos,
         attention_mask=None,
@@ -111,6 +114,7 @@ def run_reference_attention(
 
     return {
         "hidden_in": hidden,
+        "hidden_prenorm": hidden_prenorm,
         "output": to_numpy_f32(out.output),
         "aux": out.aux,
     }

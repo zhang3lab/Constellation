@@ -17,20 +17,6 @@ class ModelExecResult:
     aux: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class AttentionSharedSegmentResult:
-    """
-    Result for a fused attention + shared-expert segment.
-
-    - attention_output: attention block contribution
-    - shared_expert_output: shared-expert block contribution computed after
-      applying the attention residual update
-    """
-    attention_output: np.ndarray
-    shared_expert_output: np.ndarray
-    aux: dict[str, Any] = field(default_factory=dict)
-
-
 class FullModelRef(Protocol):
     def run_attention_block(
         self,
@@ -60,18 +46,6 @@ class FullModelRef(Protocol):
         *,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        ...
-
-    def run_attention_shared_segment(
-        self,
-        hidden_in: np.ndarray,
-        layer_id: int,
-        *,
-        position_ids=None,
-        attention_mask=None,
-        kv_cache=None,
-        return_aux: bool = False,
-    ) -> AttentionSharedSegmentResult:
         ...
 
     def run_prefix_segment(
@@ -125,18 +99,6 @@ class FullModelRefBase:
         *,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        raise NotImplementedError
-
-    def run_attention_shared_segment(
-        self,
-        hidden_in: np.ndarray,
-        layer_id: int,
-        *,
-        position_ids=None,
-        attention_mask=None,
-        kv_cache=None,
-        return_aux: bool = False,
-    ) -> AttentionSharedSegmentResult:
         raise NotImplementedError
 
     def run_prefix_segment(
