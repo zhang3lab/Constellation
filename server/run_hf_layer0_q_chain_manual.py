@@ -5,21 +5,9 @@ import json
 from pathlib import Path
 
 import torch
-from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-
-def load_index(model_dir: str) -> dict:
-    with open(f"{model_dir}/model.safetensors.index.json", "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def load_raw_tensor(model_dir: str, tensor_name: str, index: dict | None = None) -> torch.Tensor:
-    if index is None:
-        index = load_index(model_dir)
-    shard = index["weight_map"][tensor_name]
-    with safe_open(f"{model_dir}/{shard}", framework="pt", device="cpu") as f:
-        return f.get_tensor(tensor_name)
+from server.deepseek_model_loader import DeepseekModelLoader
 
 
 def get_attr_by_dotted_name(obj, dotted_name: str):
@@ -30,13 +18,6 @@ def get_attr_by_dotted_name(obj, dotted_name: str):
         else:
             cur = getattr(cur, part)
     return cur
-
-
-def copy_named_tensor_into_model(model, *, model_dir: str, tensor_name: str, index: dict | None = None) -> None:
-    target = get_attr_by_dotted_name(model, tensor_name)
-    raw = load_raw_tensor(model_dir, tensor_name, index=index)
-    with torch.no_grad():
-        target.copy_(raw.to(device=target.device, dtype=target.dtype))
 
 
 def load_hf_model(model_dir: str, device: str):
@@ -67,6 +48,18 @@ def layer0_attention_names() -> list[str]:
     ]
 
 
+def copy_named_tensor_into_model(
+    model,
+    *,
+    loader: DeepseekModelLoader,
+    tensor_name: str,
+) -> None:
+    target = get_attr_by_dotted_name(model, tensor_name)
+    loaded = loader.load_tensor_fp32_by_name(tensor_name)
+    with torch.no_grad():
+        target.copy_(loaded.to(device=target.device, dtype=target.dtype))
+
+
 def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, dst: str | None = None) -> None:
     x = dbg.get(src)
     if isinstance(x, torch.Tensor):
@@ -93,12 +86,12 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
     print("[hf-qchain] decoded =", repr(tok.decode(input_ids)))
 
+    loader = DeepseekModelLoader(args.model_dir)
     model = load_hf_model(args.model_dir, args.device)
     try:
-        index = load_index(args.model_dir)
         for name in layer0_attention_names():
             print(f"[hf-qchain] copy {name}")
-            copy_named_tensor_into_model(model, model_dir=args.model_dir, tensor_name=name, index=index)
+            copy_named_tensor_into_model(model, loader=loader, tensor_name=name)
 
         ids = torch.tensor([input_ids], dtype=torch.long, device=next(model.parameters()).device)
         with torch.no_grad():
