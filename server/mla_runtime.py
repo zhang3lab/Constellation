@@ -13,6 +13,52 @@ from third_party.ShallowMLA.mla import (
 )
 
 
+def apply_rotary_emb_halfsplit_torch(
+    x: torch.Tensor,
+    freqs_cis: torch.Tensor,
+) -> torch.Tensor:
+    """
+    x: [B, L, H, D]
+    freqs_cis: [L, D // 2, 2]
+    HF/DeepSeek half-split rotary:
+      first half pairs with second half.
+    """
+    if x.ndim != 4:
+        raise ValueError(f"x expected [B,L,H,D], got {tuple(x.shape)}")
+    if freqs_cis.ndim != 3:
+        raise ValueError(f"freqs_cis expected [L,D//2,2], got {tuple(freqs_cis.shape)}")
+
+    B, L, H, D = x.shape
+    if D % 2 != 0:
+        raise ValueError(f"rotary dim must be even, got D={D}")
+    d_half = D // 2
+
+    if int(freqs_cis.shape[0]) != L:
+        raise ValueError(
+            f"freqs_cis seq mismatch: x has L={L}, freqs_cis has {int(freqs_cis.shape[0])}"
+        )
+    if int(freqs_cis.shape[1]) != d_half:
+        raise ValueError(
+            f"freqs_cis dim mismatch: x has D/2={d_half}, freqs_cis has {int(freqs_cis.shape[1])}"
+        )
+    if int(freqs_cis.shape[2]) != 2:
+        raise ValueError(f"freqs_cis last dim must be 2, got {int(freqs_cis.shape[2])}")
+
+    dtype = x.dtype
+
+    x1 = x[..., :d_half].float()
+    x2 = x[..., d_half:].float()
+
+    cos = freqs_cis[..., 0].unsqueeze(0).unsqueeze(2).to(device=x.device, dtype=torch.float32)
+    sin = freqs_cis[..., 1].unsqueeze(0).unsqueeze(2).to(device=x.device, dtype=torch.float32)
+
+    out1 = x1 * cos - x2 * sin
+    out2 = x1 * sin + x2 * cos
+    out = torch.cat([out1, out2], dim=-1)
+
+    return out.to(dtype=dtype)
+
+
 class MLARuntime:
     def __init__(
         self,
@@ -112,14 +158,14 @@ class MLARuntime:
         )
 
         q_rope_pre_rotary = q_rope
-        q_rope = fused_apply_rotary_emb(q_rope, freq_cis)
+        q_rope = apply_rotary_emb_halfsplit_torch(q_rope, freq_cis)
         q_rope_post_rotary = q_rope
      
         kv_down = torch.matmul(x_norm, weights["kv_a_proj_with_mqa"].t())
         kv_latent, k_rope = kv_down.split(
             [self.kv_latent_rank, self.qk_rope_head_dim], dim=-1
         )
-        k_rope = fused_apply_rotary_emb(k_rope.unsqueeze(2), freq_cis).squeeze(2)
+        k_rope = apply_rotary_emb_halfsplit_torch(k_rope.unsqueeze(2), freq_cis).squeeze(2)
      
         normalized_kv_latent = fused_rms_norm(
             kv_latent,
