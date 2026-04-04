@@ -174,11 +174,35 @@ class MLARuntime:
             dtype=kernel_dtype,
         )
      
-        if mask is not None:
-            mask = mask.unsqueeze(1).unsqueeze(0)
-            fused_mask_softmax(scores, mask)
+        if mask is None:
+            # Build causal additive mask of shape [1, L, 1, T]
+            # Query positions are [start_pos, ..., end_pos - 1]
+            # Key positions are   [0, ..., end_pos - 1]
+            q_pos = torch.arange(start_pos, end_pos, device=scores.device)          # [L]
+            k_pos = torch.arange(0, end_pos, device=scores.device)                  # [T]
+            allowed = k_pos.unsqueeze(0) <= q_pos.unsqueeze(1)                      # [L, T]
+         
+            mask = torch.zeros(
+                (1, seq_len, 1, end_pos),
+                device=scores.device,
+                dtype=scores.dtype,
+            )
+            mask = mask.masked_fill(~allowed.unsqueeze(0).unsqueeze(2), -1e9)
         else:
-            scores = scores.softmax(dim=-1)
+            # Normalize external mask to additive shape [1, L, 1, T]
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(0).unsqueeze(2)
+            elif mask.ndim == 4:
+                pass
+            else:
+                raise RuntimeError(f"unsupported attention mask shape: {tuple(mask.shape)}")
+         
+            if mask.dtype != scores.dtype:
+                mask = mask.to(dtype=scores.dtype)
+            if mask.device != scores.device:
+                mask = mask.to(device=scores.device)
+
+        fused_mask_softmax(scores, mask)
      
         x = torch.einsum("blht,btk->blhk", scores, stacked_kv_latent)
         x = torch.einsum("blhk,hdk->blhd", x, proj_kv_up_weight_v)
