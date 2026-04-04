@@ -1487,15 +1487,6 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             raise NotImplementedError(
                 f"_absorbed_attention_no_cache currently only supports bsz=1, got {bsz}"
             )
-
-        cache_latent_f = cache_latent.float()  # [B, T, K]
-        q_nope_absorb_f = q_nope_absorb.float()  # [B, T, H, K]
-
-        scores_nope_abs_dbg = torch.einsum(
-            "bthk,bsk->bhts",
-            q_nope_absorb_f,
-            cache_latent_f,
-        )
      
         # NOTE:
         # HF passes an expanded attention_mask in prefill. For the current single-sequence
@@ -1535,6 +1526,15 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             q_a.float(),
             q_nope_absorb_kernel,
         ).to(q_a.dtype)  # [B, T, H, kv_rank]
+
+        cache_latent_f = cache_latent.float()  # [B, T, K]
+        q_nope_absorb_f = q_nope_absorb.float()  # [B, T, H, K]
+
+        scores_nope_abs_dbg = torch.einsum(
+            "bthk,bsk->bhts",
+            q_nope_absorb_f,
+            cache_latent_f,
+        )
      
         # apply RoPE on q_pe / cache_k_rope
         # reshape to HF rotary helper expected layout
