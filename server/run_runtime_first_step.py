@@ -95,3 +95,6 @@ def main() -> None:
         print(f"[runtime] topk_ids = {topk_ids}")
         print(f"[runtime] topk_vals = {topk_vals}")
         print(f"[runtime] prefill_time_ms = {report['prefill_time_ms']:.3f}")
+
+if __name__ == "__main__":
+    main()
