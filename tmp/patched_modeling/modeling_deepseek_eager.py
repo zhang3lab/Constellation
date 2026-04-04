@@ -1048,6 +1048,7 @@ class DeepseekV3Attention(nn.Module):
         )
         attn_output = torch.matmul(attn_weights, value_states)
         attn_output_heads = attn_output
+        last_value_heads_dbg = attn_output_heads[:, :, -1, :].detach().cpu().clone()
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
             raise ValueError(
@@ -1075,6 +1076,7 @@ class DeepseekV3Attention(nn.Module):
             "value_states": value_states.detach().cpu(),
             "attn_output_pre_o_proj": attn_output.detach().cpu(),
             "scores_nope": scores_nope_dbg.detach().cpu().clone(),
+            "last_value_heads": last_value_heads_dbg,
         }
         return attn_output, attn_weights, past_key_value
 

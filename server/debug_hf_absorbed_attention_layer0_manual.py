@@ -29,6 +29,15 @@ def summarize_tensor(name: str, x: torch.Tensor) -> dict:
     }
 
 
+def best_scale(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.float().reshape(-1)
+    b = b.float().reshape(-1)
+    denom = torch.dot(a, a).item()
+    if denom == 0:
+        return float("nan")
+    return float(torch.dot(a, b).item() / denom)
+
+
 def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
     xa = a.float()
     xb = b.float()
@@ -45,6 +54,7 @@ def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
         "shape_match": True,
         "shape": list(xa.shape),
         "cosine": cosine_similarity(xa, xb),
+        "alpha": best_scale(xa, xb),
         "max_abs": float(diff.max().item()),
         "mean_abs": float(diff.mean().item()),
     }
@@ -296,6 +306,14 @@ def main() -> None:
         "scores_nope",
         "scores_nope",
         "scores_nope__vs__scores_nope",
+    )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "last_value_heads",
+        "last_value_heads",
+        "last_value_heads__vs__last_value_heads",
     )
 
     logits_diff = (eager_logits - absorbed_logits).abs()
