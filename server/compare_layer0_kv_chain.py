@@ -40,6 +40,10 @@ def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
     }
 
 
+def load_pt(path: Path) -> torch.Tensor:
+    return torch.load(path, map_location="cpu")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hf-dir", type=str, required=True)
@@ -52,20 +56,42 @@ def main() -> None:
 
     out = {"comparisons": {}}
 
+    # Direct 1:1 compares
     for name in [
         "cache_latent_raw",
         "cache_latent",
         "cache_k_rope",
         "q_nope_absorb",
-        "last_value_heads",
-        "scores_nope",
         "blocked_k_token",
         "q_flash",
         "layer0_attn_output",
     ]:
-        hf_tensor = torch.load(hf_dir / f"{name}.pt", map_location="cpu")
-        rt_tensor = torch.load(rt_dir / f"{name}.pt", map_location="cpu")
+        hf_tensor = load_pt(hf_dir / f"{name}.pt")
+        rt_tensor = load_pt(rt_dir / f"{name}.pt")
         out["comparisons"][name] = compare_tensors(hf_tensor, rt_tensor, name)
+
+    # HF stores last token only: [B, H, V]
+    # runtime stores full sequence: [B, L, H, V]
+    hf_tensor = load_pt(hf_dir / "last_value_heads.pt")
+    rt_tensor = load_pt(rt_dir / "last_value_heads.pt")
+    if rt_tensor.ndim == 4:
+        rt_tensor = rt_tensor[:, -1].contiguous()
+    out["comparisons"]["last_value_heads"] = compare_tensors(
+        hf_tensor,
+        rt_tensor,
+        "last_value_heads",
+    )
+
+    # HF: [B, H, L, T], runtime: [B, L, H, T]
+    hf_tensor = load_pt(hf_dir / "scores_nope.pt")
+    rt_tensor = load_pt(rt_dir / "scores_nope.pt")
+    if rt_tensor.ndim == 4:
+        rt_tensor = rt_tensor.permute(0, 2, 1, 3).contiguous()
+    out["comparisons"]["scores_nope"] = compare_tensors(
+        hf_tensor,
+        rt_tensor,
+        "scores_nope",
+    )
 
     output_path = Path(args.output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
