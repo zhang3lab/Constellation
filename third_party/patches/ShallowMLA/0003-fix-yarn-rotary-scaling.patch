@@ -1,0 +1,26 @@
+diff --git a/mla.py b/mla.py
+index 8f0204d..f289d8e 100644
+--- a/mla.py
++++ b/mla.py
+@@ -17,6 +17,8 @@ def precompute_freqs_cis(
+     beta_slow: int, 
+     rope_theta: float, 
+     rope_factor: float,
++    mscale: float = 1.0,
++    mscale_all_dim: float = 1.0,
+     dtype: Optional[torch.dtype] = torch.float16
+ ) -> torch.Tensor:
+     """
+@@ -98,6 +100,12 @@ def precompute_freqs_cis(
+     t = torch.arange(seq_len) # [L]
+     freqs = torch.outer(t, freqs) # outer product, freqs[t, i] = theta_i * t [L, D // 2]
+     freqs_cis = torch.polar(torch.ones_like(freqs), freqs) # exp(j * theta_i * t) [L, D // 2], but in complex form, torch.complex64 if input float32
++
++    # HF/DeepSeek YaRN path applies an additional amplitude scaling.
++    # Start with the simplest compatible form:
++    attention_scaling = float(mscale) / float(mscale_all_dim)
++    freqs_cis = freqs_cis * attention_scaling
++
+     return torch.view_as_real(freqs_cis).to(dtype) # [L, D // 2, 2], 0 for real, 1 for imag
+ 
+ 

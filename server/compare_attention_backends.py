@@ -85,6 +85,8 @@ class ShallowMLAAttentionWrapper:
             beta_slow=mla_cfg["beta_slow"],
             rope_theta=mla_cfg["rope_theta"],
             rope_factor=mla_cfg["rope_factor"],
+            mscale=mla_cfg.get("mscale", 1.0),
+            mscale_all_dim=mla_cfg.get("mscale_all_dim", 1.0),
             dtype=dtype,
         ).to(self.device)
 

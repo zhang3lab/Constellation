@@ -82,11 +82,11 @@ class DeepseekModelLoader:
 
     def mla_config(self) -> dict:
         cfg = self.config()
-
+     
         rope_scaling = cfg.get("rope_scaling")
         if not isinstance(rope_scaling, dict):
             raise ValueError("config.json missing rope_scaling")
-
+     
         return {
             "dim": int(cfg["hidden_size"]),
             "num_heads": int(cfg["num_attention_heads"]),
@@ -101,6 +101,8 @@ class DeepseekModelLoader:
             "beta_slow": int(rope_scaling.get("beta_slow", 1)),
             "rope_theta": float(cfg.get("rope_theta", 10000.0)),
             "rope_factor": float(rope_scaling.get("factor", 40.0)),
+            "mscale": float(rope_scaling.get("mscale", 1.0)),
+            "mscale_all_dim": float(rope_scaling.get("mscale_all_dim", 1.0)),
         }
 
     @staticmethod

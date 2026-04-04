@@ -69,6 +69,8 @@ def _build_freq_cis_tensor(model_loader, *, max_seq_len: int) -> tuple[torch.Ten
     beta_slow = float(mla_cfg["beta_slow"])
     rope_theta = float(mla_cfg["rope_theta"])
     rope_factor = float(mla_cfg["rope_factor"])
+    mscale = float(mla_cfg.get("mscale", 1.0))
+    mscale_all_dim = float(mla_cfg.get("mscale_all_dim", 1.0))
 
     freq_cis = precompute_freqs_cis(
         qk_rope_head_dim=qk_rope_head_dim,
@@ -78,6 +80,8 @@ def _build_freq_cis_tensor(model_loader, *, max_seq_len: int) -> tuple[torch.Ten
         beta_slow=beta_slow,
         rope_theta=rope_theta,
         rope_factor=rope_factor,
+        mscale=mscale,
+        mscale_all_dim=mscale_all_dim,
         dtype=torch.float32,
     )
 
@@ -96,6 +100,8 @@ def _build_freq_cis_tensor(model_loader, *, max_seq_len: int) -> tuple[torch.Ten
         "beta_slow": beta_slow,
         "rope_theta": rope_theta,
         "rope_factor": rope_factor,
+        "mscale": mscale,
+        "mscale_all_dim": mscale_all_dim,
     }
     return freq_cis, meta
 

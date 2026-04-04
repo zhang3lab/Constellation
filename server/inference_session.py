@@ -110,8 +110,10 @@ class InferenceSession:
             "beta_slow": float(mla_cfg["beta_slow"]),
             "rope_theta": float(mla_cfg["rope_theta"]),
             "rope_factor": float(mla_cfg["rope_factor"]),
+            "mscale": float(mla_cfg.get("mscale", 1.0)),
+            "mscale_all_dim": float(mla_cfg.get("mscale_all_dim", 1.0)),
         }
-     
+
         freq_cis_master = None
         if (
             self.mapped_tensor_store is not None
@@ -136,12 +138,9 @@ class InferenceSession:
                 beta_slow=float(mla_cfg["beta_slow"]),
                 rope_theta=float(mla_cfg["rope_theta"]),
                 rope_factor=float(mla_cfg["rope_factor"]),
+                mscale=float(mla_cfg.get("mscale", 1.0)),
+                mscale_all_dim=float(mla_cfg.get("mscale_all_dim", 1.0)),
                 dtype=torch.float32,
-            )
-     
-        if not isinstance(freq_cis_master, torch.Tensor):
-            raise TypeError(
-                f"freq_cis_master expected torch.Tensor, got {type(freq_cis_master).__name__}"
             )
      
         freq_cis_master = freq_cis_master.detach().contiguous().cpu()
