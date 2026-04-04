@@ -73,11 +73,9 @@ def main() -> None:
     rt_q_rope_pre = torch.load(Path(args.runtime_dir) / "q_rope_pre_rotary.pt", map_location="cpu")
 
     # Normalize both to [B, T, H, D]
-    if hf_q_rope_pre.ndim == 4 and hf_q_rope_pre.shape[1] != rt_q_rope_pre.shape[1]:
-        # HF likely [B, H, T, D]
+    if hf_q_rope_pre.ndim == 4 and hf_q_rope_pre.shape[1] == 128:
         hf_q_rope_pre = hf_q_rope_pre.permute(0, 2, 1, 3).contiguous()
     if rt_q_rope_pre.ndim == 4 and rt_q_rope_pre.shape[1] == 128:
-        # runtime likely [B, H, T, D]
         rt_q_rope_pre = rt_q_rope_pre.permute(0, 2, 1, 3).contiguous()
 
     out["comparisons"]["q_rope_pre_rotary"] = compare_tensors(
@@ -88,10 +86,16 @@ def main() -> None:
 
     hf_q_rope_post = torch.load(Path(args.hf_dir) / "q_rope_post_rotary.pt", map_location="cpu")
     rt_q_rope_post = torch.load(Path(args.runtime_dir) / "q_rope_post_rotary.pt", map_location="cpu")
-    rt_q_rope_post_bhtd = rt_q_rope_post.permute(0, 2, 1, 3).contiguous()
+
+    # Normalize both to [B, T, H, D]
+    if hf_q_rope_post.ndim == 4 and hf_q_rope_post.shape[1] == 128:
+        hf_q_rope_post = hf_q_rope_post.permute(0, 2, 1, 3).contiguous()
+    if rt_q_rope_post.ndim == 4 and rt_q_rope_post.shape[1] == 128:
+        rt_q_rope_post = rt_q_rope_post.permute(0, 2, 1, 3).contiguous()
+
     out["comparisons"]["q_rope_post_rotary"] = compare_tensors(
         hf_q_rope_post,
-        rt_q_rope_post_bhtd,
+        rt_q_rope_post,
         "q_rope_post_rotary",
     )
 
