@@ -45,7 +45,7 @@ def main() -> None:
 
         executor = session.full_model_executor
 
-        hidden = executor.embed_input_ids(input_ids=input_ids)
+        hidden = executor.embed_token_ids(input_ids)
         hidden = hidden.detach().float().cpu()
 
         report = {
