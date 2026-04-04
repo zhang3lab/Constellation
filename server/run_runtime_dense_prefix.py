@@ -10,7 +10,28 @@ from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
+from server.full_model_runtime import run_dense_layer
 from server.inference_session import InferenceSession
+
+
+def _normalize_hidden(x):
+    if isinstance(x, dict):
+        if "hidden" in x:
+            x = x["hidden"]
+        elif "hidden_out" in x:
+            x = x["hidden_out"]
+        elif "output" in x:
+            x = x["output"]
+    elif hasattr(x, "hidden"):
+        x = x.hidden
+    elif hasattr(x, "hidden_out"):
+        x = x.hidden_out
+    elif hasattr(x, "output"):
+        x = x.output
+
+    if not isinstance(x, torch.Tensor):
+        raise TypeError(f"expected tensor-like hidden result, got {type(x).__name__}")
+    return x
 
 
 def main() -> None:
@@ -46,7 +67,7 @@ def main() -> None:
         executor = session.full_model_executor
 
         hidden = executor.embed_token_ids(input_ids)
-        hidden = hidden.detach().float().cpu()
+        hidden = _normalize_hidden(hidden)
 
         report = {
             "backend": "runtime",
@@ -55,19 +76,22 @@ def main() -> None:
         }
 
         for layer_id in [0, 1, 2]:
-            hidden = executor.run_dense_layer(
-                hidden_in=hidden.to(executor.layer_device(layer_id)),
-                layer_id=layer_id,
-                kv_cache=session.full_model_kv_cache,
-                start_pos=0,
+            hidden = run_dense_layer(
+                session,
+                hidden,
+                layer_id,
                 position_ids=None,
                 attention_mask=None,
+                kv_cache=session.full_model_kv_cache,
+                return_aux=False,
             )
+            hidden = _normalize_hidden(hidden)
+
             hidden_cpu = hidden.detach().float().cpu()
             p = outdir / f"layer_{layer_id}_output.pt"
             torch.save(hidden_cpu, p)
             report["saved"].append(str(p))
-            hidden = hidden_cpu
+            print(f"[runtime-prefix] saved {p}")
 
         with (outdir / "runtime_prefix.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
