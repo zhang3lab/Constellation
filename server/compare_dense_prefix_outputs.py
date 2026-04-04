@@ -83,6 +83,12 @@ def main() -> None:
 
         hf_tensor = torch.load(hf_path, map_location="cpu")
         rt_tensor = torch.load(rt_path, map_location="cpu")
+
+        if hf_tensor.ndim == 3 and rt_tensor.ndim == 2 and hf_tensor.shape[0] == 1:
+            rt_tensor = rt_tensor.unsqueeze(0)
+        elif hf_tensor.ndim == 2 and rt_tensor.ndim == 3 and rt_tensor.shape[0] == 1:
+            hf_tensor = hf_tensor.unsqueeze(0)
+
         report["comparisons"][key] = compare_tensors(hf_tensor, rt_tensor, key)
 
     output_path = Path(args.output_json)
