@@ -106,17 +106,18 @@ def prenorm_hidden_for_attention(
 
     layer_entry = session.backbone_store.layer(int(layer_id))
     norm_weight = layer_entry["input_layernorm"]
+    runtime_dtype = session.backbone_store.dtype
 
     if not isinstance(norm_weight, torch.Tensor):
         raise TypeError(
             f"layer{layer_id}.input_layernorm expected torch.Tensor, got {type(norm_weight).__name__}"
         )
 
-    hidden_t = torch.as_tensor(hidden_in, dtype=torch.float32, device=norm_weight.device)
+    hidden_t = torch.as_tensor(hidden_in, dtype=runtime_dtype, device=norm_weight.device)
     if hidden_t.ndim == 1:
         hidden_t = hidden_t.unsqueeze(0)
 
-    norm_weight = norm_weight.to(device=hidden_t.device, dtype=hidden_t.dtype)
+    norm_weight = norm_weight.to(device=hidden_t.device, dtype=runtime_dtype)
     hidden_norm = torch.nn.functional.rms_norm(
         hidden_t,
         (hidden_t.shape[-1],),
