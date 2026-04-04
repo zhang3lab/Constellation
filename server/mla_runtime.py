@@ -12,6 +12,8 @@ from third_party.ShallowMLA.mla import (
     fused_rms_norm,
 )
 
+from server.debug_utils import DebugTensorCollector
+
 
 def apply_rotary_emb_hf_exact_torch(
     x: torch.Tensor,
