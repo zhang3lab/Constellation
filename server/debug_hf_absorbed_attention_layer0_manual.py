@@ -12,8 +12,8 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
 def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().view(-1)
-    b = b.float().view(-1)
+    a = a.float().reshape(-1)
+    b = b.float().reshape(-1)
     return float(F.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item())
 
 
