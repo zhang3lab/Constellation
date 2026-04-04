@@ -5,21 +5,9 @@ import json
 from pathlib import Path
 
 import torch
-from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-
-def load_index(model_dir: str) -> dict:
-    with open(f"{model_dir}/model.safetensors.index.json", "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def load_raw_tensor(model_dir: str, tensor_name: str, index: dict | None = None) -> torch.Tensor:
-    if index is None:
-        index = load_index(model_dir)
-    shard = index["weight_map"][tensor_name]
-    with safe_open(f"{model_dir}/{shard}", framework="pt", device="cpu") as f:
-        return f.get_tensor(tensor_name)
+from server.deepseek_model_loader import DeepseekModelLoader
 
 
 def get_attr_by_dotted_name(obj, dotted_name: str):
@@ -30,13 +18,6 @@ def get_attr_by_dotted_name(obj, dotted_name: str):
         else:
             cur = getattr(cur, part)
     return cur
-
-
-def copy_named_tensor_into_model(model, *, model_dir: str, tensor_name: str, index: dict | None = None) -> None:
-    target = get_attr_by_dotted_name(model, tensor_name)
-    raw = load_raw_tensor(model_dir, tensor_name, index=index)
-    with torch.no_grad():
-        target.copy_(raw.to(device=target.device, dtype=target.dtype))
 
 
 def load_hf_model(model_dir: str, device: str):
@@ -67,6 +48,26 @@ def layer0_attention_names() -> list[str]:
     ]
 
 
+def copy_named_tensor_into_model(
+    model,
+    *,
+    loader: DeepseekModelLoader,
+    tensor_name: str,
+) -> None:
+    target = get_attr_by_dotted_name(model, tensor_name)
+    loaded = loader.load_tensor_fp32_by_name(tensor_name)
+    with torch.no_grad():
+        target.copy_(loaded.to(device=target.device, dtype=target.dtype))
+
+
+def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, dst: str | None = None) -> None:
+    x = dbg.get(src)
+    if isinstance(x, torch.Tensor):
+        p = outdir / (dst or f"{src}.pt")
+        torch.save(x.detach().float().cpu(), p)
+        saved.append(str(p))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", type=str, required=True)
@@ -82,116 +83,47 @@ def main() -> None:
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
-    print("[hf-attn0-aux] decoded =", repr(tokenizer.decode(input_ids)))
+    tok = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
+    print("[hf-attn-aux] decoded =", repr(tok.decode(input_ids)))
 
+    loader = DeepseekModelLoader(args.model_dir)
     model = load_hf_model(args.model_dir, args.device)
     try:
-        index = load_index(args.model_dir)
         for name in layer0_attention_names():
-            print(f"[hf-attn0-aux] copy {name}")
-            copy_named_tensor_into_model(model, model_dir=args.model_dir, tensor_name=name, index=index)
+            print(f"[hf-attn-aux] copy {name}")
+            copy_named_tensor_into_model(model, loader=loader, tensor_name=name)
 
         ids = torch.tensor([input_ids], dtype=torch.long, device=next(model.parameters()).device)
-
-        captured = {}
-
-        def hook(_module, _inp, out):
-            x = out[0] if isinstance(out, tuple) else out
-            captured["layer0_attn_output"] = x.detach().float().cpu()
-
-        h = model.model.layers[0].self_attn.register_forward_hook(hook)
         with torch.no_grad():
             _ = model(input_ids=ids, use_cache=False, return_dict=True)
-        h.remove()
 
-        attn = model.model.layers[0].self_attn
-        dbg = getattr(attn, "last_debug", {}) or {}
+        dbg = getattr(model.model.layers[0].self_attn, "last_debug", {}) or {}
 
-        saved = []
+        saved: list[str] = []
 
-        p = outdir / "layer0_attn_output.pt"
-        torch.save(captured["layer0_attn_output"], p)
-        saved.append(str(p))
+        save_tensor_if_present(saved, outdir, dbg, "attn_output_final", "layer0_attn_output.pt")
+        save_tensor_if_present(saved, outdir, dbg, "q_flash")
+        save_tensor_if_present(saved, outdir, dbg, "blocked_k_token")
+        save_tensor_if_present(saved, outdir, dbg, "rope_cos")
+        save_tensor_if_present(saved, outdir, dbg, "rope_sin")
 
-        q_nope_absorb = dbg.get("q_nope_absorb")
-        q_pe_post_rope = dbg.get("q_pe_post_rope")
-        if isinstance(q_nope_absorb, torch.Tensor) and isinstance(q_pe_post_rope, torch.Tensor):
-            # q_nope_absorb: [B, T, H, K]
-            # q_pe_post_rope: [B, H, T, R]
-            q_rope_bthd = q_pe_post_rope.permute(0, 2, 1, 3).contiguous()
-            q_flash = torch.cat(
-                [q_nope_absorb.float().cpu(), q_rope_bthd.float().cpu()],
-                dim=-1,
-            )
-            p = outdir / "q_flash.pt"
-            torch.save(q_flash, p)
-            saved.append(str(p))
+        save_tensor_if_present(saved, outdir, dbg, "cache_latent_raw")
+        save_tensor_if_present(saved, outdir, dbg, "cache_latent")
+        save_tensor_if_present(saved, outdir, dbg, "cache_k_rope")
+        save_tensor_if_present(saved, outdir, dbg, "q_nope_absorb")
+        save_tensor_if_present(saved, outdir, dbg, "last_value_heads")
+        save_tensor_if_present(saved, outdir, dbg, "scores_nope")
 
-        cache_latent = dbg.get("cache_latent")
-        cache_k_rope = dbg.get("cache_k_rope")
-        if isinstance(cache_latent, torch.Tensor) and isinstance(cache_k_rope, torch.Tensor):
-            # both expected [B, T, D]
-            blocked_k_token = torch.cat(
-                [cache_latent.float().cpu(), cache_k_rope.float().cpu()],
-                dim=-1,
-            )
-            p = outdir / "blocked_k_token.pt"
-            torch.save(blocked_k_token, p)
-            saved.append(str(p))
-
-        x = dbg.get("rope_cos")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "rope_cos.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("rope_sin")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "rope_sin.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("cache_latent_raw")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "cache_latent_raw.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("cache_latent")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "cache_latent.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("cache_k_rope")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "cache_k_rope.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("q_nope_absorb")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "q_nope_absorb.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("last_value_heads")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "last_value_heads.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
-
-        x = dbg.get("scores_nope")
-        if isinstance(x, torch.Tensor):
-            p = outdir / "scores_nope.pt"
-            torch.save(x.detach().float().cpu(), p)
-            saved.append(str(p))
+        save_tensor_if_present(saved, outdir, dbg, "q_latent_pre_norm")
+        save_tensor_if_present(saved, outdir, dbg, "q_latent_post_norm")
+        save_tensor_if_present(saved, outdir, dbg, "q_pre_split")
+        save_tensor_if_present(saved, outdir, dbg, "q_pe_pre_rope", "q_rope_pre_rotary.pt")
+        save_tensor_if_present(saved, outdir, dbg, "q_pe_post_rope", "q_rope_post_rotary.pt")
 
         report = {
             "backend": "hf_absorbed",
             "input_ids": input_ids,
-            "decoded_input": tokenizer.decode(input_ids),
+            "decoded_input": tok.decode(input_ids),
             "saved": saved,
             "debug_keys": sorted(list(dbg.keys())),
         }
@@ -199,7 +131,7 @@ def main() -> None:
             json.dump(report, f, ensure_ascii=False, indent=2)
             f.write("\n")
 
-        print(f"[hf-attn0-aux] wrote {outdir / 'hf_layer0_attention_aux.json'}")
+        print(f"[hf-attn-aux] wrote {outdir / 'hf_layer0_attention_aux.json'}")
     finally:
         del model
         torch.cuda.empty_cache()
