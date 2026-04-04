@@ -973,6 +973,9 @@ class DeepseekV3Attention(nn.Module):
             q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
         )
 
+        q_nope_dbg = q_nope.detach().cpu().clone()
+        q_pe_pre_rope_dbg = q_pe.detach().cpu().clone()
+
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
         compressed_kv, k_pe = torch.split(
             compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
@@ -999,6 +1002,7 @@ class DeepseekV3Attention(nn.Module):
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
 
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
+        q_pe_post_rope_dbg = q_pe.detach().cpu().clone()
 
         query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
         query_states[:, :, :, : self.qk_nope_head_dim] = q_nope
@@ -1058,7 +1062,8 @@ class DeepseekV3Attention(nn.Module):
         self.last_debug = {
             "hidden_states": hidden_states.detach().cpu(),
             "q_nope": q_nope.detach().cpu(),
-            "q_pe": q_pe.detach().cpu(),
+            "q_pe_pre_rope": q_pe_pre_rope_dbg,
+            "q_pe_post_rope": q_pe_post_rope_dbg,
             "compressed_kv": compressed_kv.detach().cpu(),
             "k_pe_pre_rope": k_pe.detach().cpu(),
             "k_nope": k_nope.detach().cpu(),

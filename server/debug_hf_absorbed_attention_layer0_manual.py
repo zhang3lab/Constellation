@@ -29,22 +29,16 @@ def summarize_tensor(name: str, x: torch.Tensor) -> dict:
     }
 
 
-def compare_optional(a: dict, b: dict, key: str) -> dict | None:
-    if key not in a or key not in b:
-        return None
-    if not isinstance(a[key], torch.Tensor) or not isinstance(b[key], torch.Tensor):
-        return None
-
-    xa = a[key].float()
-    xb = b[key].float()
+def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
+    xa = a.float()
+    xb = b.float()
     if xa.shape != xb.shape:
         return {
             "key": key,
+            "shape_match": False,
             "shape_a": list(xa.shape),
             "shape_b": list(xb.shape),
-            "shape_match": False,
         }
-
     diff = (xa - xb).abs()
     return {
         "key": key,
@@ -54,6 +48,20 @@ def compare_optional(a: dict, b: dict, key: str) -> dict | None:
         "max_abs": float(diff.max().item()),
         "mean_abs": float(diff.mean().item()),
     }
+
+
+def maybe_compare(
+    report: dict,
+    eager_dbg: dict,
+    absorbed_dbg: dict,
+    eager_key: str,
+    absorbed_key: str,
+    out_key: str,
+) -> None:
+    a = eager_dbg.get(eager_key)
+    b = absorbed_dbg.get(absorbed_key)
+    if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+        report["comparisons"][out_key] = compare_tensors(a, b, out_key)
 
 
 def load_index(model_dir: str) -> dict:
@@ -201,11 +209,16 @@ def main() -> None:
     print("[manual-debug] eager keys =", sorted(eager_dbg.keys()))
     print("[manual-debug] absorbed keys =", sorted(absorbed_dbg.keys()))
 
-    # compare q layout after permuting absorbed to eager layout
     absorbed_dbg_cmp = dict(absorbed_dbg)
+
     if "q_nope" in absorbed_dbg_cmp and isinstance(absorbed_dbg_cmp["q_nope"], torch.Tensor):
         if absorbed_dbg_cmp["q_nope"].ndim == 4:
             absorbed_dbg_cmp["q_nope_bhtd"] = absorbed_dbg_cmp["q_nope"].permute(0, 2, 1, 3).contiguous()
+
+    if "q_pe_pre_rope" in absorbed_dbg_cmp and isinstance(absorbed_dbg_cmp["q_pe_pre_rope"], torch.Tensor):
+        if absorbed_dbg_cmp["q_pe_pre_rope"].ndim == 4:
+            absorbed_dbg_cmp["q_pe_pre_rope_bhtd"] = absorbed_dbg_cmp["q_pe_pre_rope"].permute(0, 2, 1, 3).contiguous()
+
     if "q_pe" in absorbed_dbg_cmp and isinstance(absorbed_dbg_cmp["q_pe"], torch.Tensor):
         if absorbed_dbg_cmp["q_pe"].ndim == 4:
             absorbed_dbg_cmp["q_pe_bhtd"] = absorbed_dbg_cmp["q_pe"].permute(0, 2, 1, 3).contiguous()
@@ -228,35 +241,62 @@ def main() -> None:
         if isinstance(val, torch.Tensor):
             report["tensor_summaries"][f"absorbed::{key}"] = summarize_tensor(f"absorbed::{key}", val)
 
-    compare_pairs = [
-        ("hidden_states", "hidden_states"),
-        ("q_nope", "q_nope_bhtd"),
-        ("q_pe", "q_pe_bhtd"),
-        ("q_nope", "q_nope"),
-        ("q_pe", "q_pe"),
-        ("attn_output_pre_o_proj", "attn_output_final"),
-        ("final_logits", "final_logits"),
-    ]
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "hidden_states",
+        "hidden_states",
+        "hidden_states__vs__hidden_states",
+    )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "q_nope",
+        "q_nope_bhtd",
+        "q_nope__vs__q_nope_bhtd",
+    )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "q_pe_pre_rope",
+        "q_pe_pre_rope_bhtd",
+        "q_pe_pre_rope__vs__q_pe_pre_rope_bhtd",
+    )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "q_pe_post_rope",
+        "q_pe_post_rope",
+        "q_pe_post_rope__vs__q_pe_post_rope",
+    )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "q_pe",
+        "q_pe_bhtd",
+        "q_pe__vs__q_pe_bhtd",
+    )
+    maybe_compare(
+        report,
+        eager_dbg,
+        absorbed_dbg_cmp,
+        "attn_output_pre_o_proj",
+        "attn_output_final",
+        "attn_output_pre_o_proj__vs__attn_output_final",
+    )
 
-    for eager_key, absorbed_key in compare_pairs:
-        if eager_key == "final_logits":
-            xa = eager_logits
-            xb = absorbed_logits
-            diff = (xa - xb).abs()
-            report["comparisons"]["final_logits"] = {
-                "shape": list(xa.shape),
-                "cosine": cosine_similarity(xa, xb),
-                "max_abs": float(diff.max().item()),
-                "mean_abs": float(diff.mean().item()),
-            }
-            continue
-
-        a = eager_dbg.get(eager_key)
-        b = absorbed_dbg_cmp.get(absorbed_key)
-        if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
-            cmp = compare_optional({"x": a}, {"x": b}, "x")
-            if cmp is not None:
-                report["comparisons"][f"{eager_key}__vs__{absorbed_key}"] = cmp
+    logits_diff = (eager_logits - absorbed_logits).abs()
+    report["comparisons"]["final_logits"] = {
+        "shape": list(eager_logits.shape),
+        "cosine": cosine_similarity(eager_logits, absorbed_logits),
+        "max_abs": float(logits_diff.max().item()),
+        "mean_abs": float(logits_diff.mean().item()),
+    }
 
     output_path = Path(args.output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)

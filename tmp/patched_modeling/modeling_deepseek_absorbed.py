@@ -1543,6 +1543,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
             sin,
             position_ids,
         )  # [B, H, T, rope_dim], [B, 1, T, rope_dim]
+        q_pe_post_rope_dbg = q_pe_rot.detach().cpu().clone()
      
         outputs = []
      
@@ -1595,6 +1596,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
 
         self._last_absorbed_inner_debug = {
             "q_nope_absorb": q_nope_absorb.detach().cpu(),
+            "q_pe_post_rope_dbg" = q_pe_post_rope_dbg,
         }
         self._last_absorbed_inner_debug["last_latent_out"] = latent_out.detach().cpu()
         self._last_absorbed_inner_debug["last_value_heads"] = value_heads.detach().cpu()
@@ -1650,7 +1652,7 @@ class DeepseekV3AbsorbedAttention(nn.Module):
         )  # [B, T, H, D_nope], [B, T, H, D_rope]
 
         q_nope_dbg = q_nope.detach().cpu().clone()
-        q_pe_dbg = q_pe.detach().cpu().clone()
+        q_pe_pre_rope_dbg = q_pe.detach().cpu().clone()
      
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
         cache_latent, cache_k_rope = torch.split(
