@@ -56,17 +56,15 @@ def main() -> None:
 
     out = {"comparisons": {}}
 
-    # HF [1,H,T], runtime [1,L,H,T] -> take last query and permute
     hf = load_pt(hf_dir / "scores_nope.pt")
     rt = load_pt(rt_dir / "scores_pre_softmax.pt")
     if rt.ndim == 4:
-        rt = rt[:, -1].permute(0, 2, 1).contiguous()  # [1,H,T]
+        rt = rt[:, -1].contiguous()  # [1, H, T]
     out["comparisons"]["scores_nope_vs_runtime_pre"] = compare_tensors(
         hf, rt, "scores_nope_vs_runtime_pre"
     )
 
     hf = load_pt(hf_dir / "scores_rope.pt")
-    # no direct runtime rope-only score unless you export it later
     out["comparisons"]["scores_rope_hf_only"] = {
         "key": "scores_rope_hf_only",
         "shape": list(hf.shape),
@@ -75,7 +73,7 @@ def main() -> None:
     hf = load_pt(hf_dir / "scores_pre_softmax.pt")
     rt = load_pt(rt_dir / "scores_pre_softmax.pt")
     if rt.ndim == 4:
-        rt = rt[:, -1].permute(0, 2, 1).contiguous()  # [1,H,T]
+        rt = rt[:, -1].contiguous()  # [1, H, T]
     out["comparisons"]["scores_pre_softmax"] = compare_tensors(
         hf, rt, "scores_pre_softmax"
     )
@@ -83,7 +81,7 @@ def main() -> None:
     hf = load_pt(hf_dir / "scores_post_softmax.pt")
     rt = load_pt(rt_dir / "scores_post_softmax.pt")
     if rt.ndim == 4:
-        rt = rt[:, -1].permute(0, 2, 1).contiguous()  # [1,H,T]
+        rt = rt[:, -1].contiguous()  # [1, H, T]
     out["comparisons"]["scores_post_softmax"] = compare_tensors(
         hf, rt, "scores_post_softmax"
     )
