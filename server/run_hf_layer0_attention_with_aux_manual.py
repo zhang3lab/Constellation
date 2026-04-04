@@ -140,6 +140,18 @@ def main() -> None:
             torch.save(blocked_k_token, p)
             saved.append(str(p))
 
+        x = dbg.get("rope_cos")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "rope_cos.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
+        x = dbg.get("rope_sin")
+        if isinstance(x, torch.Tensor):
+            p = outdir / "rope_sin.pt"
+            torch.save(x.detach().float().cpu(), p)
+            saved.append(str(p))
+
         report = {
             "backend": "hf_absorbed",
             "input_ids": input_ids,

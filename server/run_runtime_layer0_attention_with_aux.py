@@ -124,6 +124,7 @@ def main() -> None:
             "q_pre_split",
             "q_rope_pre_rotary",
             "q_rope_post_rotary",
+            "freq_cis",
         ]:
             if name in aux:
                 saved.append(_save_numpy_or_tensor(outdir, name, aux[name]))
