@@ -476,6 +476,8 @@ def run_full_model(
     kv_cache=None,
     collect_per_layer: bool = False,
 ):
+    ref = _get_full_model_executor(session)
+
     start_layer = int(start_layer)
     end_layer = int(end_layer)
     if end_layer < start_layer:
