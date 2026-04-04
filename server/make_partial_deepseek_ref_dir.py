@@ -73,13 +73,7 @@ def rewrite_config_json(
     resident_expert_ids: list[int],
 ) -> None:
     cfg = load_json(src_config_path)
-
-    model_cfg = cfg.get("model")
-    if not isinstance(model_cfg, dict):
-        raise ValueError(f"{src_config_path}: missing object field model")
-
-    model_cfg["resident_expert_ids"] = list(resident_expert_ids)
-
+    cfg["resident_expert_ids"] = list(resident_expert_ids)
     dump_json(dst_config_path, cfg)
 
 
