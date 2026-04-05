@@ -285,13 +285,15 @@ class MLARuntime:
                 mask = mask.to(device=x.device)
      
         print("[MLA] mask stats", mask.shape, mask.dtype, float(mask.min().item()), float(mask.max().item()))
+        # x here is pre-softmax logits
         x = torch.softmax(x.float() + mask.float(), dim=-1, dtype=torch.float32)
         dbg.add("scores_post_softmax", x)
-     
-        x = torch.einsum("blht,btk->blhk", x, stacked_kv_latent)
-        x = torch.einsum("blhk,hdk->blhd", x, v_w)
+
+        x = torch.einsum("blht,btk->blhk", x, stacked_kv_latent.float())
+        x = torch.einsum("blhk,hdk->blhd", x, v_w.float())
         dbg.add("last_value_heads", x)
-     
+
+        x = x.to(dtype=x_norm.dtype)
         x = x.flatten(start_dim=2)
         x = torch.matmul(x, weights["o_proj"].t())
      
