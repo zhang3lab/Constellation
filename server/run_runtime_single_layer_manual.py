@@ -205,6 +205,21 @@ def is_sparse_layer(model_cfg, layer_id: int) -> bool:
     )
 
 
+def move_hidden_to_layer_device(session, hidden, layer_id: int):
+    if session.backbone_store is None:
+        raise RuntimeError("session.backbone_store is not initialized")
+    layer_entry = session.backbone_store.layer(int(layer_id))
+    dev = str(layer_entry["device"])
+    dtype = session.backbone_store.dtype
+
+    if not isinstance(hidden, torch.Tensor):
+        hidden = torch.as_tensor(hidden)
+
+    if str(hidden.device) != dev or hidden.dtype != dtype:
+        hidden = hidden.to(device=dev, dtype=dtype)
+    return hidden.contiguous()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
@@ -268,6 +283,8 @@ def main() -> None:
 
         # run previous layers, saving all outputs
         for layer_id in range(target_layer):
+            hidden = move_hidden_to_layer_device(session, hidden, layer_id)
+
             if is_sparse_layer(model_cfg, layer_id):
                 result = run_sparse_layer(
                     session,
@@ -292,6 +309,7 @@ def main() -> None:
             saved.append(save_pt(outdir, f"layer_{layer_id}_output", hidden))
 
         prefix = f"layer_{target_layer}"
+        hidden = move_hidden_to_layer_device(session, hidden, target_layer)
 
         # run target layer with aux
         if is_sparse_layer(model_cfg, target_layer):
