@@ -454,6 +454,7 @@ def run_prefix_segment(
             per_layer.append(
                 {
                     "layer_id": layer_id,
+                    "output": cur.clone(),
                     "attention": layer_result.get("attention_aux", {}),
                     "dense_ffn": layer_result.get("dense_ffn_aux", {}),
                 }
@@ -532,15 +533,34 @@ def run_full_model(
         print_stats(f"layer{dense_prefix_end - 1}_output", cur)
 
         if collect_per_layer:
-            per_layer.append(
-                {
-                    "segment_type": "prefix",
-                    "start_layer": int(start_layer),
-                    "end_layer": int(dense_prefix_end - 1),
-                    "output": cur.clone(),
-                    "aux": prefix.aux,
-                }
-            )
+            prefix_aux = prefix.aux if isinstance(prefix.aux, dict) else {}
+            prefix_layers = prefix_aux.get("per_layer", [])
+         
+            if prefix_layers:
+                for item in prefix_layers:
+                    layer_id = int(item["layer_id"])
+                    entry = {
+                        "layer_id": layer_id,
+                        "layer_type": "dense",
+                        "segment_type": "prefix",
+                    }
+                    if "output" in item:
+                        entry["output"] = item["output"].clone()
+                    if "attention" in item:
+                        entry["attention_aux"] = item["attention"]
+                    if "dense_ffn" in item:
+                        entry["dense_ffn_aux"] = item["dense_ffn"]
+                    per_layer.append(entry)
+            else:
+                per_layer.append(
+                    {
+                        "segment_type": "prefix",
+                        "start_layer": int(start_layer),
+                        "end_layer": int(dense_prefix_end - 1),
+                        "output": cur.clone(),
+                        "aux": prefix.aux,
+                    }
+                )
 
         next_layer = dense_prefix_end
     else:
