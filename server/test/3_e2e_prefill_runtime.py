@@ -45,12 +45,17 @@ def main() -> None:
         )
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
+        if session.page_attention_cache_managers is None:
+            raise RuntimeError("session.page_attention_cache_managers is not initialized")
+        if not isinstance(session.page_attention_cache_managers, dict):
+            raise RuntimeError("session.page_attention_cache_managers must be a dict")
+
         result = run_prefill(
             session,
             prompt=args.prompt,
             start_layer=int(args.start_layer),
             end_layer=int(args.end_layer),
-            kv_cache=session.full_model_kv_cache,
+            kv_cache=session.page_attention_cache_managers,
             collect_per_layer=bool(args.collect_per_layer),
         )
 
