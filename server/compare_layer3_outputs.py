@@ -44,6 +44,12 @@ def load_pt(path: Path) -> torch.Tensor:
     return torch.load(path, map_location="cpu")
 
 
+def align_hf_to_runtime(hf_tensor: torch.Tensor, rt_tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    if hf_tensor.ndim == 3 and hf_tensor.shape[0] == 1 and rt_tensor.ndim == 2:
+        hf_tensor = hf_tensor.squeeze(0).contiguous()
+    return hf_tensor, rt_tensor
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hf-dir", type=str, required=True)
@@ -68,6 +74,7 @@ def main() -> None:
     for name in names:
         hf_tensor = load_pt(hf_dir / f"{name}.pt")
         rt_tensor = load_pt(rt_dir / f"{name}.pt")
+        hf_tensor, rt_tensor = align_hf_to_runtime(hf_tensor, rt_tensor)
         out["comparisons"][name] = compare_tensors(hf_tensor, rt_tensor, name)
 
     output_path = Path(args.output_json)
