@@ -259,7 +259,6 @@ class MLARuntime:
         )
         dbg.add("scores_pre_softmax", x)
      
-        print("[MLA] using causal mask", mask is None, start_pos, seq_len, end_pos)
         if mask is None:
             q_pos = torch.arange(start_pos, end_pos, device=x.device)
             k_pos = torch.arange(0, end_pos, device=x.device)
@@ -284,7 +283,6 @@ class MLARuntime:
             if mask.device != x.device:
                 mask = mask.to(device=x.device)
      
-        print("[MLA] mask stats", mask.shape, mask.dtype, float(mask.min().item()), float(mask.max().item()))
         # x here is pre-softmax logits
         x = torch.softmax(x.float() + mask.float(), dim=-1, dtype=torch.float32)
         dbg.add("scores_post_softmax", x)
