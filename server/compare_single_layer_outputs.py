@@ -12,6 +12,14 @@ def load_pt(path: Path) -> torch.Tensor:
     return torch.load(path, map_location="cpu").float()
 
 
+def align_tensor(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    if a.ndim == 3 and a.shape[0] == 1 and b.ndim == 2:
+        a = a.squeeze(0).contiguous()
+    if b.ndim == 3 and b.shape[0] == 1 and a.ndim == 2:
+        b = b.squeeze(0).contiguous()
+    return a, b
+
+
 def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
     a = a.reshape(-1)
     b = b.reshape(-1)
@@ -19,6 +27,8 @@ def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
+    a, b = align_tensor(a, b)
+
     if a.shape != b.shape:
         return {
             "key": key,
@@ -29,7 +39,11 @@ def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
 
     diff = (a - b).abs()
     denom = torch.dot(a.reshape(-1), a.reshape(-1)).item()
-    alpha = float(torch.dot(a.reshape(-1), b.reshape(-1)).item() / denom) if denom != 0 else float("nan")
+    alpha = (
+        float(torch.dot(a.reshape(-1), b.reshape(-1)).item() / denom)
+        if denom != 0
+        else float("nan")
+    )
 
     return {
         "key": key,
