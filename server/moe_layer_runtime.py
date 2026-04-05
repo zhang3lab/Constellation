@@ -176,6 +176,7 @@ def route_token_real(
     n_routed_experts: int,
     hidden_size: int,
     resident_expert_ids=None,
+    return_aux: bool = False,
 ):
     if scoring_func != "sigmoid":
         raise RuntimeError(f"unsupported scoring_func={scoring_func}")
@@ -251,9 +252,9 @@ def route_token_real(
 
     with torch.no_grad():
         logits = gate_weight @ hidden
-        scores = torch.sigmoid(logits)
+        scores_raw = torch.sigmoid(logits)
 
-    scores_for_choice = scores + e_score_correction_bias
+    scores_for_choice_raw = scores_raw + e_score_correction_bias
 
     if resident_expert_ids is None:
         resident_mask = torch.ones(num_experts, dtype=torch.bool, device=hidden.device)
@@ -268,11 +269,11 @@ def route_token_real(
         if allowed == 0:
             raise RuntimeError("resident_expert_ids produced an empty resident mask")
 
-    scores_for_choice = scores_for_choice.masked_fill(~resident_mask, float("-inf"))
-    scores = scores.masked_fill(~resident_mask, 0.0)
+    scores_for_choice = scores_for_choice_raw.masked_fill(~resident_mask, float("-inf"))
+    scores = scores_raw.masked_fill(~resident_mask, 0.0)
 
     grouped = scores_for_choice.view(n_group, experts_per_group)
-    top2_per_group = torch.topk(grouped, k=2, dim=-1).values
+    top2_per_group = torch.topk(grouped, k=2, dim=-1, sorted=False).values
     group_scores = top2_per_group.sum(dim=-1)
 
     selected_group_idx = torch.topk(
@@ -285,8 +286,13 @@ def route_token_real(
     group_mask = torch.zeros(n_group, dtype=torch.bool, device=hidden.device)
     group_mask[selected_group_idx] = True
 
-    expert_mask = group_mask.unsqueeze(-1).expand(n_group, experts_per_group).reshape(num_experts)
-    masked_scores_for_choice = scores_for_choice.masked_fill(~expert_mask, float("-inf"))
+    score_mask = (
+        group_mask.unsqueeze(-1)
+        .expand(n_group, experts_per_group)
+        .reshape(num_experts)
+    )
+
+    masked_scores_for_choice = scores_for_choice.masked_fill(~score_mask, float("-inf"))
 
     effective_top_k = min(top_k, int(resident_mask.sum().item()))
     topk_choice_vals, topk_idx = torch.topk(
@@ -297,24 +303,39 @@ def route_token_real(
     )
 
     topk_weight = scores.gather(0, topk_idx)
+    topk_weight_pre_norm = topk_weight.clone()
 
     if norm_topk_prob and effective_top_k > 1:
         denom = topk_weight.sum() + 1e-20
         topk_weight = topk_weight / denom
 
+    topk_weight_post_norm = topk_weight.clone()
     topk_weight = topk_weight * routed_scaling_factor
+    topk_weight_scaled = topk_weight.clone()
 
     routes = [(int(eid), float(w)) for eid, w in zip(topk_idx.tolist(), topk_weight.tolist())]
 
+    if not return_aux:
+        return routes
+
     aux = {
         "logits": logits.detach().cpu().numpy(),
+        "scores_raw": scores_raw.detach().cpu().numpy(),
         "scores": scores.detach().cpu().numpy(),
+        "scores_for_choice_raw": scores_for_choice_raw.detach().cpu().numpy(),
         "scores_for_choice": scores_for_choice.detach().cpu().numpy(),
         "group_scores": group_scores.detach().cpu().numpy(),
         "selected_group_idx": selected_group_idx.detach().cpu().numpy(),
+        "group_mask": group_mask.detach().cpu().numpy(),
+        "score_mask": score_mask.detach().cpu().numpy(),
+        "resident_mask": resident_mask.detach().cpu().numpy(),
         "topk_idx": topk_idx.detach().cpu().numpy(),
-        "topk_weight": topk_weight.detach().cpu().numpy(),
         "topk_choice_vals": topk_choice_vals.detach().cpu().numpy(),
+        "topk_weight_pre_norm": topk_weight_pre_norm.detach().cpu().numpy(),
+        "topk_weight_post_norm": topk_weight_post_norm.detach().cpu().numpy(),
+        "topk_weight": topk_weight_scaled.detach().cpu().numpy(),
+        "effective_top_k": int(effective_top_k),
+        "routes": routes,
     }
     return routes, aux
 
@@ -397,21 +418,41 @@ def run_moe_layer(session, hidden, layer_id: int, *, return_aux: bool = False):
     if not resident_local_expert_ids:
         raise RuntimeError(f"no resident experts found for layer {layer_id}")
 
-    routes, aux = route_token_real(
-        router_hidden,
-        gate_weight,
-        e_score_correction_bias,
-        n_group=int(router_cfg["n_group"]),
-        topk_group=int(router_cfg["topk_group"]),
-        top_k=min(int(router_cfg["top_k"]), len(resident_local_expert_ids)),
-        norm_topk_prob=bool(router_cfg["norm_topk_prob"]),
-        routed_scaling_factor=float(router_cfg["routed_scaling_factor"]),
-        scoring_func=str(router_cfg["scoring_func"]),
-        topk_method=str(router_cfg["topk_method"]),
-        n_routed_experts=int(router_cfg["n_routed_experts"]),
-        hidden_size=int(router_cfg["hidden_size"]),
-        resident_expert_ids=resident_local_expert_ids,
-    )
+    if return_aux:
+        routes, aux = route_token_real(
+            router_hidden,
+            gate_weight,
+            e_score_correction_bias,
+            n_group=int(router_cfg["n_group"]),
+            topk_group=int(router_cfg["topk_group"]),
+            top_k=min(int(router_cfg["top_k"]), len(resident_local_expert_ids)),
+            norm_topk_prob=bool(router_cfg["norm_topk_prob"]),
+            routed_scaling_factor=float(router_cfg["routed_scaling_factor"]),
+            scoring_func=str(router_cfg["scoring_func"]),
+            topk_method=str(router_cfg["topk_method"]),
+            n_routed_experts=int(router_cfg["n_routed_experts"]),
+            hidden_size=int(router_cfg["hidden_size"]),
+            resident_expert_ids=resident_local_expert_ids,
+            return_aux=True,
+        )
+    else:
+        routes = route_token_real(
+            router_hidden,
+            gate_weight,
+            e_score_correction_bias,
+            n_group=int(router_cfg["n_group"]),
+            topk_group=int(router_cfg["topk_group"]),
+            top_k=min(int(router_cfg["top_k"]), len(resident_local_expert_ids)),
+            norm_topk_prob=bool(router_cfg["norm_topk_prob"]),
+            routed_scaling_factor=float(router_cfg["routed_scaling_factor"]),
+            scoring_func=str(router_cfg["scoring_func"]),
+            topk_method=str(router_cfg["topk_method"]),
+            n_routed_experts=int(router_cfg["n_routed_experts"]),
+            hidden_size=int(router_cfg["hidden_size"]),
+            resident_expert_ids=resident_local_expert_ids,
+            return_aux=False,
+        )
+        aux = None
 
     global_routes = [
         (
@@ -442,12 +483,16 @@ def run_moe_layer(session, hidden, layer_id: int, *, return_aux: bool = False):
         return {
             "output": combined_t,
             "aux": {
-                **aux,
                 "layer_id": layer_id,
+                "router_hidden": router_hidden.detach().float().cpu().numpy(),
+                **aux,
                 "resident_local_expert_ids": resident_local_expert_ids,
                 "routes": global_routes,
                 "local_routes": routes,
+                "selected_global_expert_ids": [int(eid) for eid, _ in global_routes],
+                "selected_weights": [float(w) for _, w in global_routes],
                 "weighted_outputs": weighted_outputs,
+                "combined_pre_cast": torch.as_tensor(combined).detach().float().cpu().numpy(),
             },
         }
 

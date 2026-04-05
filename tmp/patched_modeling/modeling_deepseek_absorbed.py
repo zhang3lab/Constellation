@@ -512,7 +512,7 @@ class MoEGate(nn.Module):
             )  # [n, e]
      
             effective_top_k = min(self.top_k, int(resident_mask.sum().item()))
-            _, topk_idx = torch.topk(
+            topk_choice_vals, topk_idx = torch.topk(
                 tmp_scores,
                 k=effective_top_k,
                 dim=-1,
@@ -530,10 +530,19 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight / denominator
      
         topk_weight = topk_weight * self.routed_scaling_factor
-
+     
         self.last_router_debug = {
+            "logits": logits.detach().cpu(),
+            "scores": scores.detach().cpu(),
+            "scores_for_choice": scores_for_choice.detach().cpu(),
+            "group_scores": group_scores.detach().cpu(),
+            "selected_group_idx": group_idx.detach().cpu(),
+            "score_mask": score_mask.detach().cpu(),
+            "topk_choice_vals": topk_choice_vals.detach().cpu(),
             "topk_idx": topk_idx.detach().cpu(),
             "topk_weight": topk_weight.detach().cpu(),
+            "resident_mask": resident_mask.detach().cpu(),
+            "effective_top_k": int(effective_top_k),
         }
      
         return topk_idx, topk_weight
