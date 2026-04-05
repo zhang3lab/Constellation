@@ -289,7 +289,7 @@ def route_token_real(
     masked_scores_for_choice = scores_for_choice.masked_fill(~expert_mask, float("-inf"))
 
     effective_top_k = min(top_k, int(resident_mask.sum().item()))
-        topk_choice_vals, topk_idx = torch.topk(
+    topk_choice_vals, topk_idx = torch.topk(
         masked_scores_for_choice,
         k=effective_top_k,
         dim=-1,
