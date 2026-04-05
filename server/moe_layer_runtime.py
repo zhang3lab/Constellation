@@ -107,17 +107,31 @@ def normalize_routes(routes):
     return [(int(eid), float(w) / total) for eid, w in routes]
 
 
-def dispatch_topk_experts(session, hidden: np.ndarray, routes):
+def dispatch_topk_experts(session, hidden: np.ndarray, routes, *, return_aux: bool = False):
     validate_routes(routes)
     routes = [(int(eid), float(w)) for eid, w in routes]
 
     verbose = bool(session.cfg["verbose"])
 
     weighted_outputs = []
+    expert_outputs = [] if return_aux else None
+
     for expert_id, weight in routes:
         resp = infer_one_expert(session, expert_id, hidden)
-        y = resp["array"]
+        y = np.asarray(resp["array"], dtype=np.float32)
+
         weighted_outputs.append((expert_id, weight, y))
+
+        if return_aux:
+            expert_outputs.append(
+                {
+                    "expert_id": int(expert_id),
+                    "weight": float(weight),
+                    "output": y.copy(),
+                    "weighted_output": (float(weight) * y).astype(np.float32, copy=False),
+                    "output_dtype": int(resp["output_dtype"]),
+                }
+            )
 
         if verbose:
             print(
@@ -127,6 +141,8 @@ def dispatch_topk_experts(session, hidden: np.ndarray, routes):
                 f"mean={np.nanmean(y):.6e}"
             )
 
+    if return_aux:
+        return weighted_outputs, expert_outputs
     return weighted_outputs
 
 
@@ -144,7 +160,7 @@ def combine_outputs(weighted_outputs):
     return combined
 
 
-def run_topk_moe_layer(session, hidden, routes):
+def run_topk_moe_layer(session, hidden, routes, *, return_aux: bool = False):
     if not isinstance(hidden, torch.Tensor):
         raise TypeError(f"hidden must be torch.Tensor, got {type(hidden).__name__}")
     if hidden.ndim != 1:
@@ -156,7 +172,16 @@ def run_topk_moe_layer(session, hidden, routes):
     if not hidden_np.flags["C_CONTIGUOUS"]:
         hidden_np = np.ascontiguousarray(hidden_np)
 
-    weighted_outputs = dispatch_topk_experts(session, hidden_np, routes)
+    if return_aux:
+        weighted_outputs, expert_outputs = dispatch_topk_experts(
+            session, hidden_np, routes, return_aux=True
+        )
+        combined = combine_outputs(weighted_outputs)
+        return combined, weighted_outputs, expert_outputs
+
+    weighted_outputs = dispatch_topk_experts(
+        session, hidden_np, routes, return_aux=False
+    )
     combined = combine_outputs(weighted_outputs)
     return combined, weighted_outputs
 
@@ -466,7 +491,15 @@ def run_moe_layer(session, hidden, layer_id: int, *, return_aux: bool = False):
         for local_expert_id, weight in routes
     ]
 
-    combined, weighted_outputs = run_topk_moe_layer(session, router_hidden, global_routes)
+    if return_aux:
+        combined, weighted_outputs, expert_outputs = run_topk_moe_layer(
+            session, router_hidden, global_routes, return_aux=True
+        )
+    else:
+        combined, weighted_outputs = run_topk_moe_layer(
+            session, router_hidden, global_routes, return_aux=False
+        )
+        expert_outputs = None
 
     combined_t = torch.as_tensor(
         combined,
@@ -493,6 +526,7 @@ def run_moe_layer(session, hidden, layer_id: int, *, return_aux: bool = False):
                 "selected_weights": [float(w) for _, w in global_routes],
                 "weighted_outputs": weighted_outputs,
                 "combined_pre_cast": torch.as_tensor(combined).detach().float().cpu().numpy(),
+                "expert_outputs": expert_outputs,
             },
         }
 

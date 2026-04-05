@@ -102,6 +102,68 @@ def maybe_save_moe_aux_tensors(outdir: Path, saved: list[str], prefix: str, moe_
                     saved.append(save_pt(outdir, f"{prefix}_tok{tok_idx}_{name}", item[name]))
 
 
+def maybe_save_expert_outputs(outdir: Path, saved: list[str], prefix: str, moe_aux) -> None:
+    if isinstance(moe_aux, dict):
+        expert_outputs = moe_aux.get("expert_outputs")
+        if not isinstance(expert_outputs, list):
+            return
+
+        meta = []
+        for i, item in enumerate(expert_outputs):
+            if not isinstance(item, dict):
+                continue
+
+            record = {
+                "expert_id": int(item["expert_id"]) if "expert_id" in item else None,
+                "weight": float(item["weight"]) if "weight" in item else None,
+                "output_dtype": int(item["output_dtype"]) if "output_dtype" in item else None,
+            }
+
+            if "output" in item:
+                saved.append(save_pt(outdir, f"{prefix}_expert{i}_output", item["output"]))
+            if "weighted_output" in item:
+                saved.append(save_pt(outdir, f"{prefix}_expert{i}_weighted_output", item["weighted_output"]))
+
+            meta.append(record)
+
+        saved.append(save_json(outdir, f"{prefix}_expert_outputs_meta", to_jsonable(meta)))
+        return
+
+    if isinstance(moe_aux, list):
+        for tok_idx, item in enumerate(moe_aux):
+            if not isinstance(item, dict):
+                continue
+            expert_outputs = item.get("expert_outputs")
+            if not isinstance(expert_outputs, list):
+                continue
+
+            meta = []
+            for i, ex in enumerate(expert_outputs):
+                if not isinstance(ex, dict):
+                    continue
+
+                record = {
+                    "expert_id": int(ex["expert_id"]) if "expert_id" in ex else None,
+                    "weight": float(ex["weight"]) if "weight" in ex else None,
+                    "output_dtype": int(ex["output_dtype"]) if "output_dtype" in ex else None,
+                }
+
+                if "output" in ex:
+                    saved.append(save_pt(outdir, f"{prefix}_tok{tok_idx}_expert{i}_output", ex["output"]))
+                if "weighted_output" in ex:
+                    saved.append(save_pt(outdir, f"{prefix}_tok{tok_idx}_expert{i}_weighted_output", ex["weighted_output"]))
+
+                meta.append(record)
+
+            saved.append(
+                save_json(
+                    outdir,
+                    f"{prefix}_tok{tok_idx}_expert_outputs_meta",
+                    to_jsonable(meta),
+                )
+            )
+
+
 def maybe_save_moe_aux_json(outdir: Path, saved: list[str], prefix: str, moe_aux) -> None:
     json_names = [
         "resident_local_expert_ids",
@@ -220,6 +282,7 @@ def main() -> None:
 
         maybe_save_moe_aux_tensors(outdir, saved, "layer_3", moe_aux)
         maybe_save_moe_aux_json(outdir, saved, "layer_3", moe_aux)
+        maybe_save_expert_outputs(outdir, saved, "layer_3", moe_aux)
 
         report = {
             "backend": "runtime",
