@@ -298,17 +298,66 @@ def main() -> None:
             final_hidden = misc_outputs.get("final_hidden")
             if final_hidden is None:
                 raise RuntimeError("missing final_hidden hook output from model.model.norm")
+
             p = outdir / "final_hidden.pt"
             torch.save(final_hidden, p)
             saved.append(str(p))
 
-            if outputs is None or not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
+            if outputs is None:
+                raise RuntimeError("model forward outputs is None")
+            if not isinstance(outputs[0], torch.Tensor):
+                raise RuntimeError(f"outputs[0] is not tensor, got {type(outputs[0]).__name__}")
+            if not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
                 raise RuntimeError("model forward did not return tensor logits")
-            logits = outputs.logits
-            if logits.ndim >= 1 and logits.shape[0] == 1:
-                logits = logits.squeeze(0)
+
+            hidden_from_hook = final_hidden                                  # cpu, [T,H]
+            hidden_from_outputs = outputs[0].detach().float().cpu()          # [1,T,H] or [T,H]
+            if hidden_from_outputs.ndim >= 1 and hidden_from_outputs.shape[0] == 1:
+                hidden_from_outputs = hidden_from_outputs.squeeze(0).contiguous()
+
+            logits_from_outputs = outputs.logits.detach().float().cpu()      # [1,T,V] or [T,V]
+            if logits_from_outputs.ndim >= 1 and logits_from_outputs.shape[0] == 1:
+                logits_from_outputs = logits_from_outputs.squeeze(0).contiguous()
+
+            final_hidden_dev = hidden_from_hook.to(next(model.parameters()).device)
+            with torch.no_grad():
+                logits_manual = torch.matmul(final_hidden_dev, model.lm_head.weight.t())
+            logits_manual = logits_manual.detach().float().cpu()
+
             p = outdir / "logits.pt"
-            torch.save(logits.detach().float().cpu(), p)
+            torch.save(logits_manual, p)
+            saved.append(str(p))
+
+            p = outdir / "outputs0_hidden.pt"
+            torch.save(hidden_from_outputs, p)
+            saved.append(str(p))
+
+            p = outdir / "outputs_logits.pt"
+            torch.save(logits_from_outputs, p)
+            saved.append(str(p))
+
+            hidden_diff = (hidden_from_hook - hidden_from_outputs).abs()
+            logits_diff = (logits_from_outputs - logits_manual).abs()
+
+            debug_compare = {
+                "hidden_hook_vs_outputs0": {
+                    "shape_hook": list(hidden_from_hook.shape),
+                    "shape_outputs0": list(hidden_from_outputs.shape),
+                    "max_abs": float(hidden_diff.max().item()),
+                    "mean_abs": float(hidden_diff.mean().item()),
+                },
+                "logits_outputs_vs_manual": {
+                    "shape_outputs_logits": list(logits_from_outputs.shape),
+                    "shape_manual_logits": list(logits_manual.shape),
+                    "max_abs": float(logits_diff.max().item()),
+                    "mean_abs": float(logits_diff.mean().item()),
+                },
+            }
+
+            p = outdir / "final_head_debug_compare.json"
+            with p.open("w", encoding="utf-8") as f:
+                json.dump(debug_compare, f, ensure_ascii=False, indent=2)
+                f.write("\n")
             saved.append(str(p))
 
         report = {

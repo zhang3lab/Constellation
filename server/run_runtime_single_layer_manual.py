@@ -385,6 +385,7 @@ def main() -> None:
 
             saved.append(save_pt(outdir, "final_hidden", final_hidden[0] if was_1d else final_hidden))
             saved.append(save_pt(outdir, "logits", logits[0] if was_1d else logits))
+            hidden_from_hook = misc_outputs["final_hidden"]                     # cpu
 
         report = {
             "backend": "runtime",
