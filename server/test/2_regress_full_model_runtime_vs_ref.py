@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import gc
 from typing import Any
 
 import numpy as np
 import torch
 
+from server.absorbed_latent_ref import run_attention_block_ref
+from server.backbone_store import BackboneLoadPlan
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
-from server.absorbed_latent_ref import run_attention_block_ref
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
 from server.generation_types import PrefillResult
@@ -181,6 +183,7 @@ def run_reference_path(
         split_layer=30,
         backbone_dtype=torch.float32,
         kv_cache_cfg=kv_cache_cfg,
+        plan=BackboneLoadPlan.runtime_fp32_no_attention_no_routed_experts(),
     )
 
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
@@ -225,6 +228,9 @@ def main():
             end_layer=args.end_layer,
             collect_per_layer=True,
         )
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     with InferenceSession(coord, cfg) as ref_sess:
         ref_out = run_reference_path(
