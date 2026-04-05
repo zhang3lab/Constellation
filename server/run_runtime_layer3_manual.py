@@ -39,9 +39,9 @@ def to_jsonable(obj):
         return obj.tolist()
     if isinstance(obj, torch.Tensor):
         return obj.detach().cpu().tolist()
-    if isinstance(obj, (np.integer,)):
+    if isinstance(obj, np.integer):
         return int(obj)
-    if isinstance(obj, (np.floating,)):
+    if isinstance(obj, np.floating):
         return float(obj)
     if isinstance(obj, list):
         return [to_jsonable(x) for x in obj]
@@ -52,10 +52,83 @@ def to_jsonable(obj):
     return obj
 
 
+def collect_moe_aux_keys(moe_aux) -> list[str]:
+    if moe_aux is None:
+        return []
+    if isinstance(moe_aux, dict):
+        return sorted(list(moe_aux.keys()))
+    if isinstance(moe_aux, list):
+        key_set = set()
+        for item in moe_aux:
+            if isinstance(item, dict):
+                key_set.update(item.keys())
+        return sorted(key_set)
+    return [type(moe_aux).__name__]
+
+
+def maybe_save_moe_aux_tensors(outdir: Path, saved: list[str], prefix: str, moe_aux) -> None:
+    tensor_names = [
+        "router_hidden",
+        "logits",
+        "scores_raw",
+        "scores",
+        "scores_for_choice_raw",
+        "scores_for_choice",
+        "group_scores",
+        "selected_group_idx",
+        "group_mask",
+        "score_mask",
+        "resident_mask",
+        "topk_idx",
+        "topk_choice_vals",
+        "topk_weight_pre_norm",
+        "topk_weight_post_norm",
+        "topk_weight",
+        "combined_pre_cast",
+    ]
+
+    if isinstance(moe_aux, dict):
+        for name in tensor_names:
+            if name in moe_aux:
+                saved.append(save_pt(outdir, f"{prefix}_{name}", moe_aux[name]))
+        return
+
+    if isinstance(moe_aux, list):
+        for tok_idx, item in enumerate(moe_aux):
+            if not isinstance(item, dict):
+                continue
+            for name in tensor_names:
+                if name in item:
+                    saved.append(save_pt(outdir, f"{prefix}_tok{tok_idx}_{name}", item[name]))
+
+
+def maybe_save_moe_aux_json(outdir: Path, saved: list[str], prefix: str, moe_aux) -> None:
+    json_names = [
+        "resident_local_expert_ids",
+        "routes",
+        "local_routes",
+        "selected_global_expert_ids",
+        "selected_weights",
+        "effective_top_k",
+        "layer_id",
+    ]
+
+    if isinstance(moe_aux, dict):
+        for name in json_names:
+            if name in moe_aux:
+                saved.append(save_json(outdir, f"{prefix}_{name}", to_jsonable(moe_aux[name])))
+        if "weighted_outputs" in moe_aux:
+            saved.append(save_json(outdir, f"{prefix}_weighted_outputs", to_jsonable(moe_aux["weighted_outputs"])))
+        return
+
+    if isinstance(moe_aux, list):
+        saved.append(save_json(outdir, f"{prefix}_moe_aux_list", to_jsonable(moe_aux)))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
-    ap.add_argument("--model-dir", type=str, default="/root/DeepSeek-V3.1-partial")
+    ap.add_argument("--model-dir", type=str, default="/model/ModelScope/deepseek-ai/DeepSeek-V3.1")
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-dir", type=str, required=True)
     args = ap.parse_args()
@@ -142,53 +215,11 @@ def main() -> None:
         saved.append(save_pt(outdir, "layer_3_ffn_total", result["ffn_total"]))
         saved.append(save_pt(outdir, "layer_3_output", result["output"]))
 
-        moe_aux = result.get("moe_aux", {}) or {}
+        moe_aux = result.get("moe_aux")
+        moe_aux_keys = collect_moe_aux_keys(moe_aux)
 
-        for name in [
-            "router_hidden",
-            "logits",
-            "scores_raw",
-            "scores",
-            "scores_for_choice_raw",
-            "scores_for_choice",
-            "group_scores",
-            "selected_group_idx",
-            "group_mask",
-            "score_mask",
-            "resident_mask",
-            "topk_idx",
-            "topk_choice_vals",
-            "topk_weight_pre_norm",
-            "topk_weight_post_norm",
-            "topk_weight",
-            "combined_pre_cast",
-        ]:
-            if name in moe_aux:
-                saved.append(save_pt(outdir, f"layer_3_{name}", moe_aux[name]))
-
-        for name in [
-            "resident_local_expert_ids",
-            "routes",
-            "local_routes",
-            "selected_global_expert_ids",
-            "selected_weights",
-            "effective_top_k",
-            "layer_id",
-        ]:
-            if name in moe_aux:
-                saved.append(save_json(outdir, f"layer_3_{name}", to_jsonable(moe_aux[name])))
-
-        if "weighted_outputs" in moe_aux:
-            weighted_outputs = moe_aux["weighted_outputs"]
-            if isinstance(weighted_outputs, dict):
-                saved.append(save_json(outdir, "layer_3_weighted_outputs", to_jsonable(weighted_outputs)))
-            elif isinstance(weighted_outputs, list):
-                saved.append(save_json(outdir, "layer_3_weighted_outputs", to_jsonable(weighted_outputs)))
-            else:
-                try:
-                    saved.append(save_json(outdir, "layer_3_weighted_outputs", to_jsonable(weighted_outputs)))
-                except Exception:
-                    pass
+        maybe_save_moe_aux_tensors(outdir, saved, "layer_3", moe_aux)
+        maybe_save_moe_aux_json(outdir, saved, "layer_3", moe_aux)
 
         report = {
             "backend": "runtime",
@@ -196,7 +227,7 @@ def main() -> None:
             "input_ids": ids,
             "decoded_input": decoded,
             "saved": saved,
-            "moe_aux_keys": sorted(list(moe_aux.keys())),
+            "moe_aux_keys": moe_aux_keys,
         }
         with (outdir / "runtime_layer3_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
