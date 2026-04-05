@@ -115,10 +115,7 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         if position_ids is None:
             start_pos = 0
         else:
-            pos_arr = np.asarray(position_ids).reshape(-1)
-            if pos_arr.size == 0:
-                raise ValueError("position_ids must not be empty")
-            start_pos = int(pos_arr[0])
+            start_pos = int(position_ids.reshape(-1)[0].item())
      
         if start_pos < 0:
             raise ValueError(f"start_pos must be non-negative, got {start_pos}")
