@@ -83,12 +83,12 @@ def main() -> None:
         if embed_weight is None:
             raise RuntimeError("embed_tokens weight is not loaded")
 
-        ids_t = torch.tensor([input_ids_list], dtype=torch.long, device=embed_weight.device)
-        hidden = embed_weight[ids_t]
+        ids_t = torch.tensor(input_ids_list, dtype=torch.long, device=embed_weight.device)
+        hidden = embed_weight[ids_t]  # [T, H]
         hidden = hidden.to(device=embed_dev, dtype=runtime_dtype).contiguous()
 
-        seq_len = hidden.shape[1]
-        position_ids = torch.arange(seq_len, device=hidden.device, dtype=torch.long).unsqueeze(0)
+        seq_len = hidden.shape[0]
+        position_ids = torch.arange(seq_len, device=hidden.device, dtype=torch.long)
 
         result = run_full_model(
             session,
