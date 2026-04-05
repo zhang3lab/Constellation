@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from server.config import load_config
 from server.control_plane import setup_control_plane
@@ -264,8 +264,7 @@ def main() -> None:
         position_ids = np.arange(hidden.shape[0], dtype=np.int64)
         saved: list[str] = []
 
-        model_loader = session.get_deepseek_model_loader()
-        model_cfg = model_loader.load_config()
+        model_cfg = AutoConfig.from_pretrained(args.model_dir, trust_remote_code=True)
 
         # run previous layers, saving all outputs
         for layer_id in range(target_layer):
