@@ -44,6 +44,14 @@ def load_pt(path: Path) -> torch.Tensor:
     return torch.load(path, map_location="cpu")
 
 
+def align_hf_router_tensor(hf_tensor: torch.Tensor, rt_tensor: torch.Tensor, token_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    # HF stores full-sequence router debug: [T, ...]
+    # runtime stores per-token router debug: [...]
+    if hf_tensor.ndim >= 2 and rt_tensor.ndim == hf_tensor.ndim - 1:
+        hf_tensor = hf_tensor[token_idx].contiguous()
+    return hf_tensor, rt_tensor
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hf-dir", type=str, required=True)
@@ -73,6 +81,7 @@ def main() -> None:
     for hf_name, rt_name in pairs:
         hf_tensor = load_pt(hf_dir / f"{hf_name}.pt")
         rt_tensor = load_pt(rt_dir / f"{rt_name}.pt")
+        hf_tensor, rt_tensor = align_hf_router_tensor(hf_tensor, rt_tensor, tok)
         out["comparisons"][hf_name] = compare_tensors(hf_tensor, rt_tensor, hf_name)
 
     output_path = Path(args.output_json)
