@@ -10,6 +10,7 @@ from transformers import AutoTokenizer
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
+from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 
@@ -46,6 +47,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
 
     with InferenceSession(coord, cfg) as session:
+        session.full_model_executor = DeepseekFullModelExecutor(session)
         kv_cache_cfg = cfg["kv_cache"]
         session.ensure_full_model_runtime(
             tensor_cache_dir="tmp/non_moe_backbone_cache",
