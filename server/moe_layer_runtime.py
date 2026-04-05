@@ -275,7 +275,12 @@ def route_token_real(
     top2_per_group = torch.topk(grouped, k=2, dim=-1).values
     group_scores = top2_per_group.sum(dim=-1)
 
-    selected_group_idx = torch.topk(group_scores, k=topk_group, dim=-1).indices
+    selected_group_idx = torch.topk(
+        group_scores,
+        k=topk_group,
+        dim=-1,
+        sorted=False,
+    ).indices
 
     group_mask = torch.zeros(n_group, dtype=torch.bool, device=hidden.device)
     group_mask[selected_group_idx] = True
@@ -284,7 +289,12 @@ def route_token_real(
     masked_scores_for_choice = scores_for_choice.masked_fill(~expert_mask, float("-inf"))
 
     effective_top_k = min(top_k, int(resident_mask.sum().item()))
-    topk_choice_vals, topk_idx = torch.topk(masked_scores_for_choice, k=effective_top_k, dim=-1)
+        topk_choice_vals, topk_idx = torch.topk(
+        masked_scores_for_choice,
+        k=effective_top_k,
+        dim=-1,
+        sorted=False,
+    )
 
     topk_weight = scores.gather(0, topk_idx)
 
