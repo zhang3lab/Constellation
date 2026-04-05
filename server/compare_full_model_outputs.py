@@ -44,6 +44,17 @@ def load_pt(path: Path) -> torch.Tensor:
     return torch.load(path, map_location="cpu")
 
 
+def align_hf_to_runtime(hf_tensor: torch.Tensor, rt_tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # HF often stores full-sequence tensors: [B, T, H]
+    # Runtime manual full-model path often stores last-token decode tensors: [H] or [1, H]
+    if hf_tensor.ndim == 3 and rt_tensor.ndim == 1:
+        hf_tensor = hf_tensor[:, -1, :].contiguous().squeeze(0)
+    elif hf_tensor.ndim == 3 and rt_tensor.ndim == 2 and rt_tensor.shape[0] == 1:
+        hf_tensor = hf_tensor[:, -1, :].contiguous()
+
+    return hf_tensor, rt_tensor
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hf-dir", type=str, required=True)
@@ -62,10 +73,12 @@ def main() -> None:
         name = f"layer_{layer_id}_output"
         hf_tensor = load_pt(hf_dir / f"{name}.pt")
         rt_tensor = load_pt(rt_dir / f"{name}.pt")
+        hf_tensor, rt_tensor = align_hf_to_runtime(hf_tensor, rt_tensor)
         out["comparisons"][name] = compare_tensors(hf_tensor, rt_tensor, name)
 
     hf_logits = load_pt(hf_dir / "logits.pt")
     rt_logits = load_pt(rt_dir / "logits.pt")
+    hf_logits, rt_logits = align_hf_to_runtime(hf_logits, rt_logits)
     out["comparisons"]["logits"] = compare_tensors(hf_logits, rt_logits, "logits")
 
     output_path = Path(args.output_json)
