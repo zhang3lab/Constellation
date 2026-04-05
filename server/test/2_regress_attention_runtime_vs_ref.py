@@ -172,8 +172,8 @@ def run_reference_attention(
 
 
 def compare_q_flash(ref_aux: dict[str, Any], rt_aux: dict[str, Any]) -> None:
-    required_ref = ["q_flash", "q_nope_absorb"]
-    required_rt = ["q_flash", "q_nope_absorb"]
+    required_ref = ["q_flash"]
+    required_rt = ["q_flash", "q_rope_post_rotary"]
 
     for k in required_ref:
         if k not in ref_aux:
@@ -186,13 +186,17 @@ def compare_q_flash(ref_aux: dict[str, Any], rt_aux: dict[str, Any]) -> None:
 
     ref_q_flash = np.squeeze(to_numpy_f32(ref_aux["q_flash"]))
     rt_q_flash = np.squeeze(to_numpy_f32(rt_aux["q_flash"]))
-    rt_q_nope_absorb = np.squeeze(to_numpy_f32(rt_aux["q_nope_absorb"]))
+    rt_q_rope = np.squeeze(to_numpy_f32(rt_aux["q_rope_post_rotary"]))
 
-    prefix_dim = rt_q_nope_absorb.shape[-1]
-    rope_dim = rt_q_flash.shape[-1] - prefix_dim
+    rope_dim = rt_q_rope.shape[-1]
+    prefix_dim = rt_q_flash.shape[-1] - rope_dim
+    if prefix_dim < 0:
+        raise RuntimeError(
+            f"attention.q_flash: invalid dims, total={rt_q_flash.shape[-1]} rope={rope_dim}"
+        )
 
     ref_prefix = ref_q_flash[..., :prefix_dim]
-    ref_rope = ref_q_flash[..., prefix_dim:prefix_dim + rope_dim]
+    ref_rope = ref_q_flash[..., prefix_dim:]
     ref_rope_hf = interleaved_to_half_split(ref_rope)
     ref_q_flash_hf = np.concatenate([ref_prefix, ref_rope_hf], axis=-1)
 
