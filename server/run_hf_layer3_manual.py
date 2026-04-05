@@ -147,6 +147,7 @@ def main() -> None:
             h.remove()
 
         dbg = getattr(model.model.layers[3], "last_debug", {}) or {}
+        router_dbg = getattr(model.model.layers[3].mlp.gate, "last_router_debug", {}) or {}
 
         saved: list[str] = []
 
@@ -163,6 +164,17 @@ def main() -> None:
         save_tensor_if_present(saved, outdir, dbg, "ffn_total", "layer_3_ffn_total.pt")
         save_tensor_if_present(saved, outdir, dbg, "layer_output", "layer_3_output.pt")
 
+        save_tensor_if_present(saved, outdir, router_dbg, "logits", "layer_3_logits.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "scores", "layer_3_scores.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "scores_for_choice", "layer_3_scores_for_choice.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "group_scores", "layer_3_group_scores.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "selected_group_idx", "layer_3_selected_group_idx.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "score_mask", "layer_3_score_mask.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "topk_choice_vals", "layer_3_topk_choice_vals.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "topk_idx", "layer_3_topk_idx.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "topk_weight", "layer_3_topk_weight.pt")
+        save_tensor_if_present(saved, outdir, router_dbg, "resident_mask", "layer_3_resident_mask.pt")
+
         report = {
             "backend": "hf_absorbed",
             "prompt": prompt,
@@ -170,6 +182,7 @@ def main() -> None:
             "decoded_input": decoded,
             "saved": saved,
             "debug_keys": sorted(list(dbg.keys())),
+            "router_debug_keys": sorted(list(router_dbg.keys())),
         }
         with (outdir / "hf_layer3_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
