@@ -182,6 +182,29 @@ def maybe_compare_aux_tensor(
     _compare_aligned(f"{name}.{key}", ref_aux[key], rt_aux[key])
 
 
+def _try_compare_variants(name: str, ref_v: Any, rt_v: Any) -> None:
+    ref_x, rt_x = _align_semantic_shape(ref_v, rt_v, name)
+
+    print_stats(f"ref.{name}", ref_x)
+    print_stats(f"runtime.{name}", rt_x)
+
+    compare_arrays(name, ref_x, rt_x)
+
+    if ref_x.ndim == 2 and rt_x.ndim == 2:
+        if ref_x.T.shape == rt_x.shape:
+            compare_arrays(f"{name}.ref_T", ref_x.T, rt_x)
+        if rt_x.T.shape == ref_x.shape:
+            compare_arrays(f"{name}.rt_T", ref_x, rt_x.T)
+        if ref_x[::-1].shape == rt_x.shape:
+            compare_arrays(f"{name}.ref_rev0", ref_x[::-1], rt_x)
+        if ref_x[:, ::-1].shape == rt_x.shape:
+            compare_arrays(f"{name}.ref_rev1", ref_x[:, ::-1], rt_x)
+        if rt_x[::-1].shape == ref_x.shape:
+            compare_arrays(f"{name}.rt_rev0", ref_x, rt_x[::-1])
+        if rt_x[:, ::-1].shape == ref_x.shape:
+            compare_arrays(f"{name}.rt_rev1", ref_x, rt_x[:, ::-1])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/config.json")
@@ -216,8 +239,15 @@ def main():
     ref_aux = ref_out["aux"]
     rt_aux = runtime_out["aux"]
 
-    maybe_compare_aux_tensor("attention", ref_aux, rt_aux, "q_flash")
-    maybe_compare_aux_tensor("attention", ref_aux, rt_aux, "blocked_k_token")
+    if "q_flash" in ref_aux and "q_flash" in rt_aux:
+        _try_compare_variants("attention.q_flash", ref_aux["q_flash"], rt_aux["q_flash"])
+
+    if "blocked_k_token" in ref_aux and "blocked_k_token" in rt_aux:
+        _try_compare_variants(
+            "attention.blocked_k_token",
+            ref_aux["blocked_k_token"],
+            rt_aux["blocked_k_token"],
+        )
 
 
 if __name__ == "__main__":
