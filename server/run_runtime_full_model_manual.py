@@ -120,6 +120,7 @@ def main() -> None:
             if "layer_id" not in item:
                 continue
             layer_id = int(item["layer_id"])
+            print("[runtime-full] layer", layer_id, "shape", tuple(item["output"].shape))
             p = outdir / f"layer_{layer_id}_output.pt"
             torch.save(to_torch_f32_cpu(item["output"]), p)
             report["saved"].append(str(p))
