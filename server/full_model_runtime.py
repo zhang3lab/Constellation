@@ -365,16 +365,17 @@ def run_sparse_layer(
         "output": output,
         "attention_input": attn_in,
         "attention_output": attn_out,
+        "post_attention_hidden": post_attn_hidden,
+        "ffn_hidden": ffn_hidden,
         "shared_expert_output": shared_out,
         "routed_output": routed_out,
-        "ffn_hidden": ffn_hidden,
+        "ffn_total": ffn_total,
     }
     if return_aux:
         result["attention_aux"] = attn.aux
         result["shared_expert_aux"] = shared.aux
         result["routed_aux"] = routed_aux
-        result["post_attention_hidden"] = post_attn_hidden.clone()
-        result["ffn_total"] = ffn_total.clone()
+        result["moe_aux"] = routed_aux
     return result
 
 
