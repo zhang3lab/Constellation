@@ -628,6 +628,10 @@ class DeepseekV3MoE(nn.Module):
         routed_output = self.moe_infer(hidden_states, topk_idx, topk_weight).view(*orig_shape)
         self.last_debug["routed_output"] = routed_output.detach().cpu().clone()
      
+        moe_infer_dbg = getattr(self, "last_moe_infer_debug", None)
+        if isinstance(moe_infer_dbg, dict):
+            self.last_debug.update(moe_infer_dbg)
+     
         if self.config.n_shared_experts is not None:
             shared_output = self.shared_experts(identity)
             self.last_debug["shared_expert_output"] = shared_output.detach().cpu().clone()
@@ -814,14 +818,23 @@ class DeepseekV3MoE(nn.Module):
         restored = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
         kept_positions_t = torch.as_tensor(kept_positions, device=restored.device)
         restored[kept_positions_t] = outs
-     
-        final_out = (
-            restored.view(*topk_ids.shape, -1)
-            .type(topk_weight.dtype)
-            .mul_(topk_weight.unsqueeze(dim=-1))
-            .sum(dim=1)
-            .type(restored.dtype)
+
+        restored_by_token = restored.view(*topk_ids.shape, -1)
+        weighted_by_token = (
+            restored_by_token.type(topk_weight.dtype) *
+            topk_weight.unsqueeze(dim=-1)
         )
+
+        final_out = weighted_by_token.sum(dim=1).type(restored.dtype)
+
+        self.last_moe_infer_debug = {
+            "topk_ids": topk_ids.detach().cpu().clone(),
+            "topk_weight": topk_weight.detach().cpu().clone(),
+            "restored_by_token": restored_by_token.detach().cpu().clone(),
+            "weighted_by_token": weighted_by_token.detach().cpu().clone(),
+            "final_out": final_out.detach().cpu().clone(),
+        }
+
         return final_out
 
 

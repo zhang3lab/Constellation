@@ -175,6 +175,12 @@ def main() -> None:
         save_tensor_if_present(saved, outdir, router_dbg, "topk_weight", "layer_3_topk_weight.pt")
         save_tensor_if_present(saved, outdir, router_dbg, "resident_mask", "layer_3_resident_mask.pt")
 
+        save_tensor_if_present(saved, outdir, dbg, "topk_ids", "layer_3_moe_topk_ids.pt")
+        save_tensor_if_present(saved, outdir, dbg, "topk_weight", "layer_3_moe_topk_weight.pt")
+        save_tensor_if_present(saved, outdir, dbg, "restored_by_token", "layer_3_moe_restored_by_token.pt")
+        save_tensor_if_present(saved, outdir, dbg, "weighted_by_token", "layer_3_moe_weighted_by_token.pt")
+        save_tensor_if_present(saved, outdir, dbg, "final_out", "layer_3_moe_final_out.pt")
+
         report = {
             "backend": "hf_absorbed",
             "prompt": prompt,
