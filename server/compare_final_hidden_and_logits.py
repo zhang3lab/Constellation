@@ -8,40 +8,52 @@ import torch
 import torch.nn.functional as F
 
 
+def load_pt(path: Path) -> torch.Tensor:
+    return torch.load(path, map_location="cpu").float()
+
+
+def align_tensor(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    if a.ndim == 3 and a.shape[0] == 1 and b.ndim == 2:
+        a = a.squeeze(0).contiguous()
+    if b.ndim == 3 and b.shape[0] == 1 and a.ndim == 2:
+        b = b.squeeze(0).contiguous()
+    return a, b
+
+
 def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().reshape(-1)
-    b = b.float().reshape(-1)
+    a = a.reshape(-1)
+    b = b.reshape(-1)
     return float(F.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item())
 
 
 def compare_tensors(a: torch.Tensor, b: torch.Tensor, key: str) -> dict:
-    xa = a.float()
-    xb = b.float()
-    if xa.shape != xb.shape:
+    a, b = align_tensor(a, b)
+
+    if a.shape != b.shape:
         return {
             "key": key,
             "shape_match": False,
-            "shape_a": list(xa.shape),
-            "shape_b": list(xb.shape),
+            "shape_a": list(a.shape),
+            "shape_b": list(b.shape),
         }
 
-    diff = (xa - xb).abs()
-    denom = torch.dot(xa.reshape(-1), xa.reshape(-1)).item()
-    alpha = float(torch.dot(xa.reshape(-1), xb.reshape(-1)).item() / denom) if denom != 0 else float("nan")
+    diff = (a - b).abs()
+    denom = torch.dot(a.reshape(-1), a.reshape(-1)).item()
+    alpha = (
+        float(torch.dot(a.reshape(-1), b.reshape(-1)).item() / denom)
+        if denom != 0
+        else float("nan")
+    )
 
     return {
         "key": key,
         "shape_match": True,
-        "shape": list(xa.shape),
-        "cosine": cosine_similarity(xa, xb),
+        "shape": list(a.shape),
+        "cosine": cosine_similarity(a, b),
         "alpha": alpha,
         "max_abs": float(diff.max().item()),
         "mean_abs": float(diff.mean().item()),
     }
-
-
-def load_pt(path: Path) -> torch.Tensor:
-    return torch.load(path, map_location="cpu")
 
 
 def main() -> None:
@@ -56,15 +68,14 @@ def main() -> None:
 
     out = {"comparisons": {}}
 
-    pairs = []
     if (hf_dir / "final_hidden.pt").exists() and (rt_dir / "final_hidden.pt").exists():
-        pairs.append(("final_hidden", "final_hidden.pt", "final_hidden.pt"))
-    pairs.append(("logits", "logits.pt", "logits.pt"))
+        hf = load_pt(hf_dir / "final_hidden.pt")
+        rt = load_pt(rt_dir / "final_hidden.pt")
+        out["comparisons"]["final_hidden"] = compare_tensors(hf, rt, "final_hidden")
 
-    for key, hf_name, rt_name in pairs:
-        hf = load_pt(hf_dir / hf_name)
-        rt = load_pt(rt_dir / rt_name)
-        out["comparisons"][key] = compare_tensors(hf, rt, key)
+    hf = load_pt(hf_dir / "logits.pt")
+    rt = load_pt(rt_dir / "logits.pt")
+    out["comparisons"]["logits"] = compare_tensors(hf, rt, "logits")
 
     output_path = Path(args.output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
