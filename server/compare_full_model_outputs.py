@@ -45,12 +45,25 @@ def load_pt(path: Path) -> torch.Tensor:
 
 
 def align_hf_to_runtime(hf_tensor: torch.Tensor, rt_tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    # HF often stores full-sequence tensors: [B, T, H]
-    # Runtime manual full-model path often stores last-token decode tensors: [H] or [1, H]
-    if hf_tensor.ndim == 3 and rt_tensor.ndim == 1:
+    # Case 1:
+    # HF full-sequence with batch dim: [1, T, H]
+    # runtime full-sequence no batch dim: [T, H]
+    if hf_tensor.ndim == 3 and hf_tensor.shape[0] == 1 and rt_tensor.ndim == 2:
+        hf_tensor = hf_tensor.squeeze(0).contiguous()
+
+    # Case 2:
+    # HF full-sequence with batch dim: [1, T, H]
+    # runtime last-token hidden: [H]
+    elif hf_tensor.ndim == 3 and hf_tensor.shape[0] == 1 and rt_tensor.ndim == 1:
         hf_tensor = hf_tensor[:, -1, :].contiguous().squeeze(0)
-    elif hf_tensor.ndim == 3 and rt_tensor.ndim == 2 and rt_tensor.shape[0] == 1:
-        hf_tensor = hf_tensor[:, -1, :].contiguous()
+
+    # Case 3:
+    # HF full-sequence with batch dim: [1, T, V]
+    # runtime last-token logits with batch dim: [1, V]
+    elif hf_tensor.ndim == 3 and hf_tensor.shape[0] == 1 and rt_tensor.ndim == 2 and rt_tensor.shape[0] == 1:
+        # Only collapse to last token if runtime is clearly token-level, not sequence-level.
+        if hf_tensor.shape[1] != rt_tensor.shape[0]:
+            hf_tensor = hf_tensor[:, -1, :].contiguous()
 
     return hf_tensor, rt_tensor
 
