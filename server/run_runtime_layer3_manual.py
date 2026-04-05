@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 from transformers import AutoTokenizer
 
@@ -16,11 +17,39 @@ from server.inference_session import InferenceSession
 
 
 def save_pt(outdir: Path, name: str, x) -> str:
+    if isinstance(x, np.ndarray):
+        x = torch.from_numpy(x)
     if not isinstance(x, torch.Tensor):
-        raise TypeError(f"{name} expected torch.Tensor, got {type(x).__name__}")
+        raise TypeError(f"{name} expected tensor/ndarray, got {type(x).__name__}")
     p = outdir / f"{name}.pt"
     torch.save(x.detach().float().cpu(), p)
     return str(p)
+
+
+def save_json(outdir: Path, name: str, obj) -> str:
+    p = outdir / f"{name}.json"
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return str(p)
+
+
+def to_jsonable(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, torch.Tensor):
+        return obj.detach().cpu().tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, list):
+        return [to_jsonable(x) for x in obj]
+    if isinstance(obj, tuple):
+        return [to_jsonable(x) for x in obj]
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    return obj
 
 
 def main() -> None:
@@ -49,6 +78,7 @@ def main() -> None:
         if input_ids is None:
             raise RuntimeError("input_json must contain either prompt or input_ids")
         prompt = tokenizer.decode(input_ids)
+
     ids = tokenizer(prompt, add_special_tokens=True)["input_ids"]
     decoded = tokenizer.decode(ids)
 
@@ -77,11 +107,10 @@ def main() -> None:
             dtype=session.backbone_store.dtype,
         ).contiguous()
 
-        position_ids = torch.arange(hidden.shape[0], dtype=torch.long)
+        position_ids = np.arange(hidden.shape[0], dtype=np.int64)
 
         saved: list[str] = []
 
-        # layer 0,1,2 dense prefix one by one
         for layer_id in [0, 1, 2]:
             result = run_dense_layer(
                 session,
@@ -95,7 +124,6 @@ def main() -> None:
             hidden = result["output"]
             saved.append(save_pt(outdir, f"layer_{layer_id}_output", hidden))
 
-        # layer 3 sparse with full aux
         result = run_sparse_layer(
             session,
             hidden,
@@ -114,12 +142,61 @@ def main() -> None:
         saved.append(save_pt(outdir, "layer_3_ffn_total", result["ffn_total"]))
         saved.append(save_pt(outdir, "layer_3_output", result["output"]))
 
+        moe_aux = result.get("moe_aux", {}) or {}
+
+        for name in [
+            "router_hidden",
+            "logits",
+            "scores_raw",
+            "scores",
+            "scores_for_choice_raw",
+            "scores_for_choice",
+            "group_scores",
+            "selected_group_idx",
+            "group_mask",
+            "score_mask",
+            "resident_mask",
+            "topk_idx",
+            "topk_choice_vals",
+            "topk_weight_pre_norm",
+            "topk_weight_post_norm",
+            "topk_weight",
+            "combined_pre_cast",
+        ]:
+            if name in moe_aux:
+                saved.append(save_pt(outdir, f"layer_3_{name}", moe_aux[name]))
+
+        for name in [
+            "resident_local_expert_ids",
+            "routes",
+            "local_routes",
+            "selected_global_expert_ids",
+            "selected_weights",
+            "effective_top_k",
+            "layer_id",
+        ]:
+            if name in moe_aux:
+                saved.append(save_json(outdir, f"layer_3_{name}", to_jsonable(moe_aux[name])))
+
+        if "weighted_outputs" in moe_aux:
+            weighted_outputs = moe_aux["weighted_outputs"]
+            if isinstance(weighted_outputs, dict):
+                saved.append(save_json(outdir, "layer_3_weighted_outputs", to_jsonable(weighted_outputs)))
+            elif isinstance(weighted_outputs, list):
+                saved.append(save_json(outdir, "layer_3_weighted_outputs", to_jsonable(weighted_outputs)))
+            else:
+                try:
+                    saved.append(save_json(outdir, "layer_3_weighted_outputs", to_jsonable(weighted_outputs)))
+                except Exception:
+                    pass
+
         report = {
             "backend": "runtime",
             "prompt": prompt,
             "input_ids": ids,
             "decoded_input": decoded,
             "saved": saved,
+            "moe_aux_keys": sorted(list(moe_aux.keys())),
         }
         with (outdir / "runtime_layer3_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
