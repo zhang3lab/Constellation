@@ -319,9 +319,15 @@ def main() -> None:
             if logits_from_outputs.ndim >= 1 and logits_from_outputs.shape[0] == 1:
                 logits_from_outputs = logits_from_outputs.squeeze(0).contiguous()
 
-            final_hidden_dev = hidden_from_hook.to(next(model.parameters()).device)
+            lm_head_w = model.lm_head.weight
+            final_hidden_dev = hidden_from_hook.to(
+                device=lm_head_w.device,
+                dtype=lm_head_w.dtype,
+            )
+
             with torch.no_grad():
-                logits_manual = torch.matmul(final_hidden_dev, model.lm_head.weight.t())
+                logits_manual = torch.matmul(final_hidden_dev, lm_head_w.t())
+
             logits_manual = logits_manual.detach().float().cpu()
 
             p = outdir / "logits.pt"
