@@ -46,7 +46,24 @@ def load_hf_model(model_dir: str, device: str):
     return model
 
 
-def names_0_to_3() -> list[str]:
+def load_restricted_expert_ids_from_model_dir(model_dir: str) -> list[int]:
+    config_path = Path(model_dir) / "config.json"
+    if not config_path.exists():
+        raise RuntimeError(f"missing config.json under {model_dir}")
+
+    with config_path.open("r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    resident = cfg.get("resident_expert_ids")
+    if not isinstance(resident, list):
+        raise RuntimeError(
+            f"{config_path}: expected resident_expert_ids to be a list, got {type(resident).__name__}"
+        )
+
+    return sorted({int(x) for x in resident})
+
+
+def names_0_to_3(restricted_local_expert_ids: list[int] | None = None) -> list[str]:
     names = ["model.embed_tokens.weight"]
     for layer_id in [0, 1, 2, 3]:
         prefix = f"model.layers.{layer_id}"
@@ -81,6 +98,16 @@ def names_0_to_3() -> list[str]:
                     f"{prefix}.mlp.gate.e_score_correction_bias",
                 ]
             )
+
+            if restricted_local_expert_ids is not None:
+                for expert_id in sorted({int(x) for x in restricted_local_expert_ids}):
+                    names.extend(
+                        [
+                            f"{prefix}.mlp.experts.{expert_id}.gate_proj.weight",
+                            f"{prefix}.mlp.experts.{expert_id}.up_proj.weight",
+                            f"{prefix}.mlp.experts.{expert_id}.down_proj.weight",
+                        ]
+                    )
     return names
 
 
@@ -118,11 +145,14 @@ def main() -> None:
     ids = tok(prompt, add_special_tokens=True, return_tensors="pt")["input_ids"][0].tolist()
     decoded = tok.decode(ids)
 
+    restricted_local_expert_ids = load_restricted_expert_ids_from_model_dir(args.model_dir)
+    print(f"[hf-layer3] restricted_local_expert_ids={restricted_local_expert_ids}")
+
     loader = DeepseekModelLoader(args.model_dir)
     model = load_hf_model(args.model_dir, args.device)
 
     try:
-        for name in names_0_to_3():
+        for name in names_0_to_3(restricted_local_expert_ids):
             print(f"[hf-layer3] copy {name}")
             copy_named_tensor_into_model(model, loader=loader, tensor_name=name)
 
