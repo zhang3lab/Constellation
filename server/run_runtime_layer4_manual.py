@@ -259,6 +259,17 @@ def main() -> None:
             hidden = result["output"]
             saved.append(save_pt(outdir, f"layer_{layer_id}_output", hidden))
 
+        result3 = run_sparse_layer(
+            session,
+            hidden,
+            3,
+            position_ids=position_ids,
+            attention_mask=None,
+            kv_cache=session.page_attention_cache_managers,
+            return_aux=False,
+        )
+        hidden = result3["output"]
+
         result = run_sparse_layer(
             session,
             hidden,
