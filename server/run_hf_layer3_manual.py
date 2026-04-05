@@ -14,7 +14,13 @@ def get_attr_by_dotted_name(obj, dotted_name: str):
     cur = obj
     for part in dotted_name.split("."):
         if part.isdigit():
-            cur = cur[int(part)]
+            if isinstance(cur, torch.nn.ModuleDict):
+                cur = cur[part]
+            else:
+                try:
+                    cur = cur[int(part)]
+                except Exception:
+                    cur = getattr(cur, part)
         else:
             cur = getattr(cur, part)
     return cur
