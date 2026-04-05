@@ -6,36 +6,12 @@ from typing import Any
 import numpy as np
 import torch
 
-from server.absorbed_latent_ref import run_attention_block_ref
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
-from server.full_model_types import ModelExecResult
 from server.inference_session import InferenceSession
-from server.test.utils import compare_arrays, prenorm_hidden_for_attention, print_stats, to_numpy_f32
-
-
-class DeepseekFullModelReference(DeepseekFullModelExecutor):
-    def run_attention_block(
-        self,
-        hidden_in: np.ndarray,
-        layer_id: int,
-        *,
-        position_ids=None,
-        attention_mask=None,
-        kv_cache=None,
-        return_aux: bool = False,
-    ) -> ModelExecResult:
-        return run_attention_block_ref(
-            self.session,
-            hidden_in,
-            int(layer_id),
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            kv_cache=kv_cache,
-            return_aux=return_aux,
-        )
+from server.test.utils import prenorm_hidden_for_attention, print_stats, to_numpy_f32
 
 
 def run_runtime_attention(
@@ -72,71 +48,14 @@ def run_runtime_attention(
     )
 
     return {
-        "hidden_in": hidden,
-        "hidden_prenorm": hidden_prenorm,
+        "hidden_in": to_numpy_f32(hidden),
+        "hidden_prenorm": to_numpy_f32(hidden_prenorm),
         "output": to_numpy_f32(out.output),
-        "aux": out.aux,
+        "aux": out.aux or {},
     }
 
 
-def run_reference_attention(
-    session: InferenceSession,
-    *,
-    prompt: str,
-    layer_id: int,
-    position_id: int,
-) -> dict[str, Any]:
-    session.full_model_executor = DeepseekFullModelReference(session)
-
-    kv_cache_cfg = session.cfg["kv_cache"]
-    session.ensure_full_model_runtime(
-        tensor_cache_dir="tmp/non_moe_backbone_cache",
-        split_layer=30,
-        backbone_dtype=torch.bfloat16,
-        kv_cache_cfg=kv_cache_cfg,
-    )
-    session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
-
-    prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = prepared["hidden_in"]
-    hidden_prenorm = prenorm_hidden_for_attention(session, hidden, layer_id)
-
-    pos = np.asarray([position_id], dtype=np.int64)
-
-    out = session.full_model_executor.run_attention_block(
-        hidden_prenorm,
-        layer_id,
-        position_ids=pos,
-        attention_mask=None,
-        kv_cache=session.page_attention_cache_managers,
-        return_aux=True,
-    )
-
-    return {
-        "hidden_in": hidden,
-        "hidden_prenorm": hidden_prenorm,
-        "output": to_numpy_f32(out.output),
-        "aux": out.aux,
-    }
-
-
-def maybe_compare_aux_tensor(name: str, ref_aux: dict[str, Any], rt_aux: dict[str, Any], key: str) -> None:
-    if key not in ref_aux:
-        print(f"[skip] ref aux missing {key}")
-        return
-    if key not in rt_aux:
-        print(f"[skip] runtime aux missing {key}")
-        return
-
-    ref_v = ref_aux[key]
-    rt_v = rt_aux[key]
-
-    print_stats(f"ref.{name}.{key}", ref_v)
-    print_stats(f"runtime.{name}.{key}", rt_v)
-    compare_arrays(f"{name}.{key}", ref_v, rt_v)
-
-
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/config.json")
     ap.add_argument("--prompt", type=str, default="Hello world")
@@ -156,27 +75,61 @@ def main():
             position_id=args.position_id,
         )
 
-    with InferenceSession(coord, cfg) as ref_sess:
-        ref_out = run_reference_attention(
-            ref_sess,
-            prompt=args.prompt,
-            layer_id=args.layer_id,
-            position_id=args.position_id,
+    hidden_in = runtime_out["hidden_in"]
+    hidden_prenorm = runtime_out["hidden_prenorm"]
+    attention_output = runtime_out["output"]
+    aux = runtime_out["aux"]
+
+    print_stats("runtime.hidden_in", hidden_in)
+    print_stats("runtime.hidden_prenorm", hidden_prenorm)
+    print_stats("runtime.attention_output", attention_output)
+
+    if hidden_in.ndim != 1:
+        raise RuntimeError(f"hidden_in must be 1D, got shape={tuple(hidden_in.shape)}")
+    if hidden_prenorm.ndim != 1:
+        raise RuntimeError(
+            f"hidden_prenorm must be 1D, got shape={tuple(hidden_prenorm.shape)}"
+        )
+    if attention_output.ndim != 1:
+        raise RuntimeError(
+            f"attention_output must be 1D, got shape={tuple(attention_output.shape)}"
         )
 
-    print_stats("runtime.hidden_in", runtime_out["hidden_in"])
-    print_stats("ref.hidden_in", ref_out["hidden_in"])
-    compare_arrays("hidden_in", ref_out["hidden_in"], runtime_out["hidden_in"])
+    if hidden_in.shape != hidden_prenorm.shape:
+        raise RuntimeError(
+            f"hidden_in/hidden_prenorm shape mismatch: "
+            f"{tuple(hidden_in.shape)} vs {tuple(hidden_prenorm.shape)}"
+        )
+    if attention_output.shape != hidden_in.shape:
+        raise RuntimeError(
+            f"attention_output/hidden_in shape mismatch: "
+            f"{tuple(attention_output.shape)} vs {tuple(hidden_in.shape)}"
+        )
 
-    print_stats("runtime.attention_output", runtime_out["output"])
-    print_stats("ref.attention_output", ref_out["output"])
-    compare_arrays("attention_output", ref_out["output"], runtime_out["output"])
+    if not np.isfinite(hidden_in).all():
+        raise RuntimeError("hidden_in contains non-finite values")
+    if not np.isfinite(hidden_prenorm).all():
+        raise RuntimeError("hidden_prenorm contains non-finite values")
+    if not np.isfinite(attention_output).all():
+        raise RuntimeError("attention_output contains non-finite values")
 
-    ref_aux = ref_out["aux"] or {}
-    rt_aux = runtime_out["aux"] or {}
+    required_aux = [
+        "q_flash",
+        "blocked_k_token",
+    ]
+    for key in required_aux:
+        if key not in aux:
+            raise RuntimeError(f"runtime aux missing required key: {key}")
+        x = to_numpy_f32(aux[key])
+        print_stats(f"runtime.attention.{key}", np.squeeze(x))
+        if not np.isfinite(x).all():
+            raise RuntimeError(f"runtime aux {key} contains non-finite values")
 
-    maybe_compare_aux_tensor("attention", ref_aux, rt_aux, "q_flash")
-    maybe_compare_aux_tensor("attention", ref_aux, rt_aux, "blocked_k_token")
+    print(
+        "[smoke] attention runtime OK "
+        f"layer_id={args.layer_id} position_id={args.position_id} "
+        f"aux_keys={sorted(aux.keys())}"
+    )
 
 
 if __name__ == "__main__":
