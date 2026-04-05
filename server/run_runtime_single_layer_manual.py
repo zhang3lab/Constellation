@@ -280,6 +280,8 @@ def main() -> None:
         saved: list[str] = []
 
         model_cfg = AutoConfig.from_pretrained(args.model_dir, trust_remote_code=True)
+        num_layers = int(getattr(model_cfg, "num_hidden_layers"))
+        is_last_layer = (target_layer == num_layers - 1)
 
         # run previous layers, saving all outputs
         for layer_id in range(target_layer):
@@ -323,7 +325,7 @@ def main() -> None:
                 return_aux=True,
             )
             maybe_save_sparse_aux_tensors(outdir, saved, prefix, result)
-            moe_aux = result.get("moe_aux")
+            moe_aux = result.get("routed_aux")
             maybe_save_moe_aux_tensors(outdir, saved, prefix, moe_aux)
             maybe_save_moe_aux_json(outdir, saved, prefix, moe_aux)
             maybe_save_expert_outputs(outdir, saved, prefix, moe_aux)
@@ -338,8 +340,51 @@ def main() -> None:
                 kv_cache=session.page_attention_cache_managers,
                 return_aux=True,
             )
-            maybe_save_dense_aux_tensors(outdir, saved, prefix, result)
-            aux_keys = collect_aux_keys(result.get("aux"))
+            if isinstance(result, dict):
+                maybe_save_dense_aux_tensors(outdir, saved, prefix, result)
+                aux_keys = collect_aux_keys(result.get("aux"))
+            else:
+                aux_keys = []
+
+        if is_last_layer:
+            if session.backbone_store is None:
+                raise RuntimeError("session.backbone_store is not initialized")
+
+            norm_w = session.backbone_store.model_norm()
+            lm_head_w = session.backbone_store.lm_head()
+
+            if norm_w is None:
+                raise RuntimeError("session.backbone_store.model_norm is not initialized")
+            if lm_head_w is None:
+                raise RuntimeError("session.backbone_store.lm_head is not initialized")
+            if not isinstance(norm_w, torch.Tensor):
+                raise TypeError(f"model_norm expected torch.Tensor, got {type(norm_w).__name__}")
+            if not isinstance(lm_head_w, torch.Tensor):
+                raise TypeError(f"lm_head expected torch.Tensor, got {type(lm_head_w).__name__}")
+
+            final_hidden_in = result["output"]
+            if not isinstance(final_hidden_in, torch.Tensor):
+                final_hidden_in = torch.as_tensor(final_hidden_in)
+
+            dev = str(norm_w.device)
+            dtype = norm_w.dtype
+
+            if str(final_hidden_in.device) != dev or final_hidden_in.dtype != dtype:
+                final_hidden_in = final_hidden_in.to(device=dev, dtype=dtype)
+
+            was_1d = (final_hidden_in.ndim == 1)
+            x = final_hidden_in.unsqueeze(0) if was_1d else final_hidden_in
+
+            final_hidden = torch.nn.functional.rms_norm(
+                x,
+                (x.shape[-1],),
+                norm_w,
+                1e-6,
+            )
+            logits = torch.matmul(final_hidden, lm_head_w.t())
+
+            saved.append(save_pt(outdir, "final_hidden", final_hidden[0] if was_1d else final_hidden))
+            saved.append(save_pt(outdir, "logits", logits[0] if was_1d else logits))
 
         report = {
             "backend": "runtime",
@@ -350,6 +395,8 @@ def main() -> None:
             "saved": saved,
             "is_sparse": bool(is_sparse_layer(model_cfg, target_layer)),
             "aux_keys": aux_keys,
+            "has_final_hidden": bool(is_last_layer),
+            "has_logits": bool(is_last_layer),
         }
         with (outdir / "runtime_single_layer_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
