@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 from transformers import AutoTokenizer
 
@@ -88,7 +89,7 @@ def main() -> None:
         hidden = hidden.to(device=embed_dev, dtype=runtime_dtype).contiguous()
 
         seq_len = hidden.shape[0]
-        position_ids = torch.arange(seq_len, device=hidden.device, dtype=torch.long)
+        position_ids = np.arange(seq_len, dtype=np.int64)
 
         result = run_full_model(
             session,
