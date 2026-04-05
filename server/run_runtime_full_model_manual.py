@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import torch
+from transformers import AutoTokenizer
 
 from server.config import load_config
 from server.control_plane import setup_control_plane
@@ -13,7 +14,7 @@ from server.full_model_runtime import run_full_model
 from server.inference_session import InferenceSession
 
 
-def to_numpy_f32(x):
+def to_torch_f32_cpu(x):
     if isinstance(x, torch.Tensor):
         return x.detach().float().cpu()
     raise TypeError(f"expected torch.Tensor, got {type(x).__name__}")
@@ -22,6 +23,7 @@ def to_numpy_f32(x):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="server/test/config.json")
+    ap.add_argument("--model-dir", type=str, default="tmp/deepseek_restricted_ref")
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-dir", type=str, required=True)
     ap.add_argument("--start-layer", type=int, default=0)
@@ -30,6 +32,7 @@ def main() -> None:
 
     with open(args.input_json, "r", encoding="utf-8") as f:
         inp = json.load(f)
+
     prompt = inp.get("prompt")
     input_ids = inp.get("input_ids")
 
@@ -39,6 +42,8 @@ def main() -> None:
     cfg = load_config(args.config)
     coord = Coordinator(cfg["nodes"])
     setup_control_plane(coord, cfg)
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
 
     with InferenceSession(coord, cfg) as session:
         kv_cache_cfg = cfg["kv_cache"]
@@ -50,10 +55,12 @@ def main() -> None:
         )
         session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
-        prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt) if prompt is not None else None
-        if prepared is None:
-            raise RuntimeError("input_json must contain prompt for runtime path")
+        if prompt is None:
+            if input_ids is None:
+                raise RuntimeError("input_json must contain either prompt or input_ids")
+            prompt = tokenizer.decode(input_ids)
 
+        prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
         hidden = prepared["hidden_in"]
 
         result = run_full_model(
@@ -86,11 +93,11 @@ def main() -> None:
                 continue
             layer_id = int(item["layer_id"])
             p = outdir / f"layer_{layer_id}_output.pt"
-            torch.save(to_numpy_f32(item["output"]), p)
+            torch.save(to_torch_f32_cpu(item["output"]), p)
             report["saved"].append(str(p))
 
         p = outdir / "logits.pt"
-        torch.save(to_numpy_f32(logits_result.output), p)
+        torch.save(to_torch_f32_cpu(logits_result.output), p)
         report["saved"].append(str(p))
 
         with (outdir / "runtime_full_model.json").open("w", encoding="utf-8") as f:
