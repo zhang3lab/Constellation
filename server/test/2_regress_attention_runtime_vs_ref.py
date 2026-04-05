@@ -40,6 +40,38 @@ class DeepseekFullModelReference(DeepseekFullModelExecutor):
         )
 
 
+def _align_semantic_shape(a: Any, b: Any, name: str) -> tuple[np.ndarray, np.ndarray]:
+    a_np = to_numpy_f32(a)
+    b_np = to_numpy_f32(b)
+
+    a_sq = np.squeeze(a_np)
+    b_sq = np.squeeze(b_np)
+
+    if a_sq.shape != b_sq.shape:
+        raise RuntimeError(
+            f"{name}: semantic shape mismatch after squeeze: "
+            f"{tuple(a_np.shape)} -> {tuple(a_sq.shape)} vs "
+            f"{tuple(b_np.shape)} -> {tuple(b_sq.shape)}"
+        )
+
+    return a_sq, b_sq
+
+
+def _compare_aligned(name: str, ref_v: Any, rt_v: Any) -> None:
+    ref_aligned, rt_aligned = _align_semantic_shape(ref_v, rt_v, name)
+
+    print_stats(f"ref.{name}", ref_aligned)
+    print_stats(f"runtime.{name}", rt_aligned)
+
+    if ref_aligned.shape != rt_aligned.shape:
+        raise RuntimeError(
+            f"{name}: shape mismatch before compare: "
+            f"{tuple(ref_aligned.shape)} vs {tuple(rt_aligned.shape)}"
+        )
+
+    compare_arrays(name, ref_aligned, rt_aligned)
+
+
 def run_runtime_attention(
     session: InferenceSession,
     *,
@@ -147,12 +179,7 @@ def maybe_compare_aux_tensor(
         print(f"[skip] runtime aux missing {key}")
         return
 
-    ref_v = ref_aux[key]
-    rt_v = rt_aux[key]
-
-    print_stats(f"ref.{name}.{key}", ref_v)
-    print_stats(f"runtime.{name}.{key}", rt_v)
-    compare_arrays(f"{name}.{key}", ref_v, rt_v)
+    _compare_aligned(f"{name}.{key}", ref_aux[key], rt_aux[key])
 
 
 def main():
@@ -183,13 +210,8 @@ def main():
             position_id=args.position_id,
         )
 
-    print_stats("runtime.hidden_in", runtime_out["hidden_in"])
-    print_stats("ref.hidden_in", ref_out["hidden_in"])
-    compare_arrays("hidden_in", ref_out["hidden_in"], runtime_out["hidden_in"])
-
-    print_stats("runtime.attention_output", runtime_out["output"])
-    print_stats("ref.attention_output", ref_out["output"])
-    compare_arrays("attention_output", ref_out["output"], runtime_out["output"])
+    _compare_aligned("hidden_in", ref_out["hidden_in"], runtime_out["hidden_in"])
+    _compare_aligned("attention_output", ref_out["output"], runtime_out["output"])
 
     ref_aux = ref_out["aux"]
     rt_aux = runtime_out["aux"]
