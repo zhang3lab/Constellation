@@ -62,14 +62,19 @@ def _compare_aligned(name: str, ref_v: Any, rt_v: Any) -> None:
 
     print_stats(f"ref.{name}", ref_aligned)
     print_stats(f"runtime.{name}", rt_aligned)
-
-    if ref_aligned.shape != rt_aligned.shape:
-        raise RuntimeError(
-            f"{name}: shape mismatch before compare: "
-            f"{tuple(ref_aligned.shape)} vs {tuple(rt_aligned.shape)}"
-        )
-
     compare_arrays(name, ref_aligned, rt_aligned)
+
+
+def interleaved_to_half_split(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    if x.shape[-1] % 2 != 0:
+        raise ValueError(f"last dim must be even, got {x.shape[-1]}")
+    d_half = x.shape[-1] // 2
+    y = x.reshape(*x.shape[:-1], d_half, 2)
+    axes = list(range(y.ndim))
+    axes[-1], axes[-2] = axes[-2], axes[-1]
+    y = y.transpose(axes)
+    return y.reshape(*x.shape[:-1], x.shape[-1])
 
 
 def run_runtime_attention(
@@ -166,43 +171,59 @@ def run_reference_attention(
     }
 
 
-def maybe_compare_aux_tensor(
-    name: str,
-    ref_aux: dict[str, Any],
-    rt_aux: dict[str, Any],
-    key: str,
-) -> None:
-    if key not in ref_aux:
-        print(f"[skip] ref aux missing {key}")
-        return
-    if key not in rt_aux:
-        print(f"[skip] runtime aux missing {key}")
-        return
+def compare_q_flash(ref_aux: dict[str, Any], rt_aux: dict[str, Any]) -> None:
+    required_ref = ["q_flash", "q_nope_absorb"]
+    required_rt = ["q_flash", "q_nope_absorb"]
 
-    _compare_aligned(f"{name}.{key}", ref_aux[key], rt_aux[key])
+    for k in required_ref:
+        if k not in ref_aux:
+            print(f"[skip] ref aux missing {k}")
+            return
+    for k in required_rt:
+        if k not in rt_aux:
+            print(f"[skip] runtime aux missing {k}")
+            return
+
+    ref_q_flash = np.squeeze(to_numpy_f32(ref_aux["q_flash"]))
+    rt_q_flash = np.squeeze(to_numpy_f32(rt_aux["q_flash"]))
+    rt_q_nope_absorb = np.squeeze(to_numpy_f32(rt_aux["q_nope_absorb"]))
+
+    prefix_dim = rt_q_nope_absorb.shape[-1]
+    rope_dim = rt_q_flash.shape[-1] - prefix_dim
+
+    ref_prefix = ref_q_flash[..., :prefix_dim]
+    ref_rope = ref_q_flash[..., prefix_dim:prefix_dim + rope_dim]
+    ref_rope_hf = interleaved_to_half_split(ref_rope)
+    ref_q_flash_hf = np.concatenate([ref_prefix, ref_rope_hf], axis=-1)
+
+    _compare_aligned("attention.q_flash", ref_q_flash_hf, rt_q_flash)
 
 
-def _try_compare_variants(name: str, ref_v: Any, rt_v: Any) -> None:
-    ref_x, rt_x = _align_semantic_shape(ref_v, rt_v, name)
+def compare_blocked_k_token(ref_aux: dict[str, Any], rt_aux: dict[str, Any]) -> None:
+    required_ref = ["blocked_k_token"]
+    required_rt = ["blocked_k_token", "cache_latent"]
 
-    print_stats(f"ref.{name}", ref_x)
-    print_stats(f"runtime.{name}", rt_x)
+    for k in required_ref:
+        if k not in ref_aux:
+            print(f"[skip] ref aux missing {k}")
+            return
+    for k in required_rt:
+        if k not in rt_aux:
+            print(f"[skip] runtime aux missing {k}")
+            return
 
-    compare_arrays(name, ref_x, rt_x)
+    ref_blocked_k = np.squeeze(to_numpy_f32(ref_aux["blocked_k_token"]))
+    rt_blocked_k = np.squeeze(to_numpy_f32(rt_aux["blocked_k_token"]))
+    rt_cache_latent = np.squeeze(to_numpy_f32(rt_aux["cache_latent"]))
 
-    if ref_x.ndim == 2 and rt_x.ndim == 2:
-        if ref_x.T.shape == rt_x.shape:
-            compare_arrays(f"{name}.ref_T", ref_x.T, rt_x)
-        if rt_x.T.shape == ref_x.shape:
-            compare_arrays(f"{name}.rt_T", ref_x, rt_x.T)
-        if ref_x[::-1].shape == rt_x.shape:
-            compare_arrays(f"{name}.ref_rev0", ref_x[::-1], rt_x)
-        if ref_x[:, ::-1].shape == rt_x.shape:
-            compare_arrays(f"{name}.ref_rev1", ref_x[:, ::-1], rt_x)
-        if rt_x[::-1].shape == ref_x.shape:
-            compare_arrays(f"{name}.rt_rev0", ref_x, rt_x[::-1])
-        if rt_x[:, ::-1].shape == ref_x.shape:
-            compare_arrays(f"{name}.rt_rev1", ref_x, rt_x[:, ::-1])
+    latent_dim = rt_cache_latent.shape[-1]
+
+    ref_latent = ref_blocked_k[..., :latent_dim]
+    ref_k_rope = ref_blocked_k[..., latent_dim:]
+    ref_k_rope_hf = interleaved_to_half_split(ref_k_rope)
+    ref_blocked_k_hf = np.concatenate([ref_latent, ref_k_rope_hf], axis=-1)
+
+    _compare_aligned("attention.blocked_k_token", ref_blocked_k_hf, rt_blocked_k)
 
 
 def main():
@@ -239,15 +260,8 @@ def main():
     ref_aux = ref_out["aux"]
     rt_aux = runtime_out["aux"]
 
-    if "q_flash" in ref_aux and "q_flash" in rt_aux:
-        _try_compare_variants("attention.q_flash", ref_aux["q_flash"], rt_aux["q_flash"])
-
-    if "blocked_k_token" in ref_aux and "blocked_k_token" in rt_aux:
-        _try_compare_variants(
-            "attention.blocked_k_token",
-            ref_aux["blocked_k_token"],
-            rt_aux["blocked_k_token"],
-        )
+    compare_q_flash(ref_aux, rt_aux)
+    compare_blocked_k_token(ref_aux, rt_aux)
 
 
 if __name__ == "__main__":
