@@ -535,27 +535,37 @@ def run_moe_layer(session, hidden, layer_id: int, *, return_aux: bool = False):
     }
 
 
-def run_one_expert_reference(session, expert_id: int, hidden: np.ndarray):
-    hidden = np.asarray(hidden, dtype=np.float32).reshape(-1)
+def run_one_expert_reference(session, expert_id: int, x: np.ndarray):
     expert_id = int(expert_id)
 
-    w_up = _load_one_weight_tensor(session, expert_id, "w_up")
-    w_gate = _load_one_weight_tensor(session, expert_id, "w_gate")
-    w_down = _load_one_weight_tensor(session, expert_id, "w_down")
+    experts_per_layer = int(session.cfg["run"]["experts_per_layer"])
+    layer_id, local_expert_id = split_global_expert_id(
+        expert_id,
+        experts_per_layer=experts_per_layer,
+    )
 
-    w_up_np = w_up.numpy()
-    w_gate_np = w_gate.numpy()
-    w_down_np = w_down.numpy()
+    model_loader = session.get_deepseek_model_loader()
 
-    up = w_up_np @ hidden
-    gate = w_gate_np @ hidden
+    prefix = f"model.layers.{layer_id}.mlp.experts.{local_expert_id}"
+    w_up = model_loader.load_tensor_fp32_by_name(f"{prefix}.up_proj.weight")
+    w_gate = model_loader.load_tensor_fp32_by_name(f"{prefix}.gate_proj.weight")
+    w_down = model_loader.load_tensor_fp32_by_name(f"{prefix}.down_proj.weight")
 
-    up_t = torch.from_numpy(up.astype(np.float32, copy=False))
-    gate_t = torch.from_numpy(gate.astype(np.float32, copy=False))
-    fused = (F.silu(gate_t) * up_t).numpy()
+    if not isinstance(w_up, torch.Tensor):
+        raise TypeError(f"w_up must be torch.Tensor, got {type(w_up).__name__}")
+    if not isinstance(w_gate, torch.Tensor):
+        raise TypeError(f"w_gate must be torch.Tensor, got {type(w_gate).__name__}")
+    if not isinstance(w_down, torch.Tensor):
+        raise TypeError(f"w_down must be torch.Tensor, got {type(w_down).__name__}")
 
-    y = w_down_np @ fused
-    return y.astype(np.float32, copy=False)
+    x_t = torch.as_tensor(x, dtype=torch.float32)
+
+    up = torch.matmul(x_t, w_up.t())
+    gate = torch.matmul(x_t, w_gate.t())
+    fused = up * F.silu(gate)
+    y = torch.matmul(fused, w_down.t())
+
+    return y.detach().cpu().numpy().astype(np.float32, copy=False)
 
 
 def run_topk_reference(session, routes, hidden: np.ndarray):
