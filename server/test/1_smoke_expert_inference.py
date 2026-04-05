@@ -170,6 +170,7 @@ def run_one_expert_stability_test(
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--config", type=str, default="server/test/config.json")
     ap.add_argument("--expert-id", type=int, required=True)
     ap.add_argument("--input-pt", type=str, default=None)
     ap.add_argument("--token-idx", type=int, default=None)
@@ -177,9 +178,16 @@ def main():
     ap.add_argument("--repeats", type=int, default=10)
     args = ap.parse_args()
 
-    from server.test.utils import make_test_session
+    from server.config import load_config
+    from server.control_plane import setup_control_plane
+    from server.coordinator import Coordinator
+    from server.inference_session import InferenceSession
 
-    with make_test_session() as session:
+    cfg = load_config(args.config)
+    coord = Coordinator(cfg["nodes"])
+    setup_control_plane(coord, cfg)
+
+    with InferenceSession(coord, cfg) as session:
         if args.mode == "correctness":
             run_one_expert_correctness_test(
                 session,
