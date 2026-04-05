@@ -349,10 +349,10 @@ def main() -> None:
         if is_last_layer:
             if session.backbone_store is None:
                 raise RuntimeError("session.backbone_store is not initialized")
-
+         
             norm_w = session.backbone_store.model_norm()
             lm_head_w = session.backbone_store.lm_head()
-
+         
             if norm_w is None:
                 raise RuntimeError("session.backbone_store.model_norm is not initialized")
             if lm_head_w is None:
@@ -361,20 +361,20 @@ def main() -> None:
                 raise TypeError(f"model_norm expected torch.Tensor, got {type(norm_w).__name__}")
             if not isinstance(lm_head_w, torch.Tensor):
                 raise TypeError(f"lm_head expected torch.Tensor, got {type(lm_head_w).__name__}")
-
+         
             final_hidden_in = result["output"]
             if not isinstance(final_hidden_in, torch.Tensor):
                 final_hidden_in = torch.as_tensor(final_hidden_in)
-
+         
             dev = str(norm_w.device)
             dtype = norm_w.dtype
-
+         
             if str(final_hidden_in.device) != dev or final_hidden_in.dtype != dtype:
                 final_hidden_in = final_hidden_in.to(device=dev, dtype=dtype)
-
+         
             was_1d = (final_hidden_in.ndim == 1)
             x = final_hidden_in.unsqueeze(0) if was_1d else final_hidden_in
-
+         
             final_hidden = torch.nn.functional.rms_norm(
                 x,
                 (x.shape[-1],),
@@ -382,10 +382,9 @@ def main() -> None:
                 1e-6,
             )
             logits = torch.matmul(final_hidden, lm_head_w.t())
-
+         
             saved.append(save_pt(outdir, "final_hidden", final_hidden[0] if was_1d else final_hidden))
             saved.append(save_pt(outdir, "logits", logits[0] if was_1d else logits))
-            hidden_from_hook = misc_outputs["final_hidden"]                     # cpu
 
         report = {
             "backend": "runtime",
