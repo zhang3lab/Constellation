@@ -96,13 +96,11 @@ def _extract_prefill_last_hidden(prefill_result: PrefillResult) -> tuple[list[in
     return [int(x) for x in input_ids], last_hidden
 
 
-def run_runtime_attention(
+def produce_prefill_last_hidden(
     session: InferenceSession,
     *,
     prompt: str,
-    layer_id: int,
-    position_id: int,
-) -> dict[str, Any]:
+) -> tuple[list[int], torch.Tensor]:
     session.full_model_executor = DeepseekFullModelExecutor(session)
 
     kv_cache_cfg = session.cfg["kv_cache"]
@@ -127,7 +125,32 @@ def run_runtime_attention(
         kv_cache=session.page_attention_cache_managers,
         collect_per_layer=False,
     )
-    input_ids, hidden_t = _extract_prefill_last_hidden(prefill_result)
+    return _extract_prefill_last_hidden(prefill_result)
+
+
+def run_runtime_attention(
+    session: InferenceSession,
+    *,
+    hidden_t: torch.Tensor,
+    input_ids: list[int],
+    layer_id: int,
+    position_id: int,
+) -> dict[str, Any]:
+    session.full_model_executor = DeepseekFullModelExecutor(session)
+
+    kv_cache_cfg = session.cfg["kv_cache"]
+    session.ensure_full_model_runtime(
+        tensor_cache_dir="tmp/non_moe_backbone_cache",
+        split_layer=30,
+        backbone_dtype=torch.bfloat16,
+        kv_cache_cfg=kv_cache_cfg,
+    )
+    session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
+
+    if session.page_attention_cache_managers is None:
+        raise RuntimeError("session.page_attention_cache_managers is not initialized")
+    if not isinstance(session.page_attention_cache_managers, dict):
+        raise RuntimeError("session.page_attention_cache_managers must be a dict")
 
     hidden_prenorm = prenorm_hidden_for_attention(session, hidden_t, layer_id)
     pos = torch.tensor([int(position_id)], dtype=torch.int64)
@@ -142,7 +165,7 @@ def run_runtime_attention(
     )
 
     return {
-        "input_ids": input_ids,
+        "input_ids": [int(x) for x in input_ids],
         "hidden_in": to_numpy_f32(hidden_t),
         "hidden_prenorm": to_numpy_f32(hidden_prenorm),
         "output": to_numpy_f32(out.output),
@@ -153,7 +176,8 @@ def run_runtime_attention(
 def run_reference_attention(
     session: InferenceSession,
     *,
-    prompt: str,
+    hidden_t: torch.Tensor,
+    input_ids: list[int],
     layer_id: int,
     position_id: int,
 ) -> dict[str, Any]:
@@ -185,16 +209,6 @@ def run_reference_attention(
     if not isinstance(session.page_attention_cache_managers, dict):
         raise RuntimeError("session.page_attention_cache_managers must be a dict")
 
-    prefill_result = run_prefill(
-        session,
-        prompt=prompt,
-        start_layer=0,
-        end_layer=60,
-        kv_cache=session.page_attention_cache_managers,
-        collect_per_layer=False,
-    )
-    input_ids, hidden_t = _extract_prefill_last_hidden(prefill_result)
-
     hidden_prenorm = prenorm_hidden_for_attention(session, hidden_t, layer_id)
     pos = torch.tensor([int(position_id)], dtype=torch.int64)
 
@@ -208,7 +222,7 @@ def run_reference_attention(
     )
 
     return {
-        "input_ids": input_ids,
+        "input_ids": [int(x) for x in input_ids],
         "hidden_in": to_numpy_f32(hidden_t),
         "hidden_prenorm": to_numpy_f32(hidden_prenorm),
         "output": to_numpy_f32(out.output),
@@ -228,10 +242,17 @@ def main():
     coord = Coordinator(cfg["nodes"])
     setup_control_plane(coord, cfg)
 
+    with InferenceSession(coord, cfg) as prefill_sess:
+        input_ids, hidden_t = produce_prefill_last_hidden(
+            prefill_sess,
+            prompt=args.prompt,
+        )
+
     with InferenceSession(coord, cfg) as runtime_sess:
         runtime_out = run_runtime_attention(
             runtime_sess,
-            prompt=args.prompt,
+            hidden_t=hidden_t,
+            input_ids=input_ids,
             layer_id=args.layer_id,
             position_id=args.position_id,
         )
@@ -239,13 +260,14 @@ def main():
     with InferenceSession(coord, cfg) as ref_sess:
         ref_out = run_reference_attention(
             ref_sess,
-            prompt=args.prompt,
+            hidden_t=hidden_t,
+            input_ids=input_ids,
             layer_id=args.layer_id,
             position_id=args.position_id,
         )
 
     print(f"[compare] prompt={args.prompt!r}")
-    print(f"[compare] input_ids={runtime_out['input_ids']}")
+    print(f"[compare] input_ids={input_ids}")
 
     _compare_aligned("hidden_in", ref_out["hidden_in"], runtime_out["hidden_in"])
     _compare_aligned("hidden_prenorm", ref_out["hidden_prenorm"], runtime_out["hidden_prenorm"])
