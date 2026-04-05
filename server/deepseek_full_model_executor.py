@@ -509,8 +509,8 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
      
         return ModelExecResult(output=out, aux=aux)
 
-    def decode_token_ids(self, token_ids) -> list[str]:
+    def decode(self, token_ids) -> str:
         model_loader = self.session.get_deepseek_model_loader()
         tokenizer = model_loader.load_tokenizer()
         ids = [int(x) for x in token_ids]
-        return [tokenizer.decode([x]) for x in ids]
+        return tokenizer.decode(ids)

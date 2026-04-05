@@ -90,7 +90,10 @@ def main():
         topk = int(args.topk)
         top_ids = np.argsort(logits)[-topk:][::-1]
         top_vals = logits[top_ids]
-        top_tokens = session.full_model_executor.decode_token_ids(top_ids.tolist())
+        top_tokens = [
+            session.full_model_executor.decode([int(tok_id)])
+            for tok_id in top_ids.tolist()
+        ]
 
         print("[e2e] final_hidden[:8] =", out[:8])
         print("[e2e] logits_top_ids =", top_ids.tolist())
