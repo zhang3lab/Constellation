@@ -815,21 +815,36 @@ class DeepseekV3MoE(nn.Module):
             outs = new_x
      
         # Scatter expert outputs back to flattened route order, then reduce by top-k weights.
-        restored = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
-        kept_positions_t = torch.as_tensor(kept_positions, device=restored.device)
-        restored[kept_positions_t] = outs
+        restored_sorted = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
+        kept_positions_t = torch.as_tensor(kept_positions, device=restored_sorted.device)
+        restored_sorted[kept_positions_t] = outs
 
-        restored_by_token = restored.view(*topk_ids.shape, -1)
+        # idxs maps original flat route order -> sorted-by-expert order.
+        # We need the inverse permutation to recover original (token, slot) flat order.
+        inv_idxs = torch.empty_like(idxs)
+        inv_idxs[idxs] = torch.arange(idxs.numel(), device=idxs.device)
+
+        restored_flat = restored_sorted[inv_idxs]
+        restored_by_token = restored_flat.view(*topk_ids.shape, -1)
+
         weighted_by_token = (
             restored_by_token.type(topk_weight.dtype) *
             topk_weight.unsqueeze(dim=-1)
         )
 
-        final_out = weighted_by_token.sum(dim=1).type(restored.dtype)
+        final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
 
         self.last_moe_infer_debug = {
             "topk_ids": topk_ids.detach().cpu().clone(),
             "topk_weight": topk_weight.detach().cpu().clone(),
+            "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
+            "idxs": idxs.detach().cpu().clone(),
+            "kept_positions": kept_positions_t.detach().cpu().clone(),
+            "gatherd_idxs": torch.as_tensor(gatherd_idxs, device=restored_sorted.device).detach().cpu().clone(),
+            "outs": outs.detach().cpu().clone(),
+            "restored_sorted": restored_sorted.detach().cpu().clone(),
+            "inv_idxs": inv_idxs.detach().cpu().clone(),
+            "restored_flat": restored_flat.detach().cpu().clone(),
             "restored_by_token": restored_by_token.detach().cpu().clone(),
             "weighted_by_token": weighted_by_token.detach().cpu().clone(),
             "final_out": final_out.detach().cpu().clone(),
