@@ -15,67 +15,6 @@ from third_party.ShallowMLA.mla import (
 from server.debug_utils import DebugTensorCollector
 
 
-def apply_rotary_emb_hf_exact_torch(
-    x: torch.Tensor,
-    freqs_cis: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Match HF DeepSeek apply_rotary_pos_emb semantics exactly.
-
-    Args:
-        x: [B, L, H, D] in interleaved layout
-           [a0, b0, a1, b1, ...]
-        freqs_cis: [L, D // 2, 2]
-           freqs_cis[..., 0] = cos
-           freqs_cis[..., 1] = sin
-
-    Returns:
-        [B, L, H, D] in HF post-rotary layout
-    """
-    if x.ndim != 4:
-        raise ValueError(f"x expected [B,L,H,D], got {tuple(x.shape)}")
-    if freqs_cis.ndim != 3:
-        raise ValueError(f"freqs_cis expected [L,D//2,2], got {tuple(freqs_cis.shape)}")
-
-    B, L, H, D = x.shape
-    if D % 2 != 0:
-        raise ValueError(f"rotary dim must be even, got D={D}")
-    d_half = D // 2
-
-    if int(freqs_cis.shape[0]) != L:
-        raise ValueError(
-            f"freqs_cis seq mismatch: x has L={L}, freqs_cis has {int(freqs_cis.shape[0])}"
-        )
-    if int(freqs_cis.shape[1]) != d_half:
-        raise ValueError(
-            f"freqs_cis dim mismatch: x has D/2={d_half}, freqs_cis has {int(freqs_cis.shape[1])}"
-        )
-    if int(freqs_cis.shape[2]) != 2:
-        raise ValueError(f"freqs_cis last dim must be 2, got {int(freqs_cis.shape[2])}")
-
-    dtype = x.dtype
-
-    # HF:
-    # q = q.view(..., d//2, 2).transpose(...).reshape(...)
-    # This converts interleaved -> half-split.
-    x = x.view(B, L, H, d_half, 2).transpose(4, 3).reshape(B, L, H, D).float()
-
-    cos_half = freqs_cis[..., 0].to(device=x.device, dtype=torch.float32)  # [L, D/2]
-    sin_half = freqs_cis[..., 1].to(device=x.device, dtype=torch.float32)  # [L, D/2]
-
-    # HF full-dim half-split broadcast layout:
-    # [c0..c_{d/2-1}, c0..c_{d/2-1}]
-    cos = torch.cat([cos_half, cos_half], dim=-1).unsqueeze(0).unsqueeze(2)  # [1, L, 1, D]
-    sin = torch.cat([sin_half, sin_half], dim=-1).unsqueeze(0).unsqueeze(2)  # [1, L, 1, D]
-
-    x1 = x[..., :d_half]
-    x2 = x[..., d_half:]
-    rotate_half_x = torch.cat([-x2, x1], dim=-1)
-
-    out = (x * cos) + (rotate_half_x * sin)
-    return out.to(dtype=dtype)
-
-
 class MLARuntime:
     def __init__(
         self,
@@ -177,17 +116,18 @@ class MLARuntime:
         )
      
         dbg.add("q_rope_pre_rotary", q_rope)
-        q_rope = apply_rotary_emb_hf_exact_torch(q_rope, freq_cis)
+        q_rope = fused_apply_rotary_emb(q_rope, freq_cis)
         dbg.add("q_rope_post_rotary", q_rope)
-     
+
         x = torch.matmul(x_norm, weights["kv_a_proj_with_mqa"].t())
         kv_latent, k_rope = x.split(
             [self.kv_latent_rank, self.qk_rope_head_dim], dim=-1
         )
         dbg.add("cache_latent_raw", kv_latent)
+        dbg.add("cache_k_rope_pre_rotary", k_rope)
+
+        k_rope = fused_apply_rotary_emb(k_rope.unsqueeze(2), freq_cis).squeeze(2)
         dbg.add("cache_k_rope", k_rope)
-     
-        k_rope = apply_rotary_emb_hf_exact_torch(k_rope.unsqueeze(2), freq_cis).squeeze(2)
      
         kv_latent = fused_rms_norm(
             kv_latent,
