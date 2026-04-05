@@ -1,25 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal
-
-
-KV_BACKEND_PAGED: Final[str] = "paged"
-KV_BACKEND_CONTIGUOUS: Final[str] = "contiguous"
-KV_BACKEND_EXTERNAL: Final[str] = "external"
-
-
-KvBackend = Literal[
-    "paged",
-    "contiguous",
-    "external",
-]
+from typing import Any, Literal
 
 
 FinishReason = Literal[
     "eos_token",
     "stop_token",
-    "stop_string",
     "max_new_tokens",
 ]
 
@@ -43,26 +30,14 @@ class TemperatureTopPSampling(SamplingStrategy):
 class SamplingConfig:
     strategy: SamplingStrategy = field(default_factory=GreedySampling)
     max_new_tokens: int = 16
-    stop_token_ids: list[int] = field(default_factory=list)
-    stop_strings: list[str] = field(default_factory=list)
+    stop_token_sequences: list[list[int]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class DebugConfig:
     collect_per_layer: bool = False
-    return_logits: bool = False
     expert_trace: bool = False
     timing_trace: bool = False
-
-
-@dataclass(slots=True)
-class KvCacheHandle:
-    backend: KvBackend
-    handle: Any | None = None
-    capacity_tokens: int | None = None
-    page_size: int | None = None
-    num_layers: int | None = None
-    dtype: str | None = None
 
 
 @dataclass(slots=True)
@@ -76,7 +51,6 @@ class GenerationState:
     prompt_token_ids: list[int] = field(default_factory=list)
     generated_token_ids: list[int] = field(default_factory=list)
 
-    kv_cache: KvCacheHandle | None = None
     last_logits: Any | None = None
     last_token_id: int | None = None
 
@@ -87,7 +61,6 @@ class GenerationState:
     def reset_for_new_generation(self) -> None:
         self.prompt_token_ids.clear()
         self.generated_token_ids.clear()
-        self.kv_cache = None
         self.last_logits = None
         self.last_token_id = None
         self.is_prefilled = False
@@ -107,27 +80,36 @@ class GenerationState:
         return self.prompt_tokens_count + self.completion_tokens_count
 
     @property
+    def next_position(self) -> int:
+        return self.prompt_tokens_count + self.completion_tokens_count
+
+    @property
     def can_decode(self) -> bool:
-        return (
-            self.is_prefilled
-            and (not self.is_finished)
-            and (self.last_logits is not None)
-        )
+        return self.is_prefilled and (not self.is_finished)
 
 
 @dataclass(slots=True)
 class PrefillResult:
     prompt_tokens: int
+    next_token_logits: Any
+    next_position: int
     prefill_time_ms: float | None = None
-    per_layer_stats: Any | None = None
+    aux: Any | None = None
 
 
 @dataclass(slots=True)
 class DecodeStepResult:
-    token_id: int
-    text: str | None = None
-    finish_reason: FinishReason | None = None
+    logits: Any
+    next_position: int
     decode_time_ms: float | None = None
+    aux: Any | None = None
+
+
+@dataclass(slots=True)
+class SampleResult:
+    token_id: int
+    sample_time_ms: float | None = None
+    aux: Any | None = None
 
 
 @dataclass(slots=True)
