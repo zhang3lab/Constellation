@@ -118,14 +118,6 @@ def main() -> None:
         )
         logits = torch.matmul(final_hidden, lm_head_w.t())
 
-        p = outdir / "final_hidden.pt"
-        torch.save(to_torch_f32_cpu(final_hidden[0] if result["output"].ndim == 1 else final_hidden), p)
-        report["saved"].append(str(p))
-
-        p = outdir / "logits.pt"
-        torch.save(to_torch_f32_cpu(logits[0] if result["output"].ndim == 1 else logits), p)
-        report["saved"].append(str(p))
-
         report = {
             "backend": "runtime",
             "input_ids": input_ids_list,
@@ -144,8 +136,12 @@ def main() -> None:
             torch.save(to_torch_f32_cpu(item["output"]), p)
             report["saved"].append(str(p))
 
+        p = outdir / "final_hidden.pt"
+        torch.save(to_torch_f32_cpu(final_hidden[0] if result["output"].ndim == 1 else final_hidden), p)
+        report["saved"].append(str(p))
+
         p = outdir / "logits.pt"
-        torch.save(to_torch_f32_cpu(logits_result.output), p)
+        torch.save(to_torch_f32_cpu(logits[0] if result["output"].ndim == 1 else logits), p)
         report["saved"].append(str(p))
 
         with (outdir / "runtime_full_model.json").open("w", encoding="utf-8") as f:
