@@ -223,7 +223,12 @@ def main() -> None:
                 )
 
             with torch.no_grad():
-                outputs = model(input_ids=ids_t, use_cache=False, return_dict=True)
+                outputs = model(
+                    input_ids=ids_t,
+                    use_cache=False,
+                    return_dict=True,
+                    output_hidden_states=True,
+                )
         finally:
             for h in hooks:
                 h.remove()
@@ -305,17 +310,17 @@ def main() -> None:
 
             if outputs is None:
                 raise RuntimeError("model forward outputs is None")
-            if not isinstance(outputs[0], torch.Tensor):
-                raise RuntimeError(f"outputs[0] is not tensor, got {type(outputs[0]).__name__}")
+            if outputs.hidden_states is None or len(outputs.hidden_states) == 0:
+                raise RuntimeError("model forward did not return hidden_states")
             if not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
                 raise RuntimeError("model forward did not return tensor logits")
 
             hidden_from_hook = final_hidden                                  # cpu, [T,H]
-            hidden_from_outputs = outputs[0].detach().float().cpu()          # [1,T,H] or [T,H]
+            hidden_from_outputs = outputs.hidden_states[-1].detach().float().cpu()
             if hidden_from_outputs.ndim >= 1 and hidden_from_outputs.shape[0] == 1:
                 hidden_from_outputs = hidden_from_outputs.squeeze(0).contiguous()
 
-            logits_from_outputs = outputs.logits.detach().float().cpu()      # [1,T,V] or [T,V]
+            logits_from_outputs = outputs.logits.detach().float().cpu()
             if logits_from_outputs.ndim >= 1 and logits_from_outputs.shape[0] == 1:
                 logits_from_outputs = logits_from_outputs.squeeze(0).contiguous()
 
@@ -324,10 +329,8 @@ def main() -> None:
                 device=lm_head_w.device,
                 dtype=lm_head_w.dtype,
             )
-
             with torch.no_grad():
                 logits_manual = torch.matmul(final_hidden_dev, lm_head_w.t())
-
             logits_manual = logits_manual.detach().float().cpu()
 
             p = outdir / "logits.pt"
