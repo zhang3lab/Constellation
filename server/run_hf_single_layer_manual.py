@@ -172,6 +172,8 @@ def main() -> None:
     loader = DeepseekModelLoader(args.model_dir)
     model = load_hf_model(args.model_dir, args.device)
     cfg = model.config
+    num_layers = int(getattr(cfg, "num_hidden_layers"))
+    is_last_layer = (target_layer == num_layers - 1)
 
     try:
         for name in names_to_target_layer(cfg, restricted_local_expert_ids, target_layer):
@@ -181,8 +183,9 @@ def main() -> None:
         ids_t = torch.tensor([ids], dtype=torch.long, device=next(model.parameters()).device)
 
         layer_outputs: dict[str, torch.Tensor] = {}
+        misc_outputs: dict[str, torch.Tensor] = {}
 
-        def make_hook(name: str):
+        def make_layer_hook(name: str):
             def _hook(_module, _inp, out):
                 x = out[0] if isinstance(out, tuple) else out
                 if not isinstance(x, torch.Tensor):
@@ -192,20 +195,47 @@ def main() -> None:
                 layer_outputs[name] = x.detach().float().cpu()
             return _hook
 
+        def make_misc_hook(name: str):
+            def _hook(_module, _inp, out):
+                x = out[0] if isinstance(out, tuple) else out
+                if not isinstance(x, torch.Tensor):
+                    raise TypeError(f"hook {name}: expected tensor, got {type(x).__name__}")
+                if x.ndim >= 1 and x.shape[0] == 1:
+                    x = x.squeeze(0)
+                misc_outputs[name] = x.detach().float().cpu()
+            return _hook
+
         hooks = []
-        for i in range(target_layer):
-            hooks.append(model.model.layers[i].register_forward_hook(make_hook(f"layer_{i}_output")))
+        outputs = None
+        try:
+            for i in range(target_layer):
+                hooks.append(
+                    model.model.layers[i].register_forward_hook(
+                        make_layer_hook(f"layer_{i}_output")
+                    )
+                )
 
-        with torch.no_grad():
-            _ = model(input_ids=ids_t, use_cache=False, return_dict=True)
+            if is_last_layer:
+                hooks.append(
+                    model.model.norm.register_forward_hook(
+                        make_misc_hook("final_hidden")
+                    )
+                )
 
-        for h in hooks:
-            h.remove()
+            with torch.no_grad():
+                outputs = model(input_ids=ids_t, use_cache=False, return_dict=True)
+        finally:
+            for h in hooks:
+                h.remove()
 
         dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
         router_dbg = {}
         if is_sparse_layer(cfg, target_layer):
-            router_dbg = getattr(model.model.layers[target_layer].mlp.gate, "last_router_debug", {}) or {}
+            router_dbg = getattr(
+                model.model.layers[target_layer].mlp.gate,
+                "last_router_debug",
+                {},
+            ) or {}
 
         saved: list[str] = []
 
@@ -264,6 +294,23 @@ def main() -> None:
             save_tensor_if_present(saved, outdir, dbg, "layer_output", f"{prefix}_output.pt")
             aux_keys = sorted(dbg.keys())
 
+        if is_last_layer:
+            final_hidden = misc_outputs.get("final_hidden")
+            if final_hidden is None:
+                raise RuntimeError("missing final_hidden hook output from model.model.norm")
+            p = outdir / "final_hidden.pt"
+            torch.save(final_hidden, p)
+            saved.append(str(p))
+
+            if outputs is None or not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
+                raise RuntimeError("model forward did not return tensor logits")
+            logits = outputs.logits
+            if logits.ndim >= 1 and logits.shape[0] == 1:
+                logits = logits.squeeze(0)
+            p = outdir / "logits.pt"
+            torch.save(logits.detach().float().cpu(), p)
+            saved.append(str(p))
+
         report = {
             "backend": "hf_absorbed",
             "layer_id": target_layer,
@@ -275,6 +322,8 @@ def main() -> None:
             "debug_keys": sorted(list(dbg.keys())),
             "router_debug_keys": sorted(list(router_dbg.keys())),
             "aux_keys": aux_keys,
+            "has_final_hidden": bool(is_last_layer),
+            "has_logits": bool(is_last_layer),
         }
         with (outdir / "hf_single_layer_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
