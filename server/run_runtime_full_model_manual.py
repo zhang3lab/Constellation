@@ -127,6 +127,25 @@ def main() -> None:
             "saved": [],
         }
 
+        if session.backbone_store is None:
+            raise RuntimeError("session.backbone_store is not initialized")
+
+        lm_head_w = session.backbone_store.lm_head()
+        norm_w = session.backbone_store.model_norm()
+
+        if lm_head_w is None:
+            raise RuntimeError("session.backbone_store.lm_head is not initialized")
+        if norm_w is None:
+            raise RuntimeError("session.backbone_store.model_norm is not initialized")
+
+        p = outdir / "lm_head_weight.pt"
+        torch.save(to_torch_f32_cpu(lm_head_w), p)
+        report["saved"].append(str(p))
+
+        p = outdir / "final_norm_weight.pt"
+        torch.save(to_torch_f32_cpu(norm_w), p)
+        report["saved"].append(str(p))
+
         for item in result.get("per_layer", []):
             if "layer_id" not in item:
                 continue

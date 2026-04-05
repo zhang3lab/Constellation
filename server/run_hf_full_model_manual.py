@@ -232,6 +232,12 @@ def main() -> None:
                 x = x.squeeze(0)
             save_tensor(outdir, "final_logits", x, saved)
 
+        lm_head_weight = model.lm_head.weight.detach().float().cpu()
+        save_tensor(outdir, "lm_head_weight", lm_head_weight, saved)
+
+        norm_weight = model.model.norm.weight.detach().float().cpu()
+        save_tensor(outdir, "final_norm_weight", norm_weight, saved)
+
         report = {
             "backend": "hf_absorbed",
             "prompt": prompt,
