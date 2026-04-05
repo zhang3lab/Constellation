@@ -126,6 +126,15 @@ def names_to_target_layer(cfg, restricted_local_expert_ids: list[int], target_la
                 ]
             )
 
+    num_layers = int(getattr(cfg, "num_hidden_layers"))
+    if int(target_layer) == num_layers - 1:
+        names.extend(
+            [
+                "model.norm.weight",
+                "lm_head.weight",
+            ]
+        )
+
     return names
 
 
