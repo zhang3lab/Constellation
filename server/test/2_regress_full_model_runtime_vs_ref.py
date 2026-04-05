@@ -6,16 +6,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from server.backbone_store import BackboneLoadPlan, preload_non_moe_backbone
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.absorbed_latent_ref import run_attention_block_ref
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
 from server.full_model_types import ModelExecResult
-from server.full_model_runtime import run_full_model
+from server.generation_types import PrefillResult
 from server.inference_session import InferenceSession
-from server.tensor_cache import MappedTensorStore
+from server.prefill_runtime import run_prefill
 from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 
 
@@ -49,10 +48,81 @@ class DeepseekFullModelReference(DeepseekFullModelExecutor):
 
 def build_layer_map(per_layer):
     out = {}
+    if per_layer is None:
+        return out
+
+    if isinstance(per_layer, dict):
+        for key, value in per_layer.items():
+            layer_id = int(str(key).split("_")[-1]) if isinstance(key, str) else int(key)
+            if isinstance(value, dict) and "hidden_out" in value:
+                out[layer_id] = to_numpy_f32(value["hidden_out"])
+        return out
+
     for item in per_layer:
         if "layer_id" in item:
             out[int(item["layer_id"])] = to_numpy_f32(item["output"])
     return out
+
+
+def _require_prefill_result(x: Any, name: str) -> PrefillResult:
+    if not isinstance(x, PrefillResult):
+        raise TypeError(f"{name} expected PrefillResult, got {type(x).__name__}")
+    return x
+
+
+def _extract_prefill_outputs(prefill_result: PrefillResult) -> dict[str, Any]:
+    aux = prefill_result.aux
+    if aux is None:
+        raise RuntimeError("prefill_result.aux must not be None")
+
+    input_ids = aux.get("input_ids")
+    if not isinstance(input_ids, list) or not input_ids:
+        raise RuntimeError("prefill_result.aux['input_ids'] must be a non-empty list[int]")
+    if not all(isinstance(x, int) for x in input_ids):
+        raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
+
+    final_hidden_t = aux.get("final_hidden")
+    last_hidden_t = aux.get("last_hidden")
+    logits_t = prefill_result.next_token_logits
+
+    if not isinstance(final_hidden_t, torch.Tensor):
+        raise TypeError(
+            f"prefill_result.aux['final_hidden'] expected torch.Tensor, got {type(final_hidden_t).__name__}"
+        )
+    if not isinstance(last_hidden_t, torch.Tensor):
+        raise TypeError(
+            f"prefill_result.aux['last_hidden'] expected torch.Tensor, got {type(last_hidden_t).__name__}"
+        )
+    if not isinstance(logits_t, torch.Tensor):
+        raise TypeError(
+            f"prefill_result.next_token_logits expected torch.Tensor, got {type(logits_t).__name__}"
+        )
+
+    if final_hidden_t.ndim != 2:
+        raise RuntimeError(
+            f"prefill_result.aux['final_hidden'] expected shape [T, H], got {tuple(final_hidden_t.shape)}"
+        )
+    if last_hidden_t.ndim != 1:
+        raise RuntimeError(
+            f"prefill_result.aux['last_hidden'] expected shape [H], got {tuple(last_hidden_t.shape)}"
+        )
+    if logits_t.ndim != 1:
+        raise RuntimeError(
+            f"prefill_result.next_token_logits expected shape [V], got {tuple(logits_t.shape)}"
+        )
+
+    if final_hidden_t.shape[0] != len(input_ids):
+        raise RuntimeError(
+            f"final_hidden length mismatch: T={final_hidden_t.shape[0]} len(input_ids)={len(input_ids)}"
+        )
+
+    return {
+        "input_ids": [int(x) for x in input_ids],
+        "final_hidden": to_numpy_f32(final_hidden_t),
+        "last_hidden": to_numpy_f32(last_hidden_t),
+        "per_layer": aux.get("per_layer"),
+        "logits": to_numpy_f32(logits_t),
+    }
 
 
 def run_runtime_path(
@@ -74,32 +144,24 @@ def run_runtime_path(
     )
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
-    prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = prepared["hidden_in"]
+    if session.page_attention_cache_managers is None:
+        raise RuntimeError("session.page_attention_cache_managers is not initialized")
+    if not isinstance(session.page_attention_cache_managers, dict):
+        raise RuntimeError("session.page_attention_cache_managers must be a dict")
 
-    result = run_full_model(
-        session,
-        hidden,
-        start_layer=start_layer,
-        end_layer=end_layer,
-        position_ids=prepared.get("position_ids"),
-        attention_mask=prepared.get("attention_mask"),
-        kv_cache=session.page_attention_cache_managers,
-        collect_per_layer=collect_per_layer,
+    prefill_result = _require_prefill_result(
+        run_prefill(
+            session,
+            prompt=prompt,
+            start_layer=start_layer,
+            end_layer=end_layer,
+            kv_cache=session.page_attention_cache_managers,
+            collect_per_layer=collect_per_layer,
+        ),
+        "run_prefill(...)",
     )
 
-    logits_result = session.full_model_executor.run_final_norm_and_lm_head(
-        result["output"],
-        return_aux=False,
-    )
-
-    return {
-        "prepared": prepared,
-        "hidden_in": hidden,
-        "final_hidden": to_numpy_f32(result["output"]),
-        "per_layer": result.get("per_layer", []),
-        "logits": to_numpy_f32(logits_result.output),
-    }
+    return _extract_prefill_outputs(prefill_result)
 
 
 def run_reference_path(
@@ -119,37 +181,28 @@ def run_reference_path(
         split_layer=30,
         backbone_dtype=torch.float32,
         kv_cache_cfg=kv_cache_cfg,
-        plan=BackboneLoadPlan.runtime_fp32_no_attention_no_routed_experts(),
     )
 
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
-    prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = prepared["hidden_in"]
+    if session.page_attention_cache_managers is None:
+        raise RuntimeError("session.page_attention_cache_managers is not initialized")
+    if not isinstance(session.page_attention_cache_managers, dict):
+        raise RuntimeError("session.page_attention_cache_managers must be a dict")
 
-    result = run_full_model(
-        session,
-        hidden,
-        start_layer=start_layer,
-        end_layer=end_layer,
-        position_ids=prepared.get("position_ids"),
-        attention_mask=prepared.get("attention_mask"),
-        kv_cache=session.page_attention_cache_managers,
-        collect_per_layer=collect_per_layer,
+    prefill_result = _require_prefill_result(
+        run_prefill(
+            session,
+            prompt=prompt,
+            start_layer=start_layer,
+            end_layer=end_layer,
+            kv_cache=session.page_attention_cache_managers,
+            collect_per_layer=collect_per_layer,
+        ),
+        "run_prefill(...)",
     )
 
-    logits_result = session.full_model_executor.run_final_norm_and_lm_head(
-        result["output"],
-        return_aux=False,
-    )
-
-    return {
-        "prepared": prepared,
-        "hidden_in": hidden,
-        "final_hidden": to_numpy_f32(result["output"]),
-        "per_layer": result.get("per_layer", []),
-        "logits": to_numpy_f32(logits_result.output),
-    }
+    return _extract_prefill_outputs(prefill_result)
 
 
 def main():
@@ -182,13 +235,13 @@ def main():
             collect_per_layer=True,
         )
 
-    print_stats("runtime.hidden_in", runtime_out["hidden_in"])
-    print_stats("ref.hidden_in", ref_out["hidden_in"])
-    compare_arrays("hidden_in", ref_out["hidden_in"], runtime_out["hidden_in"])
-
     print_stats("runtime.final_hidden", runtime_out["final_hidden"])
     print_stats("ref.final_hidden", ref_out["final_hidden"])
     compare_arrays("final_hidden", ref_out["final_hidden"], runtime_out["final_hidden"])
+
+    print_stats("runtime.last_hidden", runtime_out["last_hidden"])
+    print_stats("ref.last_hidden", ref_out["last_hidden"])
+    compare_arrays("last_hidden", ref_out["last_hidden"], runtime_out["last_hidden"])
 
     print_stats("runtime.logits", runtime_out["logits"])
     print_stats("ref.logits", ref_out["logits"])
@@ -205,23 +258,23 @@ def main():
     for layer_id in common_layers:
         rt = to_numpy_f32(rt_layers[layer_id]).reshape(-1)
         rf = to_numpy_f32(rf_layers[layer_id]).reshape(-1)
-     
+
         print_stats(f"runtime.layer{layer_id}_output", rt)
         print_stats(f"ref.layer{layer_id}_output", rf)
         compare_arrays(f"layer{layer_id}_output", rf, rt)
-     
+
         diff = np.abs(rf - rt)
         mean_abs = float(diff.mean())
         max_abs = float(diff.max())
         cos = float(
             np.dot(rf, rt) / (np.linalg.norm(rf) * np.linalg.norm(rt) + 1e-12)
         )
-     
+
         assert cos >= FULL_MODEL_LAYER_COS_MIN, (
             f"layer{layer_id} cosine too low: got={cos:.8f} "
             f"expected>={FULL_MODEL_LAYER_COS_MIN:.8f}"
         )
-     
+
         if layer_id == common_layers[-1]:
             last_layer_metrics = {
                 "layer_id": layer_id,

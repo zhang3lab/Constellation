@@ -10,7 +10,9 @@ from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
 from server.deepseek_full_model_executor import DeepseekFullModelExecutor
+from server.generation_types import PrefillResult
 from server.inference_session import InferenceSession
+from server.prefill_runtime import run_prefill
 from server.test.utils import prenorm_hidden_for_attention, print_stats, to_numpy_f32
 
 
@@ -32,11 +34,49 @@ def run_runtime_attention(
     )
     session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
-    prepared = session.full_model_executor.prepare_prompt_hidden_input(prompt)
-    hidden = prepared["hidden_in"]
-    hidden_prenorm = prenorm_hidden_for_attention(session, hidden, layer_id)
+    if session.page_attention_cache_managers is None:
+        raise RuntimeError("session.page_attention_cache_managers is not initialized")
+    if not isinstance(session.page_attention_cache_managers, dict):
+        raise RuntimeError("session.page_attention_cache_managers must be a dict")
 
-    pos = np.asarray([position_id], dtype=np.int64)
+    prefill_result = run_prefill(
+        session,
+        prompt=prompt,
+        start_layer=0,
+        end_layer=60,
+        kv_cache=session.page_attention_cache_managers,
+        collect_per_layer=False,
+    )
+
+    if not isinstance(prefill_result, PrefillResult):
+        raise TypeError(
+            f"run_prefill(...) expected PrefillResult, got {type(prefill_result).__name__}"
+        )
+
+    aux = prefill_result.aux
+    if aux is None:
+        raise RuntimeError("prefill_result.aux must not be None")
+
+    input_ids = aux.get("input_ids")
+    if not isinstance(input_ids, list) or not input_ids:
+        raise RuntimeError("prefill_result.aux['input_ids'] must be a non-empty list[int]")
+    if not all(isinstance(x, int) for x in input_ids):
+        raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
+
+    hidden_t = aux.get("last_hidden")
+    if not isinstance(hidden_t, torch.Tensor):
+        raise TypeError(
+            f"prefill_result.aux['last_hidden'] expected torch.Tensor, got {type(hidden_t).__name__}"
+        )
+    if hidden_t.ndim != 1:
+        raise RuntimeError(
+            f"prefill_result.aux['last_hidden'] expected shape [H], got {tuple(hidden_t.shape)}"
+        )
+
+    hidden = to_numpy_f32(hidden_t)
+    hidden_prenorm = prenorm_hidden_for_attention(session, hidden_t, layer_id)
+
+    pos = torch.tensor([int(position_id)], dtype=torch.int64)
 
     out = session.full_model_executor.run_attention_block(
         hidden_prenorm,
@@ -48,7 +88,8 @@ def run_runtime_attention(
     )
 
     return {
-        "hidden_in": to_numpy_f32(hidden),
+        "input_ids": input_ids,
+        "hidden_in": hidden,
         "hidden_prenorm": to_numpy_f32(hidden_prenorm),
         "output": to_numpy_f32(out.output),
         "aux": out.aux or {},
@@ -75,10 +116,14 @@ def main() -> None:
             position_id=args.position_id,
         )
 
+    input_ids = runtime_out["input_ids"]
     hidden_in = runtime_out["hidden_in"]
     hidden_prenorm = runtime_out["hidden_prenorm"]
     attention_output = runtime_out["output"]
     aux = runtime_out["aux"]
+
+    print(f"[smoke] prompt={args.prompt!r}")
+    print(f"[smoke] input_ids={input_ids}")
 
     print_stats("runtime.hidden_in", hidden_in)
     print_stats("runtime.hidden_prenorm", hidden_prenorm)

@@ -401,36 +401,6 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         return x
 
 
-    def prepare_prompt_hidden_input(self, prompt: str) -> dict:
-        """
-        Prepare prompt-side inputs for full-model execution.
-     
-        Return value guarantees:
-        - prepared["hidden_in"]: torch.Tensor for the last prompt token input hidden
-        - prepared["input_ids"]: token ids of the prompt
-     
-        Optional fields:
-        - prepared["position_ids"]: may be None; callers may fall back to len(input_ids) - 1
-        - prepared["attention_mask"]: may be None
-        - prepared["kv_cache"]: may be None
-        """
-        input_ids = self.encode(prompt)
-        if not input_ids:
-            raise RuntimeError("prompt encoded to empty input_ids")
-     
-        last_id = int(input_ids[-1])
-        hidden = self.embed_token_ids(last_id)
-     
-        return {
-            "prompt": prompt,
-            "input_ids": input_ids,
-            "hidden_in": hidden,
-            "position_ids": None,
-            "attention_mask": None,
-            "kv_cache": None,
-        }
-
-
     def infer_prompt_last_position(self, prepared: dict) -> int:
         prepared_pos = prepared.get("position_ids")
         if prepared_pos is not None:
