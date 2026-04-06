@@ -29,7 +29,7 @@ FULL_MODEL_FINAL_MAX_ABS_MAX = 1.0
 class DeepseekFullModelReference(DeepseekFullModelExecutor):
     def run_attention_block(
         self,
-        hidden_in: np.ndarray,
+        hidden_in,
         layer_id: int,
         *,
         position_ids=None,
@@ -37,15 +37,98 @@ class DeepseekFullModelReference(DeepseekFullModelExecutor):
         kv_cache=None,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        return run_attention_block_ref(
-            self.session,
-            hidden_in,
-            int(layer_id),
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            kv_cache=kv_cache,
-            return_aux=return_aux,
-        )
+        if isinstance(hidden_in, np.ndarray):
+            hidden_t = torch.from_numpy(hidden_in)
+        else:
+            hidden_t = hidden_in
+
+        if not isinstance(hidden_t, torch.Tensor):
+            raise TypeError(
+                f"hidden_in expected torch.Tensor or np.ndarray, got {type(hidden_in).__name__}"
+            )
+
+        if hidden_t.ndim == 1:
+            return run_attention_block_ref(
+                self.session,
+                hidden_t,
+                int(layer_id),
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                kv_cache=kv_cache,
+                return_aux=return_aux,
+            )
+
+        if hidden_t.ndim != 2:
+            raise RuntimeError(
+                f"run_attention_block hidden_in must be 1D or 2D, got shape={tuple(hidden_t.shape)}"
+            )
+
+        seq_len = int(hidden_t.shape[0])
+        if seq_len <= 0:
+            raise RuntimeError("run_attention_block hidden_in must have positive seq_len")
+
+        if position_ids is None:
+            pos_list = list(range(seq_len))
+        elif isinstance(position_ids, torch.Tensor):
+            pos_list = [int(x) for x in position_ids.reshape(-1).tolist()]
+        else:
+            pos_list = [int(x) for x in np.asarray(position_ids).reshape(-1).tolist()]
+
+        if len(pos_list) != seq_len:
+            raise RuntimeError(
+                f"position_ids length mismatch: len(position_ids)={len(pos_list)} seq_len={seq_len}"
+            )
+
+        outputs = []
+        aux_steps = []
+
+        for i in range(seq_len):
+            step_hidden = hidden_t[i]
+            step_pos = np.asarray([pos_list[i]], dtype=np.int64)
+
+            step_result = run_attention_block_ref(
+                self.session,
+                step_hidden,
+                int(layer_id),
+                position_ids=step_pos,
+                attention_mask=attention_mask,
+                kv_cache=kv_cache,
+                return_aux=return_aux,
+            )
+
+            step_out = step_result.output
+            if isinstance(step_out, np.ndarray):
+                step_out = torch.from_numpy(step_out)
+            if not isinstance(step_out, torch.Tensor):
+                raise TypeError(
+                    f"step output expected torch.Tensor or np.ndarray, got {type(step_result.output).__name__}"
+                )
+            if step_out.ndim != 1:
+                raise RuntimeError(
+                    f"step output must be 1D, got shape={tuple(step_out.shape)}"
+                )
+
+            outputs.append(step_out)
+            if return_aux:
+                aux_steps.append(step_result.aux or {})
+
+        stacked = torch.stack(outputs, dim=0)
+
+        aux = {}
+        if return_aux:
+            aux = {
+                "kind": "attention_block_ref",
+                "layer_id": int(layer_id),
+                "seq_len": seq_len,
+                "positions": pos_list,
+                "steps": aux_steps,
+            }
+            if aux_steps:
+                last_aux = aux_steps[-1]
+                for k, v in last_aux.items():
+                    aux.setdefault(k, v)
+
+        return ModelExecResult(output=stacked, aux=aux)
 
 
 def build_layer_map(per_layer):
