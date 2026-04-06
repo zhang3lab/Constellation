@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-from typing import Any
 
 import numpy as np
 import torch
@@ -37,20 +36,14 @@ class DeepseekFullModelReference(DeepseekFullModelExecutor):
         kv_cache=None,
         return_aux: bool = False,
     ) -> ModelExecResult:
-        if isinstance(hidden_in, np.ndarray):
-            hidden_t = torch.from_numpy(hidden_in)
-        else:
-            hidden_t = hidden_in
+        x = torch.from_numpy(hidden_in) if isinstance(hidden_in, np.ndarray) else hidden_in
+        if not isinstance(x, torch.Tensor):
+            raise TypeError(f"hidden_in expected torch.Tensor or np.ndarray, got {type(hidden_in).__name__}")
 
-        if not isinstance(hidden_t, torch.Tensor):
-            raise TypeError(
-                f"hidden_in expected torch.Tensor or np.ndarray, got {type(hidden_in).__name__}"
-            )
-
-        if hidden_t.ndim == 1:
+        if x.ndim == 1:
             return run_attention_block_ref(
                 self.session,
-                hidden_t,
+                x,
                 int(layer_id),
                 position_ids=position_ids,
                 attention_mask=attention_mask,
@@ -58,234 +51,119 @@ class DeepseekFullModelReference(DeepseekFullModelExecutor):
                 return_aux=return_aux,
             )
 
-        if hidden_t.ndim != 2:
-            raise RuntimeError(
-                f"run_attention_block hidden_in must be 1D or 2D, got shape={tuple(hidden_t.shape)}"
+        if x.ndim != 2:
+            raise RuntimeError(f"run_attention_block hidden_in must be 1D or 2D, got shape={tuple(x.shape)}")
+
+        pos = list(range(int(x.shape[0]))) if position_ids is None else [
+            int(v) for v in (
+                position_ids.reshape(-1).tolist()
+                if isinstance(position_ids, torch.Tensor)
+                else np.asarray(position_ids).reshape(-1).tolist()
             )
+        ]
+        if len(pos) != int(x.shape[0]):
+            raise RuntimeError(f"position_ids length mismatch: len(position_ids)={len(pos)} seq_len={int(x.shape[0])}")
 
-        seq_len = int(hidden_t.shape[0])
-        if seq_len <= 0:
-            raise RuntimeError("run_attention_block hidden_in must have positive seq_len")
-
-        if position_ids is None:
-            pos_list = list(range(seq_len))
-        elif isinstance(position_ids, torch.Tensor):
-            pos_list = [int(x) for x in position_ids.reshape(-1).tolist()]
-        else:
-            pos_list = [int(x) for x in np.asarray(position_ids).reshape(-1).tolist()]
-
-        if len(pos_list) != seq_len:
-            raise RuntimeError(
-                f"position_ids length mismatch: len(position_ids)={len(pos_list)} seq_len={seq_len}"
-            )
-
-        outputs = []
+        ys = []
         aux_steps = []
-
-        for i in range(seq_len):
-            step_hidden = hidden_t[i]
-            step_pos = np.asarray([pos_list[i]], dtype=np.int64)
-
-            step_result = run_attention_block_ref(
+        for i in range(int(x.shape[0])):
+            r = run_attention_block_ref(
                 self.session,
-                step_hidden,
+                x[i],
                 int(layer_id),
-                position_ids=step_pos,
+                position_ids=np.asarray([pos[i]], dtype=np.int64),
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
                 return_aux=return_aux,
             )
-
-            step_out = step_result.output
-            if isinstance(step_out, np.ndarray):
-                step_out = torch.from_numpy(step_out)
-            if not isinstance(step_out, torch.Tensor):
-                raise TypeError(
-                    f"step output expected torch.Tensor or np.ndarray, got {type(step_result.output).__name__}"
-                )
-            if step_out.ndim != 1:
-                raise RuntimeError(
-                    f"step output must be 1D, got shape={tuple(step_out.shape)}"
-                )
-
-            outputs.append(step_out)
+            y = torch.from_numpy(r.output) if isinstance(r.output, np.ndarray) else r.output
+            ys.append(y)
             if return_aux:
-                aux_steps.append(step_result.aux or {})
-
-        stacked = torch.stack(outputs, dim=0)
+                aux_steps.append(r.aux or {})
 
         aux = {}
         if return_aux:
-            aux = {
-                "kind": "attention_block_ref",
-                "layer_id": int(layer_id),
-                "seq_len": seq_len,
-                "positions": pos_list,
-                "steps": aux_steps,
-            }
+            aux = {"kind": "attention_block_ref", "layer_id": int(layer_id), "seq_len": int(x.shape[0]), "positions": pos, "steps": aux_steps}
             if aux_steps:
-                last_aux = aux_steps[-1]
-                for k, v in last_aux.items():
-                    aux.setdefault(k, v)
+                aux.update({k: v for k, v in aux_steps[-1].items() if k not in aux})
 
-        return ModelExecResult(output=stacked, aux=aux)
+        return ModelExecResult(output=torch.stack(ys, dim=0), aux=aux)
 
 
 def build_layer_map(per_layer):
     out = {}
     if per_layer is None:
         return out
-
     if isinstance(per_layer, dict):
-        for key, value in per_layer.items():
-            layer_id = int(str(key).split("_")[-1]) if isinstance(key, str) else int(key)
-            if isinstance(value, dict) and "hidden_out" in value:
-                out[layer_id] = to_numpy_f32(value["hidden_out"])
+        for k, v in per_layer.items():
+            lid = int(str(k).split("_")[-1]) if isinstance(k, str) else int(k)
+            if isinstance(v, dict) and "hidden_out" in v:
+                out[lid] = to_numpy_f32(v["hidden_out"])
         return out
-
     for item in per_layer:
         if "layer_id" in item:
             out[int(item["layer_id"])] = to_numpy_f32(item["output"])
     return out
 
 
-def _require_prefill_result(x: Any, name: str) -> PrefillResult:
-    if not isinstance(x, PrefillResult):
-        raise TypeError(f"{name} expected PrefillResult, got {type(x).__name__}")
-    return x
-
-
-def _extract_prefill_outputs(prefill_result: PrefillResult) -> dict[str, Any]:
-    aux = prefill_result.aux
-    if aux is None:
-        raise RuntimeError("prefill_result.aux must not be None")
-
+def _extract_prefill_outputs(prefill_result: PrefillResult):
+    if not isinstance(prefill_result, PrefillResult):
+        raise TypeError(f"prefill_result expected PrefillResult, got {type(prefill_result).__name__}")
+    aux = prefill_result.aux or {}
     input_ids = aux.get("input_ids")
-    if not isinstance(input_ids, list) or not input_ids:
-        raise RuntimeError("prefill_result.aux['input_ids'] must be a non-empty list[int]")
-    if not all(isinstance(x, int) for x in input_ids):
-        raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
+    final_hidden = aux.get("final_hidden")
+    last_hidden = aux.get("last_hidden")
+    logits = prefill_result.next_token_logits
 
-    final_hidden_t = aux.get("final_hidden")
-    last_hidden_t = aux.get("last_hidden")
-    logits_t = prefill_result.next_token_logits
-
-    if not isinstance(final_hidden_t, torch.Tensor):
-        raise TypeError(
-            f"prefill_result.aux['final_hidden'] expected torch.Tensor, got {type(final_hidden_t).__name__}"
-        )
-    if not isinstance(last_hidden_t, torch.Tensor):
-        raise TypeError(
-            f"prefill_result.aux['last_hidden'] expected torch.Tensor, got {type(last_hidden_t).__name__}"
-        )
-    if not isinstance(logits_t, torch.Tensor):
-        raise TypeError(
-            f"prefill_result.next_token_logits expected torch.Tensor, got {type(logits_t).__name__}"
-        )
-
-    if final_hidden_t.ndim != 2:
-        raise RuntimeError(
-            f"prefill_result.aux['final_hidden'] expected shape [T, H], got {tuple(final_hidden_t.shape)}"
-        )
-    if last_hidden_t.ndim != 1:
-        raise RuntimeError(
-            f"prefill_result.aux['last_hidden'] expected shape [H], got {tuple(last_hidden_t.shape)}"
-        )
-    if logits_t.ndim != 1:
-        raise RuntimeError(
-            f"prefill_result.next_token_logits expected shape [V], got {tuple(logits_t.shape)}"
-        )
-
-    if final_hidden_t.shape[0] != len(input_ids):
-        raise RuntimeError(
-            f"final_hidden length mismatch: T={final_hidden_t.shape[0]} len(input_ids)={len(input_ids)}"
-        )
+    if not isinstance(input_ids, torch.Tensor):
+        raise RuntimeError("prefill_result.aux['input_ids'] must be torch.Tensor")
+    if input_ids.ndim == 2 and input_ids.shape[0] == 1:
+        input_ids = input_ids[0]
+    if input_ids.ndim != 1 or input_ids.numel() <= 0:
+        raise RuntimeError(f"prefill_result.aux['input_ids'] expected shape [T], got {tuple(input_ids.shape)}")
+    if not isinstance(final_hidden, torch.Tensor) or final_hidden.ndim != 2:
+        raise RuntimeError("prefill_result.aux['final_hidden'] must be [T, H] torch.Tensor")
+    if not isinstance(last_hidden, torch.Tensor) or last_hidden.ndim != 1:
+        raise RuntimeError("prefill_result.aux['last_hidden'] must be [H] torch.Tensor")
+    if not isinstance(logits, torch.Tensor) or logits.ndim != 1:
+        raise RuntimeError("prefill_result.next_token_logits must be [V] torch.Tensor")
 
     return {
-        "input_ids": [int(x) for x in input_ids],
-        "final_hidden": to_numpy_f32(final_hidden_t),
-        "last_hidden": to_numpy_f32(last_hidden_t),
+        "input_ids": input_ids,
+        "final_hidden": to_numpy_f32(final_hidden),
+        "last_hidden": to_numpy_f32(last_hidden),
         "per_layer": aux.get("per_layer"),
-        "logits": to_numpy_f32(logits_t),
+        "logits": to_numpy_f32(logits),
     }
 
 
-def run_runtime_path(
-    session: InferenceSession,
-    *,
-    prompt: str,
-    start_layer: int,
-    end_layer: int,
-    collect_per_layer: bool,
-) -> dict[str, Any]:
-    session.full_model_executor = DeepseekFullModelExecutor(session)
-
+def _run_path(session: InferenceSession, *, prompt: str, start_layer: int, end_layer: int, collect_per_layer: bool, ref: bool):
+    session.full_model_executor = DeepseekFullModelReference(session) if ref else DeepseekFullModelExecutor(session)
     kv_cache_cfg = session.cfg["kv_cache"]
-    session.initialize_full_model_runtime(
+    kwargs = dict(
         tensor_cache_dir="tmp/non_moe_backbone_cache",
         split_layer=30,
-        backbone_dtype=torch.bfloat16,
+        backbone_dtype=torch.float32 if ref else torch.bfloat16,
         kv_cache_cfg=kv_cache_cfg,
     )
+    if ref:
+        kwargs["plan"] = BackboneLoadPlan.runtime_fp32_no_attention_no_routed_experts()
+    session.initialize_full_model_runtime(**kwargs)
 
-    if session.page_attention_cache_managers is None:
-        raise RuntimeError("session.page_attention_cache_managers is not initialized")
-    if not isinstance(session.page_attention_cache_managers, dict):
+    kv_cache = session.page_attention_cache_managers
+    if not isinstance(kv_cache, dict):
         raise RuntimeError("session.page_attention_cache_managers must be a dict")
 
-    prefill_result = _require_prefill_result(
+    return _extract_prefill_outputs(
         run_prefill(
             session,
             prompt=prompt,
             start_layer=start_layer,
             end_layer=end_layer,
-            kv_cache=session.page_attention_cache_managers,
+            kv_cache=kv_cache,
             collect_per_layer=collect_per_layer,
-        ),
-        "run_prefill(...)",
+        )
     )
-
-    return _extract_prefill_outputs(prefill_result)
-
-
-def run_reference_path(
-    session: InferenceSession,
-    *,
-    prompt: str,
-    start_layer: int,
-    end_layer: int,
-    collect_per_layer: bool,
-) -> dict[str, Any]:
-    session.full_model_executor = DeepseekFullModelReference(session)
-
-    kv_cache_cfg = session.cfg["kv_cache"]
-
-    session.initialize_full_model_runtime(
-        tensor_cache_dir="tmp/non_moe_backbone_cache",
-        split_layer=30,
-        backbone_dtype=torch.float32,
-        kv_cache_cfg=kv_cache_cfg,
-        plan=BackboneLoadPlan.runtime_fp32_no_attention_no_routed_experts(),
-    )
-
-    if session.page_attention_cache_managers is None:
-        raise RuntimeError("session.page_attention_cache_managers is not initialized")
-    if not isinstance(session.page_attention_cache_managers, dict):
-        raise RuntimeError("session.page_attention_cache_managers must be a dict")
-
-    prefill_result = _require_prefill_result(
-        run_prefill(
-            session,
-            prompt=prompt,
-            start_layer=start_layer,
-            end_layer=end_layer,
-            kv_cache=session.page_attention_cache_managers,
-            collect_per_layer=collect_per_layer,
-        ),
-        "run_prefill(...)",
-    )
-
-    return _extract_prefill_outputs(prefill_result)
 
 
 def main():
@@ -301,24 +179,26 @@ def main():
     setup_control_plane(coord, cfg)
 
     with InferenceSession(coord, cfg) as runtime_sess:
-        runtime_out = run_runtime_path(
+        runtime_out = _run_path(
             runtime_sess,
             prompt=args.prompt,
             start_layer=args.start_layer,
             end_layer=args.end_layer,
             collect_per_layer=True,
+            ref=False,
         )
 
     gc.collect()
     torch.cuda.empty_cache()
 
     with InferenceSession(coord, cfg) as ref_sess:
-        ref_out = run_reference_path(
+        ref_out = _run_path(
             ref_sess,
             prompt=args.prompt,
             start_layer=args.start_layer,
             end_layer=args.end_layer,
             collect_per_layer=True,
+            ref=True,
         )
 
     print_stats("runtime.final_hidden", runtime_out["final_hidden"])
@@ -335,99 +215,69 @@ def main():
 
     rt_layers = build_layer_map(runtime_out["per_layer"])
     rf_layers = build_layer_map(ref_out["per_layer"])
-
-    common_layers = sorted(set(rt_layers.keys()) & set(rf_layers.keys()))
+    common_layers = sorted(set(rt_layers) & set(rf_layers))
     print(f"[compare] common_layers={common_layers}")
 
-    last_layer_metrics = None
-
+    last = None
     for layer_id in common_layers:
         rt = to_numpy_f32(rt_layers[layer_id]).reshape(-1)
         rf = to_numpy_f32(rf_layers[layer_id]).reshape(-1)
-
         print_stats(f"runtime.layer{layer_id}_output", rt)
         print_stats(f"ref.layer{layer_id}_output", rf)
         compare_arrays(f"layer{layer_id}_output", rf, rt)
 
         diff = np.abs(rf - rt)
-        mean_abs = float(diff.mean())
-        max_abs = float(diff.max())
-        cos = float(
-            np.dot(rf, rt) / (np.linalg.norm(rf) * np.linalg.norm(rt) + 1e-12)
-        )
-
+        cos = float(np.dot(rf, rt) / (np.linalg.norm(rf) * np.linalg.norm(rt) + 1e-12))
         assert cos >= FULL_MODEL_LAYER_COS_MIN, (
-            f"layer{layer_id} cosine too low: got={cos:.8f} "
-            f"expected>={FULL_MODEL_LAYER_COS_MIN:.8f}"
+            f"layer{layer_id} cosine too low: got={cos:.8f} expected>={FULL_MODEL_LAYER_COS_MIN:.8f}"
         )
-
         if layer_id == common_layers[-1]:
-            last_layer_metrics = {
+            last = {
                 "layer_id": layer_id,
-                "mean_abs": mean_abs,
-                "max_abs": max_abs,
+                "mean_abs": float(diff.mean()),
+                "max_abs": float(diff.max()),
                 "cos": cos,
             }
 
-    if last_layer_metrics is None:
+    if last is None:
         raise RuntimeError("no common per-layer outputs found for regression check")
 
-    assert last_layer_metrics["cos"] >= FULL_MODEL_FINAL_COS_MIN, (
-        f"final layer cosine too low: "
-        f"layer={last_layer_metrics['layer_id']} "
-        f"got={last_layer_metrics['cos']:.8f} "
-        f"expected>={FULL_MODEL_FINAL_COS_MIN:.8f}"
+    assert last["cos"] >= FULL_MODEL_FINAL_COS_MIN, (
+        f"final layer cosine too low: layer={last['layer_id']} got={last['cos']:.8f} expected>={FULL_MODEL_FINAL_COS_MIN:.8f}"
     )
-
-    assert last_layer_metrics["mean_abs"] <= FULL_MODEL_FINAL_MEAN_ABS_MAX, (
-        f"final layer mean_abs too high: "
-        f"layer={last_layer_metrics['layer_id']} "
-        f"got={last_layer_metrics['mean_abs']:.6e} "
-        f"expected<={FULL_MODEL_FINAL_MEAN_ABS_MAX:.6e}"
+    assert last["mean_abs"] <= FULL_MODEL_FINAL_MEAN_ABS_MAX, (
+        f"final layer mean_abs too high: layer={last['layer_id']} got={last['mean_abs']:.6e} expected<={FULL_MODEL_FINAL_MEAN_ABS_MAX:.6e}"
     )
-
-    assert last_layer_metrics["max_abs"] <= FULL_MODEL_FINAL_MAX_ABS_MAX, (
-        f"final layer max_abs too high: "
-        f"layer={last_layer_metrics['layer_id']} "
-        f"got={last_layer_metrics['max_abs']:.6e} "
-        f"expected<={FULL_MODEL_FINAL_MAX_ABS_MAX:.6e}"
+    assert last["max_abs"] <= FULL_MODEL_FINAL_MAX_ABS_MAX, (
+        f"final layer max_abs too high: layer={last['layer_id']} got={last['max_abs']:.6e} expected<={FULL_MODEL_FINAL_MAX_ABS_MAX:.6e}"
     )
 
     print(
         "[regress] full_model passed: "
-        f"final_layer={last_layer_metrics['layer_id']} "
-        f"cos={last_layer_metrics['cos']:.8f} "
-        f"mean_abs={last_layer_metrics['mean_abs']:.6e} "
-        f"max_abs={last_layer_metrics['max_abs']:.6e}"
+        f"final_layer={last['layer_id']} cos={last['cos']:.8f} "
+        f"mean_abs={last['mean_abs']:.6e} max_abs={last['max_abs']:.6e}"
     )
 
-    rf_final = to_numpy_f32(ref_out["final_hidden"]).reshape(-1)
-    rt_final = to_numpy_f32(runtime_out["final_hidden"]).reshape(-1)
+    rf_final = ref_out["final_hidden"].reshape(-1)
+    rt_final = runtime_out["final_hidden"].reshape(-1)
     final_diff = np.abs(rf_final - rt_final)
     final_mean_abs = float(final_diff.mean())
     final_max_abs = float(final_diff.max())
-    final_cos = float(
-        np.dot(rf_final, rt_final) / (np.linalg.norm(rf_final) * np.linalg.norm(rt_final) + 1e-12)
-    )
+    final_cos = float(np.dot(rf_final, rt_final) / (np.linalg.norm(rf_final) * np.linalg.norm(rt_final) + 1e-12))
 
     print(
         "[regress] final hidden metrics: "
-        f"cos={final_cos:.8f} "
-        f"mean_abs={final_mean_abs:.6e} "
-        f"max_abs={final_max_abs:.6e}"
+        f"cos={final_cos:.8f} mean_abs={final_mean_abs:.6e} max_abs={final_max_abs:.6e}"
     )
 
     assert final_cos >= FULL_MODEL_FINAL_COS_MIN, (
-        f"final_hidden cosine too low: got={final_cos:.8f} "
-        f"expected>={FULL_MODEL_FINAL_COS_MIN:.8f}"
+        f"final_hidden cosine too low: got={final_cos:.8f} expected>={FULL_MODEL_FINAL_COS_MIN:.8f}"
     )
     assert final_mean_abs <= FULL_MODEL_FINAL_MEAN_ABS_MAX, (
-        f"final_hidden mean_abs too high: got={final_mean_abs:.6e} "
-        f"expected<={FULL_MODEL_FINAL_MEAN_ABS_MAX:.6e}"
+        f"final_hidden mean_abs too high: got={final_mean_abs:.6e} expected<={FULL_MODEL_FINAL_MEAN_ABS_MAX:.6e}"
     )
     assert final_max_abs <= FULL_MODEL_FINAL_MAX_ABS_MAX, (
-        f"final_hidden max_abs too high: got={final_max_abs:.6e} "
-        f"expected<={FULL_MODEL_FINAL_MAX_ABS_MAX:.6e}"
+        f"final_hidden max_abs too high: got={final_max_abs:.6e} expected<={FULL_MODEL_FINAL_MAX_ABS_MAX:.6e}"
     )
 
 

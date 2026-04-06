@@ -4,6 +4,8 @@ import time
 import uuid
 from typing import Any
 
+import torch
+
 from server.generation_runtime import run_generation_from_input_ids
 from server.generation_types import (
     GenerationResult,
@@ -174,34 +176,39 @@ def _normalize_messages(messages: Any) -> list[dict]:
 def _render_chat_messages_to_input_ids_and_prompt(
     session,
     messages: list[dict],
-) -> tuple[list[int], str]:
+    *,
+    return_aux: bool = False,
+) -> tuple[torch.Tensor, str | None]:
     tokenizer = _get_tokenizer(session)
 
-    prompt_text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    if not isinstance(prompt_text, str):
-        raise RuntimeError(
-            f"tokenizer.apply_chat_template(..., tokenize=False) expected str, got {type(prompt_text).__name__}"
+    prompt_text: str | None = None
+    if return_aux:
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
         )
+        if not isinstance(prompt_text, str):
+            raise RuntimeError(
+                f"tokenizer.apply_chat_template(..., tokenize=False) expected str, got {type(prompt_text).__name__}"
+            )
 
     input_ids = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
         add_generation_prompt=True,
+        return_tensors="pt",
     )
-    if not isinstance(input_ids, list) or not input_ids:
+    if not isinstance(input_ids, torch.Tensor):
         raise RuntimeError(
-            "tokenizer.apply_chat_template(..., tokenize=True) must return non-empty list[int]"
+            f"tokenizer.apply_chat_template(..., return_tensors='pt') expected torch.Tensor, got {type(input_ids).__name__}"
         )
-    if not all(isinstance(x, int) for x in input_ids):
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
         raise RuntimeError(
-            "tokenizer.apply_chat_template(..., tokenize=True) must return list[int]"
+            f"chat template input_ids expected shape [1, T], got {tuple(input_ids.shape)}"
         )
 
-    return [int(x) for x in input_ids], prompt_text
+    return input_ids, prompt_text
 
 
 def _normalize_stop_strings(stop: Any) -> list[str]:
@@ -348,7 +355,11 @@ def run_chat_completions(
     _reject_unsupported_request_fields(request)
 
     messages = _normalize_messages(request.get("messages"))
-    input_ids, prompt_text = _render_chat_messages_to_input_ids_and_prompt(session, messages)
+    input_ids, prompt_text = _render_chat_messages_to_input_ids_and_prompt(
+        session,
+        messages,
+        return_aux=return_aux,
+    )
     model_name = _get_model_name(session, request)
     sampling_config = _build_sampling_config(session, request)
 
@@ -401,7 +412,7 @@ def run_chat_completions(
             "result": payload,
             "aux": {
                 "prompt_text": prompt_text,
-                "input_ids": [int(x) for x in input_ids],
+                "input_ids": input_ids,
             },
         }
 

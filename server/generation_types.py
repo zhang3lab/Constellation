@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import torch
+
 
 FinishReason = Literal[
     "eos_token",
@@ -48,7 +50,7 @@ class GenerationState:
     sampling_config: SamplingConfig = field(default_factory=SamplingConfig)
     debug_config: DebugConfig = field(default_factory=DebugConfig)
 
-    prompt_token_ids: list[int] = field(default_factory=list)
+    prompt_token_ids: torch.Tensor | None = None
     generated_token_ids: list[int] = field(default_factory=list)
 
     last_logits: Any | None = None
@@ -59,7 +61,7 @@ class GenerationState:
     finish_reason: FinishReason | None = None
 
     def reset_for_new_generation(self) -> None:
-        self.prompt_token_ids.clear()
+        self.prompt_token_ids = None
         self.generated_token_ids.clear()
         self.last_logits = None
         self.last_token_id = None
@@ -69,7 +71,9 @@ class GenerationState:
 
     @property
     def prompt_tokens_count(self) -> int:
-        return len(self.prompt_token_ids)
+        if self.prompt_token_ids is None:
+            return 0
+        return int(self.prompt_token_ids.numel())
 
     @property
     def completion_tokens_count(self) -> int:

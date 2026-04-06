@@ -80,10 +80,24 @@ def _validate_aux_payload(aux_payload: dict) -> None:
         raise RuntimeError("aux['prompt_text'] must be a non-empty str")
 
     input_ids = aux_payload.get("input_ids")
-    if not isinstance(input_ids, list) or not input_ids:
-        raise RuntimeError("aux['input_ids'] must be a non-empty list[int]")
-    if not all(isinstance(x, int) for x in input_ids):
-        raise RuntimeError("aux['input_ids'] must be list[int]")
+    if not isinstance(input_ids, torch.Tensor):
+        raise RuntimeError("aux['input_ids'] must be torch.Tensor")
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise RuntimeError(
+            f"aux['input_ids'] expected shape [1, T], got {tuple(input_ids.shape)}"
+        )
+    if input_ids.numel() <= 0:
+        raise RuntimeError("aux['input_ids'] must be non-empty")
+
+
+def _jsonable(x):
+    if isinstance(x, torch.Tensor):
+        return x.tolist()
+    if isinstance(x, dict):
+        return {k: _jsonable(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_jsonable(v) for v in x]
+    return x
 
 
 def main() -> None:
@@ -220,13 +234,13 @@ def main() -> None:
         print(f"message={args.message!r}")
 
         print("--- case max_completion_tokens=0, return_aux=False ---")
-        print(json.dumps(response0, ensure_ascii=False, indent=2))
+        print(json.dumps(_jsonable(response0), ensure_ascii=False, indent=2))
 
         print("--- case max_completion_tokens=1, stop=list[str], return_aux=True ---")
-        print(json.dumps(response1, ensure_ascii=False, indent=2))
+        print(json.dumps(_jsonable(response1), ensure_ascii=False, indent=2))
 
         print("--- case max_tokens fallback, content=list[text], stop=str, return_aux=True ---")
-        print(json.dumps(response2, ensure_ascii=False, indent=2))
+        print(json.dumps(_jsonable(response2), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

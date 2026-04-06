@@ -64,10 +64,20 @@ def main():
             raise RuntimeError("prefill_result.aux must not be None")
 
         input_ids = aux.get("input_ids")
-        if not isinstance(input_ids, list) or not input_ids:
-            raise RuntimeError("prefill_result.aux['input_ids'] must be a non-empty list[int]")
-        if not all(isinstance(x, int) for x in input_ids):
-            raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
+        if not isinstance(input_ids, torch.Tensor):
+            raise RuntimeError("prefill_result.aux['input_ids'] must be torch.Tensor")
+        if input_ids.ndim == 2:
+            if input_ids.shape[0] != 1:
+                raise RuntimeError(
+                    f"prefill_result.aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+                )
+            input_ids = input_ids[0]
+        elif input_ids.ndim != 1:
+            raise RuntimeError(
+                f"prefill_result.aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+            )
+        if input_ids.numel() <= 0:
+            raise RuntimeError("prefill_result.aux['input_ids'] must be non-empty")
 
         last_hidden_t = aux.get("last_hidden")
         if not isinstance(last_hidden_t, torch.Tensor):
@@ -80,11 +90,14 @@ def main():
                 f"prefill_result.aux['last_hidden'] expected shape [H], got {tuple(last_hidden_t.shape)}"
             )
 
-        last_token_id = int(input_ids[-1])
-        embed_hidden_t = session.full_model_executor.embed_token_ids([last_token_id])
+        last_token_id = int(input_ids[-1].item())
+        embed_hidden_t = session.full_model_executor.embed_token_ids(
+            torch.tensor([last_token_id], dtype=torch.long)
+        )
         if not isinstance(embed_hidden_t, torch.Tensor):
             raise TypeError(
-                f"executor.embed_token_ids([last_token_id]) expected torch.Tensor, got {type(embed_hidden_t).__name__}"
+                "executor.embed_token_ids(torch.tensor([last_token_id], dtype=torch.long)) "
+                f"expected torch.Tensor, got {type(embed_hidden_t).__name__}"
             )
 
         if embed_hidden_t.ndim == 2:
@@ -102,7 +115,7 @@ def main():
         embed_hidden = to_numpy_f32(embed_hidden_t)
 
         print(f"[semantics] prompt={args.prompt!r}")
-        print(f"[semantics] input_ids={input_ids}")
+        print(f"[semantics] input_ids={input_ids.tolist()}")
         print(f"[semantics] last_token_id={last_token_id}")
         print(f"[semantics] prompt_tokens={prefill_result.prompt_tokens}")
         print(f"[semantics] next_position={prefill_result.next_position}")

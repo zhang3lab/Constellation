@@ -66,7 +66,7 @@ def _compare_aligned(name: str, ref_v: Any, rt_v: Any) -> None:
     compare_arrays(name, ref_aligned, rt_aligned)
 
 
-def _extract_prefill_last_hidden(prefill_result: PrefillResult) -> tuple[list[int], torch.Tensor]:
+def _extract_prefill_last_hidden(prefill_result: PrefillResult) -> tuple[torch.Tensor, torch.Tensor]:
     if not isinstance(prefill_result, PrefillResult):
         raise TypeError(
             f"prefill_result expected PrefillResult, got {type(prefill_result).__name__}"
@@ -77,10 +77,19 @@ def _extract_prefill_last_hidden(prefill_result: PrefillResult) -> tuple[list[in
         raise RuntimeError("prefill_result.aux must not be None")
 
     input_ids = aux.get("input_ids")
-    if not isinstance(input_ids, list) or not input_ids:
-        raise RuntimeError("prefill_result.aux['input_ids'] must be a non-empty list[int]")
-    if not all(isinstance(x, int) for x in input_ids):
-        raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
+    if not isinstance(input_ids, torch.Tensor):
+        raise RuntimeError("prefill_result.aux['input_ids'] must be torch.Tensor")
+    if input_ids.ndim == 2:
+        if input_ids.shape[0] != 1:
+            raise RuntimeError(
+                f"prefill_result.aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+            )
+    elif input_ids.ndim != 1:
+        raise RuntimeError(
+            f"prefill_result.aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+        )
+    if input_ids.numel() <= 0:
+        raise RuntimeError("prefill_result.aux['input_ids'] must be non-empty")
 
     last_hidden = aux.get("last_hidden")
     if not isinstance(last_hidden, torch.Tensor):
@@ -92,14 +101,14 @@ def _extract_prefill_last_hidden(prefill_result: PrefillResult) -> tuple[list[in
             f"prefill_result.aux['last_hidden'] expected shape [H], got {tuple(last_hidden.shape)}"
         )
 
-    return [int(x) for x in input_ids], last_hidden
+    return input_ids, last_hidden
 
 
 def produce_prefill_last_hidden(
     session: InferenceSession,
     *,
     prompt: str,
-) -> tuple[list[int], torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     session.full_model_executor = DeepseekFullModelExecutor(session)
 
     kv_cache_cfg = session.cfg["kv_cache"]
@@ -131,7 +140,7 @@ def run_runtime_attention(
     session: InferenceSession,
     *,
     hidden_t: torch.Tensor,
-    input_ids: list[int],
+    input_ids: torch.Tensor,
     layer_id: int,
     position_id: int,
 ) -> dict[str, Any]:
@@ -164,7 +173,7 @@ def run_runtime_attention(
     )
 
     return {
-        "input_ids": [int(x) for x in input_ids],
+        "input_ids": input_ids,
         "hidden_in": to_numpy_f32(hidden_t),
         "hidden_prenorm": to_numpy_f32(hidden_prenorm),
         "output": to_numpy_f32(out.output),
@@ -176,7 +185,7 @@ def run_reference_attention(
     session: InferenceSession,
     *,
     hidden_t: torch.Tensor,
-    input_ids: list[int],
+    input_ids: torch.Tensor,
     layer_id: int,
     position_id: int,
 ) -> dict[str, Any]:
@@ -214,7 +223,7 @@ def run_reference_attention(
     )
 
     return {
-        "input_ids": [int(x) for x in input_ids],
+        "input_ids": input_ids,
         "hidden_in": to_numpy_f32(hidden_t),
         "hidden_prenorm": to_numpy_f32(hidden_prenorm),
         "output": to_numpy_f32(out.output),
@@ -259,7 +268,7 @@ def main():
         )
 
     print(f"[compare] prompt={args.prompt!r}")
-    print(f"[compare] input_ids={input_ids}")
+    print(f"[compare] input_ids={input_ids.reshape(-1).tolist()}")
 
     _compare_aligned("hidden_in", ref_out["hidden_in"], runtime_out["hidden_in"])
     _compare_aligned("hidden_prenorm", ref_out["hidden_prenorm"], runtime_out["hidden_prenorm"])

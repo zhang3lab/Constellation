@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import Sequence
 
+import torch
+
 from .decode_runtime import run_decode_step_logits
 from .generation_types import (
     FinishReason,
@@ -116,7 +118,7 @@ def run_generation_from_input_ids(
     session,
     *,
     state: GenerationState,
-    input_ids: list[int],
+    input_ids: torch.Tensor,
     start_layer: int,
     end_layer: int,
     kv_cache,
@@ -126,12 +128,10 @@ def run_generation_from_input_ids(
             f"state expected GenerationState, got {type(state).__name__}"
         )
 
-    if not isinstance(input_ids, list):
-        raise TypeError(f"input_ids expected list[int], got {type(input_ids).__name__}")
-    if not input_ids:
-        raise RuntimeError("input_ids must be non-empty")
-    if not all(isinstance(x, int) for x in input_ids):
-        raise RuntimeError("input_ids must be list[int]")
+    if not isinstance(input_ids, torch.Tensor):
+        raise TypeError(
+            f"input_ids expected torch.Tensor, got {type(input_ids).__name__}"
+        )
 
     if kv_cache is None:
         raise RuntimeError("kv_cache must be initialized before run_generation_from_input_ids()")
@@ -147,7 +147,7 @@ def run_generation_from_input_ids(
 
     prefill_result = run_prefill_from_input_ids(
         session,
-        input_ids=[int(x) for x in input_ids],
+        input_ids=input_ids,
         start_layer=int(start_layer),
         end_layer=int(end_layer),
         kv_cache=kv_cache,
@@ -157,12 +157,7 @@ def run_generation_from_input_ids(
     prefill_t1 = time.perf_counter()
     prefill_time_ms = (prefill_t1 - prefill_t0) * 1000.0
 
-    aux = prefill_result.aux if prefill_result.aux is not None else {}
-    prefill_input_ids = aux.get("input_ids")
-    if not isinstance(prefill_input_ids, list) or not all(isinstance(x, int) for x in prefill_input_ids):
-        raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
-
-    state.prompt_token_ids = [int(x) for x in prefill_input_ids]
+    state.prompt_token_ids = input_ids
     state.last_logits = prefill_result.next_token_logits
     state.is_prefilled = True
 
@@ -199,7 +194,9 @@ def run_generation_from_input_ids(
             _finish_generation(state, finish_reason="max_new_tokens")
             break
 
-        current_hidden = executor.embed_token_ids([token_id])
+        current_hidden = executor.embed_token_ids(
+            torch.tensor([token_id], dtype=torch.long)
+        )
 
         decode_result = run_decode_step_logits(
             session,
@@ -239,20 +236,33 @@ def run_generation(
     if not isinstance(prompt, str):
         raise TypeError(f"prompt expected str, got {type(prompt).__name__}")
 
-    executor = session.full_model_executor
-    if executor is None:
-        raise RuntimeError("session.full_model_executor is not initialized")
+    tokenizer = session.get_deepseek_model_loader().load_tokenizer()
+    encoded = tokenizer(
+        prompt,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
 
-    input_ids = executor.encode(prompt)
-    if not isinstance(input_ids, list) or not input_ids:
-        raise RuntimeError("prompt encoded to empty input_ids")
-    if not all(isinstance(x, int) for x in input_ids):
-        raise RuntimeError("executor.encode(prompt) must return list[int]")
+    if not isinstance(encoded, dict):
+        raise RuntimeError(
+            f'tokenizer(..., return_tensors="pt") expected dict-like result, got {type(encoded).__name__}'
+        )
+
+    input_ids = encoded.get("input_ids")
+    if not isinstance(input_ids, torch.Tensor):
+        raise RuntimeError(
+            f'tokenizer(..., return_tensors="pt") result missing torch.Tensor "input_ids", got {type(input_ids).__name__}'
+        )
+
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise RuntimeError(
+            f'input_ids expected shape [1, T], got {tuple(input_ids.shape)}'
+        )
 
     return run_generation_from_input_ids(
         session,
         state=state,
-        input_ids=[int(x) for x in input_ids],
+        input_ids=input_ids,
         start_layer=int(start_layer),
         end_layer=int(end_layer),
         kv_cache=kv_cache,

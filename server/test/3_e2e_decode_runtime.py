@@ -123,8 +123,13 @@ def main() -> None:
                 f"decode start position mismatch: token_position={token_position} len(input_ids)={len(input_ids)}"
             )
 
-        current_hidden = session.full_model_executor.embed_token_ids([token_id])
-        current_hidden = _require_tensor(current_hidden, "executor.embed_token_ids([token_id])")
+        current_hidden = session.full_model_executor.embed_token_ids(
+            torch.tensor([token_id], dtype=torch.long)
+        )
+        current_hidden = _require_tensor(
+            current_hidden,
+            "executor.embed_token_ids(torch.tensor([token_id], dtype=torch.long))",
+        )
 
         if current_hidden.ndim == 1:
             pass

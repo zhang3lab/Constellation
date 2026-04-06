@@ -316,35 +316,7 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         return ModelExecResult(output=out, aux=aux)
 
 
-    def tokenize(
-        self,
-        text: str,
-        *,
-        add_special_tokens: bool = True,
-        return_tensors: str | None = None,
-    ):
-        model_loader = self.session.get_deepseek_model_loader()
-        tok = model_loader.load_tokenizer()
-        return tok(
-            text,
-            add_special_tokens=add_special_tokens,
-            return_tensors=return_tensors,
-        )
-
-
-    def encode(
-        self,
-        text: str,
-        *,
-        add_special_tokens: bool = True,
-    ) -> list[int]:
-        model_loader = self.session.get_deepseek_model_loader()
-        tok = model_loader.load_tokenizer()
-        ids = tok.encode(text, add_special_tokens=add_special_tokens)
-        return [int(x) for x in ids]
-
-
-    def embed_token_ids(self, token_ids):
+    def embed_token_ids(self, token_ids: torch.Tensor) -> torch.Tensor:
         if self.session.backbone_store is None:
             raise RuntimeError("session.backbone_store is not initialized")
      
@@ -354,48 +326,50 @@ class DeepseekFullModelExecutor(DeepseekFullModelExecutorBase):
         if not isinstance(emb, torch.Tensor):
             raise TypeError(f"embed_tokens expected torch.Tensor, got {type(emb).__name__}")
      
-        squeeze = False
-     
-        if isinstance(token_ids, int):
-            ids = [int(token_ids)]
-            squeeze = True
-        elif isinstance(token_ids, list):
-            if not token_ids:
-                raise RuntimeError("embed_token_ids requires non-empty token_ids")
-            ids = []
-            for i, x in enumerate(token_ids):
-                if not isinstance(x, int):
-                    raise TypeError(
-                        f"token_ids[{i}] expected int, got {type(x).__name__}"
-                    )
-                ids.append(int(x))
-        else:
+        if not isinstance(token_ids, torch.Tensor):
             raise TypeError(
-                f"token_ids expected int or list[int], got {type(token_ids).__name__}"
+                f"token_ids expected torch.Tensor, got {type(token_ids).__name__}"
             )
+     
+        if token_ids.ndim == 1:
+            ids = token_ids
+        elif token_ids.ndim == 2 and token_ids.shape[0] == 1:
+            ids = token_ids[0]
+        else:
+            raise RuntimeError(
+                f"token_ids expected shape [T] or [1, T], got {tuple(token_ids.shape)}"
+            )
+     
+        if ids.numel() <= 0:
+            raise RuntimeError("embed_token_ids requires non-empty token_ids")
+     
+        if ids.dtype not in (
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+            torch.uint8,
+        ):
+            raise TypeError(
+                f"token_ids expected integer tensor dtype, got {ids.dtype}"
+            )
+     
+        ids = ids.to(device=emb.device, dtype=torch.long)
      
         vocab_size = int(emb.shape[0])
-        for i, token_id in enumerate(ids):
-            if token_id < 0 or token_id >= vocab_size:
-                raise RuntimeError(
-                    f"token_ids[{i}] out of range: got={token_id} vocab_size={vocab_size}"
-                )
      
-        index = torch.tensor(ids, device=emb.device, dtype=torch.long)
-        x = emb.index_select(0, index)
-     
-        if squeeze:
-            x = x[0]
-            x = as_array(
-                x,
-                f"embed_token_ids[{ids[0]}]",
-                ARRCFG_VECTOR_TORCH(torch_dtype_name(emb.dtype), str(emb.device)),
+        min_id = int(ids.min().item())
+        max_id = int(ids.max().item())
+        if min_id < 0 or max_id >= vocab_size:
+            raise RuntimeError(
+                f"token_ids out of range: min_id={min_id} max_id={max_id} vocab_size={vocab_size}"
             )
-            return x
+     
+        x = emb.index_select(0, ids)
      
         x = as_array(
             x,
-            f"embed_token_ids[len={len(ids)}]",
+            f"embed_token_ids[len={int(ids.numel())}]",
             ARRCFG_HIDDEN_TORCH(torch_dtype_name(emb.dtype), str(emb.device)),
         )
         return x
