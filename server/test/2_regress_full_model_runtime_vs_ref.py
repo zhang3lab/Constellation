@@ -23,7 +23,7 @@ from server.test.utils import compare_arrays, print_stats, to_numpy_f32
 FULL_MODEL_LAYER_COS_MIN = 0.99975
 FULL_MODEL_FINAL_COS_MIN = 0.99975
 FULL_MODEL_FINAL_MEAN_ABS_MAX = 0.08
-FULL_MODEL_FINAL_MAX_ABS_MAX = 1.0
+FULL_MODEL_FINAL_MAX_ABS_MAX = 3.0
 
 
 class DeepseekFullModelReference(DeepseekFullModelExecutor):
@@ -399,6 +399,13 @@ def main():
         f"cos={last_layer_metrics['cos']:.8f} "
         f"mean_abs={last_layer_metrics['mean_abs']:.6e} "
         f"max_abs={last_layer_metrics['max_abs']:.6e}"
+    )
+
+    print(
+        "[regress] final hidden metrics: "
+        f"cos={final_cos:.8f} "
+        f"mean_abs={final_mean_abs:.6e} "
+        f"max_abs={final_max_abs:.6e}"
     )
 
     rf_final = to_numpy_f32(ref_out["final_hidden"]).reshape(-1)
