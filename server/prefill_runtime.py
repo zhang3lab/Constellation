@@ -27,17 +27,17 @@ def run_prefill(
         return_tensors="pt",
     )
 
-    if not isinstance(encoded, dict):
+    if not hasattr(encoded, "get"):
         raise RuntimeError(
-            f'tokenizer(..., return_tensors="pt") expected dict-like result, got {type(encoded).__name__}'
+            f'tokenizer(..., return_tensors="pt") expected mapping-like result, got {type(encoded).__name__}'
         )
-
+     
     input_ids = encoded.get("input_ids")
     if not isinstance(input_ids, torch.Tensor):
         raise RuntimeError(
             f'tokenizer(..., return_tensors="pt") result missing torch.Tensor "input_ids", got {type(input_ids).__name__}'
         )
-
+     
     if input_ids.ndim != 2 or input_ids.shape[0] != 1:
         raise RuntimeError(
             f'input_ids expected shape [1, T], got {tuple(input_ids.shape)}'
