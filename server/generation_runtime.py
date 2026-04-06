@@ -9,7 +9,7 @@ from .generation_types import (
     GenerationResult,
     GenerationState,
 )
-from .prefill_runtime import run_prefill
+from .prefill_runtime import run_prefill, run_prefill_from_input_ids
 from .sample_runtime import run_sample
 
 
@@ -112,11 +112,11 @@ def _maybe_finish_after_commit(
     return None
 
 
-def run_generation(
+def run_generation_from_input_ids(
     session,
     *,
     state: GenerationState,
-    prompt: str,
+    input_ids: list[int],
     start_layer: int,
     end_layer: int,
     kv_cache,
@@ -126,11 +126,15 @@ def run_generation(
             f"state expected GenerationState, got {type(state).__name__}"
         )
 
-    if not isinstance(prompt, str):
-        raise TypeError(f"prompt expected str, got {type(prompt).__name__}")
+    if not isinstance(input_ids, list):
+        raise TypeError(f"input_ids expected list[int], got {type(input_ids).__name__}")
+    if not input_ids:
+        raise RuntimeError("input_ids must be non-empty")
+    if not all(isinstance(x, int) for x in input_ids):
+        raise RuntimeError("input_ids must be list[int]")
 
     if kv_cache is None:
-        raise RuntimeError("kv_cache must be initialized before run_generation()")
+        raise RuntimeError("kv_cache must be initialized before run_generation_from_input_ids()")
 
     executor = session.full_model_executor
     if executor is None:
@@ -141,9 +145,9 @@ def run_generation(
     generate_started_at = time.time()
     prefill_t0 = time.perf_counter()
 
-    prefill_result = run_prefill(
+    prefill_result = run_prefill_from_input_ids(
         session,
-        prompt=prompt,
+        input_ids=[int(x) for x in input_ids],
         start_layer=int(start_layer),
         end_layer=int(end_layer),
         kv_cache=kv_cache,
@@ -154,11 +158,11 @@ def run_generation(
     prefill_time_ms = (prefill_t1 - prefill_t0) * 1000.0
 
     aux = prefill_result.aux if prefill_result.aux is not None else {}
-    input_ids = aux.get("input_ids")
-    if not isinstance(input_ids, list) or not all(isinstance(x, int) for x in input_ids):
+    prefill_input_ids = aux.get("input_ids")
+    if not isinstance(prefill_input_ids, list) or not all(isinstance(x, int) for x in prefill_input_ids):
         raise RuntimeError("prefill_result.aux['input_ids'] must be list[int]")
 
-    state.prompt_token_ids = [int(x) for x in input_ids]
+    state.prompt_token_ids = [int(x) for x in prefill_input_ids]
     state.last_logits = prefill_result.next_token_logits
     state.is_prefilled = True
 
@@ -220,4 +224,36 @@ def run_generation(
         generate_started_at=generate_started_at,
         generate_finished_at=time.time(),
         prefill_time_ms=prefill_time_ms,
+    )
+
+
+def run_generation(
+    session,
+    *,
+    state: GenerationState,
+    prompt: str,
+    start_layer: int,
+    end_layer: int,
+    kv_cache,
+) -> GenerationResult:
+    if not isinstance(prompt, str):
+        raise TypeError(f"prompt expected str, got {type(prompt).__name__}")
+
+    executor = session.full_model_executor
+    if executor is None:
+        raise RuntimeError("session.full_model_executor is not initialized")
+
+    input_ids = executor.encode(prompt)
+    if not isinstance(input_ids, list) or not input_ids:
+        raise RuntimeError("prompt encoded to empty input_ids")
+    if not all(isinstance(x, int) for x in input_ids):
+        raise RuntimeError("executor.encode(prompt) must return list[int]")
+
+    return run_generation_from_input_ids(
+        session,
+        state=state,
+        input_ids=[int(x) for x in input_ids],
+        start_layer=int(start_layer),
+        end_layer=int(end_layer),
+        kv_cache=kv_cache,
     )

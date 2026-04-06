@@ -255,13 +255,12 @@ def main() -> None:
         session.full_model_executor = DeepseekFullModelExecutor(session)
 
         kv_cache_cfg = cfg["kv_cache"]
-        session.ensure_full_model_runtime(
+        session.initialize_full_model_runtime(
             tensor_cache_dir="tmp/non_moe_backbone_cache",
             split_layer=30,
             backbone_dtype=torch.bfloat16,
             kv_cache_cfg=kv_cache_cfg,
         )
-        session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
         if session.backbone_store is None:
             raise RuntimeError("session.backbone_store is not initialized")

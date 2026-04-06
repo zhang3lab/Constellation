@@ -104,7 +104,7 @@ def produce_prefill_last_hidden(
     session.full_model_executor = DeepseekFullModelExecutor(session)
 
     kv_cache_cfg = session.cfg["kv_cache"]
-    session.ensure_full_model_runtime(
+    session.initialize_full_model_runtime(
         tensor_cache_dir="tmp/non_moe_backbone_cache",
         split_layer=30,
         backbone_dtype=torch.bfloat16,
@@ -139,7 +139,7 @@ def run_runtime_attention(
     session.full_model_executor = DeepseekFullModelExecutor(session)
 
     kv_cache_cfg = session.cfg["kv_cache"]
-    session.ensure_full_model_runtime(
+    session.initialize_full_model_runtime(
         tensor_cache_dir="tmp/non_moe_backbone_cache",
         split_layer=30,
         backbone_dtype=torch.bfloat16,
