@@ -401,13 +401,6 @@ def main():
         f"max_abs={last_layer_metrics['max_abs']:.6e}"
     )
 
-    print(
-        "[regress] final hidden metrics: "
-        f"cos={final_cos:.8f} "
-        f"mean_abs={final_mean_abs:.6e} "
-        f"max_abs={final_max_abs:.6e}"
-    )
-
     rf_final = to_numpy_f32(ref_out["final_hidden"]).reshape(-1)
     rt_final = to_numpy_f32(runtime_out["final_hidden"]).reshape(-1)
     final_diff = np.abs(rf_final - rt_final)
@@ -415,6 +408,13 @@ def main():
     final_max_abs = float(final_diff.max())
     final_cos = float(
         np.dot(rf_final, rt_final) / (np.linalg.norm(rf_final) * np.linalg.norm(rt_final) + 1e-12)
+    )
+
+    print(
+        "[regress] final hidden metrics: "
+        f"cos={final_cos:.8f} "
+        f"mean_abs={final_mean_abs:.6e} "
+        f"max_abs={final_max_abs:.6e}"
     )
 
     assert final_cos >= FULL_MODEL_FINAL_COS_MIN, (
