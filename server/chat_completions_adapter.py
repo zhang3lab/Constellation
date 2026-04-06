@@ -193,7 +193,7 @@ def _render_chat_messages_to_input_ids_and_prompt(
                 f"tokenizer.apply_chat_template(..., tokenize=False) expected str, got {type(prompt_text).__name__}"
             )
 
-    input_ids = tokenizer.apply_chat_template(
+    encoded = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
         add_generation_prompt=True,
