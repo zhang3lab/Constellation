@@ -59,9 +59,12 @@ def _run_case(
 
     _require_valid_finish_reason(result.finish_reason)
 
-    if result.prompt_tokens != len(state.prompt_token_ids):
+    state_prompt_tokens = (
+        0 if state.prompt_token_ids is None else int(state.prompt_token_ids.numel())
+    )
+    if result.prompt_tokens != state_prompt_tokens:
         raise RuntimeError(
-            f"prompt_tokens mismatch: result={result.prompt_tokens} state={len(state.prompt_token_ids)}"
+            f"prompt_tokens mismatch: result={result.prompt_tokens} state={state_prompt_tokens}"
         )
 
     if result.completion_tokens != len(result.output_token_ids):
