@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from server.absorbed_latent_ref import run_attention_block_ref
-from server.backbone_store import BackboneLoadPlan, preload_non_moe_backbone
+from server.backbone_store import BackboneLoadPlan
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
@@ -16,7 +16,6 @@ from server.full_model_types import ModelExecResult
 from server.generation_types import PrefillResult
 from server.inference_session import InferenceSession
 from server.prefill_runtime import run_prefill
-from server.tensor_cache import MappedTensorStore
 from server.test.utils import compare_arrays, prenorm_hidden_for_attention, print_stats, to_numpy_f32
 
 
@@ -185,24 +184,17 @@ def run_reference_attention(
 
     kv_cache_cfg = session.cfg["kv_cache"]
 
-    if session.mapped_tensor_store is None:
-        session.mapped_tensor_store = MappedTensorStore("tmp/non_moe_backbone_cache")
-
-    if session.backbone_store is None:
-        session.backbone_store = preload_non_moe_backbone(
-            session,
-            mapped_store=session.mapped_tensor_store,
-            plan=BackboneLoadPlan.attention_only(
-                attention_dtype=torch.float32,
-                embed_dtype=torch.float32,
-                layer_ids={int(layer_id)},
-            ),
-        )
-
-    session.ensure_freq_cis_by_device(
-        max_seq_len=int(kv_cache_cfg["max_seq_len"]),
+    session.initialize_full_model_runtime(
+        tensor_cache_dir="tmp/non_moe_backbone_cache",
+        split_layer=30,
+        backbone_dtype=torch.float32,
+        kv_cache_cfg=kv_cache_cfg,
+        plan=BackboneLoadPlan.attention_only(
+            attention_dtype=torch.float32,
+            embed_dtype=torch.float32,
+            layer_ids={int(layer_id)},
+        ),
     )
-    session.reset_full_model_kv_cache(kv_cache_cfg=kv_cache_cfg)
 
     if session.page_attention_cache_managers is None:
         raise RuntimeError("session.page_attention_cache_managers is not initialized")
