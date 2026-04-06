@@ -76,10 +76,20 @@ def main() -> None:
             raise RuntimeError("prefill result aux must not be None")
 
         input_ids = prefill_aux.get("input_ids")
-        if not isinstance(input_ids, list) or not input_ids:
-            raise RuntimeError("prefill aux['input_ids'] must be a non-empty list[int]")
-        if not all(isinstance(x, int) for x in input_ids):
-            raise RuntimeError("prefill aux['input_ids'] must be list[int]")
+        if not isinstance(input_ids, torch.Tensor):
+            raise RuntimeError("prefill aux['input_ids'] must be torch.Tensor")
+        if input_ids.ndim == 2:
+            if input_ids.shape[0] != 1:
+                raise RuntimeError(
+                    f"prefill aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+                )
+            input_ids = input_ids[0]
+        elif input_ids.ndim != 1:
+            raise RuntimeError(
+                f"prefill aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+            )
+        if input_ids.numel() <= 0:
+            raise RuntimeError("prefill aux['input_ids'] must be non-empty")
 
         prefill_last_hidden = _require_tensor(
             prefill_aux.get("last_hidden"),
@@ -118,9 +128,9 @@ def main() -> None:
             raise RuntimeError(f"sampled token_id must be >= 0, got {token_id}")
 
         token_position = prefill_result.next_position
-        if token_position != len(input_ids):
+        if token_position != int(input_ids.numel()):
             raise RuntimeError(
-                f"decode start position mismatch: token_position={token_position} len(input_ids)={len(input_ids)}"
+                f"decode start position mismatch: token_position={token_position} len(input_ids)={int(input_ids.numel())}"
             )
 
         current_hidden = session.full_model_executor.embed_token_ids(
@@ -214,6 +224,7 @@ def main() -> None:
 
         print("PASS: decode runtime e2e")
         print(f"prompt={args.prompt!r}")
+        print(f"input_ids={input_ids.tolist()}")
         print(f"prompt_tokens={prefill_result.prompt_tokens}")
         print(f"prefill_next_position={prefill_result.next_position}")
         print(f"sampled_token_id={token_id}")

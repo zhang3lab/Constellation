@@ -68,29 +68,39 @@ def main() -> None:
             raise RuntimeError("prefill result aux must not be None")
 
         input_ids = aux.get("input_ids")
-        if not isinstance(input_ids, list) or not input_ids:
-            raise RuntimeError("prefill aux['input_ids'] must be a non-empty list[int]")
-        if not all(isinstance(x, int) for x in input_ids):
-            raise RuntimeError("prefill aux['input_ids'] must be list[int]")
+        if not isinstance(input_ids, torch.Tensor):
+            raise RuntimeError("prefill aux['input_ids'] must be torch.Tensor")
+        if input_ids.ndim == 2:
+            if input_ids.shape[0] != 1:
+                raise RuntimeError(
+                    f"prefill aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+                )
+            input_ids = input_ids[0]
+        elif input_ids.ndim != 1:
+            raise RuntimeError(
+                f"prefill aux['input_ids'] expected shape [T] or [1, T], got {tuple(input_ids.shape)}"
+            )
+        if input_ids.numel() <= 0:
+            raise RuntimeError("prefill aux['input_ids'] must be non-empty")
 
         final_hidden = _require_tensor(aux.get("final_hidden"), "aux['final_hidden']")
         last_hidden = _require_tensor(aux.get("last_hidden"), "aux['last_hidden']")
         next_token_logits = _require_tensor(result.next_token_logits, "result.next_token_logits")
 
-        if result.prompt_tokens != len(input_ids):
+        if result.prompt_tokens != int(input_ids.numel()):
             raise RuntimeError(
-                f"prompt_tokens mismatch: result={result.prompt_tokens} len(input_ids)={len(input_ids)}"
+                f"prompt_tokens mismatch: result={result.prompt_tokens} len(input_ids)={int(input_ids.numel())}"
             )
 
-        if result.next_position != len(input_ids):
+        if result.next_position != int(input_ids.numel()):
             raise RuntimeError(
-                f"next_position mismatch: result={result.next_position} len(input_ids)={len(input_ids)}"
+                f"next_position mismatch: result={result.next_position} len(input_ids)={int(input_ids.numel())}"
             )
 
         final_position = aux.get("final_position")
-        if final_position != len(input_ids) - 1:
+        if final_position != int(input_ids.numel()) - 1:
             raise RuntimeError(
-                f"final_position mismatch: aux={final_position} expected={len(input_ids) - 1}"
+                f"final_position mismatch: aux={final_position} expected={int(input_ids.numel()) - 1}"
             )
 
         if final_hidden.ndim != 2:
@@ -98,9 +108,9 @@ def main() -> None:
                 f"aux['final_hidden'] expected shape [T, H], got {tuple(final_hidden.shape)}"
             )
 
-        if final_hidden.shape[0] != len(input_ids):
+        if final_hidden.shape[0] != int(input_ids.numel()):
             raise RuntimeError(
-                f"final_hidden length mismatch: T={final_hidden.shape[0]} len(input_ids)={len(input_ids)}"
+                f"final_hidden length mismatch: T={final_hidden.shape[0]} len(input_ids)={int(input_ids.numel())}"
             )
 
         if last_hidden.ndim != 1:
@@ -134,6 +144,7 @@ def main() -> None:
 
         print("PASS: prefill runtime e2e")
         print(f"prompt={args.prompt!r}")
+        print(f"input_ids={input_ids.tolist()}")
         print(f"prompt_tokens={result.prompt_tokens}")
         print(f"next_position={result.next_position}")
         print(f"final_position={final_position}")

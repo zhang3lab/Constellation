@@ -199,10 +199,19 @@ def _render_chat_messages_to_input_ids_and_prompt(
         add_generation_prompt=True,
         return_tensors="pt",
     )
+    if not hasattr(encoded, "get"):
+        raise RuntimeError(
+            "tokenizer.apply_chat_template(..., return_tensors='pt') "
+            f"expected mapping-like result, got {type(encoded).__name__}"
+        )
+     
+    input_ids = encoded.get("input_ids")
     if not isinstance(input_ids, torch.Tensor):
         raise RuntimeError(
-            f"tokenizer.apply_chat_template(..., return_tensors='pt') expected torch.Tensor, got {type(input_ids).__name__}"
+            "tokenizer.apply_chat_template(..., return_tensors='pt') "
+            f'result missing torch.Tensor "input_ids", got {type(input_ids).__name__}'
         )
+     
     if input_ids.ndim != 2 or input_ids.shape[0] != 1:
         raise RuntimeError(
             f"chat template input_ids expected shape [1, T], got {tuple(input_ids.shape)}"
