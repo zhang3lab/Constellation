@@ -18,15 +18,16 @@ static void print_up_cpu_debug_row0(
     const MatrixBlockScaleViewV2& w_up,
     const std::uint16_t* x_u16,
     common::ActivationDType input_dtype,
-    int k_limit) {
+    int k_begin,
+    int k_end) {
     const int row = 0;
     const int cols = w_up.matrix.cols;
 
     const float* lut_up = GetHostFp8LutV2(w_up.matrix.fp8_format);
     const int rb_up = row / w_up.scale_meta.row_block;
 
-    std::printf("=== CPU up debug row=0 ===\n");
-    for (int k = 0; k < cols && k < k_limit; ++k) {
+    std::printf("=== CPU up debug row=0 k=[%d,%d) ===\n", k_begin, k_end);
+    for (int k = k_begin; k < cols && k < k_end; ++k) {
         const int cb_up = k / w_up.scale_meta.col_block;
 
         const std::size_t up_w_idx =
@@ -45,15 +46,8 @@ static void print_up_cpu_debug_row0(
 
         std::printf(
             "CPU k=%d cb=%d w_idx=%zu s_idx=%zu w_byte=%u scale=%g decoded=%g x=%g contrib=%g\n",
-            k,
-            cb_up,
-            up_w_idx,
-            up_s_idx,
-            static_cast<unsigned>(w_byte),
-            scale,
-            decoded,
-            x_val,
-            contrib);
+            k, cb_up, up_w_idx, up_s_idx, static_cast<unsigned>(w_byte),
+            scale, decoded, x_val, contrib);
     }
 }
 
@@ -386,7 +380,7 @@ int main() {
         x_half.data(),
         static_cast<std::size_t>(hidden_dim) * sizeof(__half),
         cudaMemcpyHostToDevice);
-    const int k_limit = 16;
+    const int k_limit = 136;
 UpDebugItemCudaV2* d_debug = nullptr;
 cudaMalloc(reinterpret_cast<void**>(&d_debug),
            static_cast<std::size_t>(k_limit) * sizeof(UpDebugItemCudaV2));
