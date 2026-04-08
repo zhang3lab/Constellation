@@ -51,6 +51,37 @@ static void print_up_cpu_debug_row0(
     }
 }
 
+static void build_up_cpu_row0_contribs(
+    const MatrixBlockScaleViewV2& w_up,
+    const std::uint16_t* x_u16,
+    common::ActivationDType input_dtype,
+    std::vector<float>* contribs) {
+    const int row = 0;
+    const int cols = w_up.matrix.cols;
+    const float* lut_up = GetHostFp8LutV2(w_up.matrix.fp8_format);
+    const int rb_up = row / w_up.scale_meta.row_block;
+
+    contribs->assign(static_cast<std::size_t>(cols), 0.0f);
+
+    for (int k = 0; k < cols; ++k) {
+        const int cb_up = k / w_up.scale_meta.col_block;
+
+        const std::size_t up_w_idx =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) +
+            static_cast<std::size_t>(k);
+        const std::size_t up_s_idx =
+            static_cast<std::size_t>(rb_up) *
+                static_cast<std::size_t>(w_up.scale_meta.num_col_blocks) +
+            static_cast<std::size_t>(cb_up);
+
+        const std::uint8_t w_byte = w_up.weight.data[up_w_idx];
+        const float scale = w_up.scale.data[up_s_idx];
+        const float decoded = lut_up[w_byte];
+        const float x_val = DecodeActivationToFloatV2(input_dtype, x_u16[k]);
+        (*contribs)[static_cast<std::size_t>(k)] = decoded * scale * x_val;
+    }
+}
+
 template <class TAct>
 bool LaunchFusedUpGateRawCudaV2(
     const MatrixBlockScaleViewV2& w_up,
@@ -381,7 +412,7 @@ int main() {
         x_half.data(),
         static_cast<std::size_t>(hidden_dim) * sizeof(__half),
         cudaMemcpyHostToDevice);
-    const int k_limit = 136;
+    const int k_limit = hidden_dim;
 UpDebugItemCudaV2* d_debug = nullptr;
 cudaMalloc(reinterpret_cast<void**>(&d_debug),
            static_cast<std::size_t>(k_limit) * sizeof(UpDebugItemCudaV2));
@@ -405,21 +436,50 @@ cudaMemcpy(
     static_cast<std::size_t>(k_limit) * sizeof(UpDebugItemCudaV2),
     cudaMemcpyDeviceToHost);
 
-std::printf("=== GPU up debug row=0 ===\n");
-for (int i = 0; i < k_limit; ++i) {
-    const auto& it = debug_items[static_cast<std::size_t>(i)];
+std::vector<float> up_cpu_contribs;
+build_up_cpu_row0_contribs(
+    host_view.w_up,
+    x_fp16.data(),
+    common::ActivationDType::FP16,
+    &up_cpu_contribs);
+
+int first_bad = -1;
+float max_contrib_abs = 0.0f;
+int max_contrib_k = -1;
+
+for (int k = 0; k < hidden_dim; ++k) {
+    const float cpu_v = up_cpu_contribs[static_cast<std::size_t>(k)];
+    const float gpu_v = debug_items[static_cast<std::size_t>(k)].contrib;
+    const float err = std::fabs(cpu_v - gpu_v);
+
+    if (err > max_contrib_abs) {
+        max_contrib_abs = err;
+        max_contrib_k = k;
+    }
+    if (first_bad < 0 && err > 1e-12f) {
+        first_bad = k;
+    }
+}
+
+std::printf("up contrib first_bad=%d max_abs=%g max_k=%d\n",
+            first_bad, max_contrib_abs, max_contrib_k);
+
+if (first_bad >= 0) {
+    const auto& it = debug_items[static_cast<std::size_t>(first_bad)];
     std::printf(
-        "GPU k=%d cb=%d w_idx=%zu s_idx=%zu w_byte=%u scale=%g decoded=%g x=%g contrib=%g\n",
-        it.k,
+        "FIRST_BAD k=%d cpu_contrib=%g gpu_contrib=%g cb=%d w_idx=%zu s_idx=%zu w_byte=%u scale=%g decoded=%g x=%g\n",
+        first_bad,
+        up_cpu_contribs[static_cast<std::size_t>(first_bad)],
+        it.contrib,
         it.cb,
         it.w_idx,
         it.s_idx,
         static_cast<unsigned>(it.w_byte),
         it.scale,
         it.decoded,
-        it.x_val,
-        it.contrib);
+        it.x_val);
 }
+
 cudaFree(d_debug);
     if (err != cudaSuccess) {
         std::printf("cudaMemcpy d_x failed: %s\n", cudaGetErrorString(err));
