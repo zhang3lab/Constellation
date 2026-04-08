@@ -140,10 +140,10 @@ def main():
     print(f"BUILD_DIR={config.BUILD_DIR}")
     print(f"TARGET={target}")
     print(f"DEBUG={debug}")
-    print(f"ENABLE_CPU={config.ENABLE_CPU}")
-    print(f"ENABLE_CUDA={config.ENABLE_CUDA}")
-    print(f"ENABLE_AMD={config.ENABLE_AMD}")
-    print(f"ENABLE_INTEL={config.ENABLE_INTEL}")
+
+    for backend_name, backend_spec in config.BACKENDS.items():
+        print(f"ENABLE_{backend_name.upper()}={backend_spec.get('enabled', False)}")
+
     print(f"ENABLE_BF16={config.ENABLE_BF16}")
     print(f"ENABLE_CUDA_BF16={config.ENABLE_CUDA_BF16}")
 
