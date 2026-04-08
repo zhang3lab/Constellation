@@ -296,10 +296,11 @@ int main() {
     }
 
     print_up_cpu_debug_row0(
-        host_view.w_up,
-        x_fp16.data(),
-        common::ActivationDType::FP16,
-        16);
+    host_view.w_up,
+    x_fp16.data(),
+    common::ActivationDType::FP16,
+    120,
+    136);
 
     std::vector<float> up_ref_serial, gate_ref_serial;
     run_fused_up_gate_raw_cpu_reference(
