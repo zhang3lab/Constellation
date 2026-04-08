@@ -13,7 +13,7 @@ ENABLE_AMD = False
 ENABLE_INTEL = False
 
 ENABLE_BF16 = True
-ENABLE_CUDA_BF16 = True
+ENABLE_CUDA_BF16 = ENABLE_CUDA and ENABLE_BF16
 
 DEFAULT_DEBUG = False
 OPT = "-O3"
@@ -107,6 +107,7 @@ FEATURE_DEFINES = {
 }
 
 TEST_TARGETS = {
+    # activation codec
     "test_activation_codec_v2": {
         "src": [
             "backend/tests/test_activation_codec_v2.cc",
@@ -117,51 +118,8 @@ TEST_TARGETS = {
             "backend/cuda/tests/test_activation_codec_cuda_v2.cc",
         ],
     },
-    "test_gpu_info_cuda_v2": {
-        "src": [
-            "backend/cuda/tests/test_gpu_info_cuda_v2.cc",
-            "backend/cuda/gpu_info_cuda_v2.cc",
-        ],
-    },
-    "test_down_cuda_v2": {
-        "src": [
-            "backend/cuda/tests/test_down_cuda_v2.cc",
-            "backend/cuda/backend_cuda_v2.cc",
-            "expert_format_v2.cc",
-            "backend/expert_reference_v2.cc",
-            "backend/dummy_expert_data_v2.cc",
-            "backend/fp8_lut_v2.cc",
-            "backend/cuda/down_cuda_v2.cu",
-            "backend/cuda/fused_up_gate_cuda_v2.cu",
-            "backend/cuda/fp8_decode_lut_v2.cu",
-        ],
-    },
-    "test_fused_up_gate_cuda_v2": {
-        "src": [
-            "backend/cuda/tests/test_fused_up_gate_cuda_v2.cc",
-            "backend/cuda/backend_cuda_v2.cc",
-            "expert_format_v2.cc",
-            "backend/expert_reference_v2.cc",
-            "backend/dummy_expert_data_v2.cc",
-            "backend/fp8_lut_v2.cc",
-            "backend/cuda/down_cuda_v2.cu",
-            "backend/cuda/fused_up_gate_cuda_v2.cu",
-            "backend/cuda/fp8_decode_lut_v2.cu",
-        ],
-    },
-    "test_benchmark_run_expert_cuda_v2": {
-        "src": [
-            "backend/cuda/tests/test_benchmark_run_expert_cuda_v2.cc",
-            "backend/cuda/backend_cuda_v2.cc",
-            "expert_format_v2.cc",
-            "backend/expert_reference_v2.cc",
-            "backend/dummy_expert_data_v2.cc",
-            "backend/fp8_lut_v2.cc",
-            "backend/cuda/down_cuda_v2.cu",
-            "backend/cuda/fused_up_gate_cuda_v2.cu",
-            "backend/cuda/fp8_decode_lut_v2.cu",
-        ],
-    },
+
+    # cpu backend
     "test_fused_up_gate_cpu_v2": {
         "src": [
             "backend/cpu/tests/test_fused_up_gate_cpu_v2.cc",
@@ -192,6 +150,53 @@ TEST_TARGETS = {
             "backend/expert_reference_v2.cc",
             "backend/dummy_expert_data_v2.cc",
             "backend/fp8_lut_v2.cc",
+        ],
+    },
+
+    # cuda backend
+    "test_gpu_info_cuda_v2": {
+        "src": [
+            "backend/cuda/tests/test_gpu_info_cuda_v2.cc",
+            "backend/cuda/gpu_info_cuda_v2.cc",
+        ],
+    },
+    "test_fused_up_gate_cuda_v2": {
+        "src": [
+            "backend/cuda/tests/test_fused_up_gate_cuda_v2.cc",
+            "backend/cuda/backend_cuda_v2.cc",
+            "expert_format_v2.cc",
+            "backend/expert_reference_v2.cc",
+            "backend/dummy_expert_data_v2.cc",
+            "backend/fp8_lut_v2.cc",
+            "backend/cuda/down_cuda_v2.cu",
+            "backend/cuda/fused_up_gate_cuda_v2.cu",
+            "backend/cuda/fp8_decode_lut_v2.cu",
+        ],
+    },
+    "test_down_cuda_v2": {
+        "src": [
+            "backend/cuda/tests/test_down_cuda_v2.cc",
+            "backend/cuda/backend_cuda_v2.cc",
+            "expert_format_v2.cc",
+            "backend/expert_reference_v2.cc",
+            "backend/dummy_expert_data_v2.cc",
+            "backend/fp8_lut_v2.cc",
+            "backend/cuda/down_cuda_v2.cu",
+            "backend/cuda/fused_up_gate_cuda_v2.cu",
+            "backend/cuda/fp8_decode_lut_v2.cu",
+        ],
+    },
+    "test_benchmark_run_expert_cuda_v2": {
+        "src": [
+            "backend/cuda/tests/test_benchmark_run_expert_cuda_v2.cc",
+            "backend/cuda/backend_cuda_v2.cc",
+            "expert_format_v2.cc",
+            "backend/expert_reference_v2.cc",
+            "backend/dummy_expert_data_v2.cc",
+            "backend/fp8_lut_v2.cc",
+            "backend/cuda/down_cuda_v2.cu",
+            "backend/cuda/fused_up_gate_cuda_v2.cu",
+            "backend/cuda/fp8_decode_lut_v2.cu",
         ],
     },
 }

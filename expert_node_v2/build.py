@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import subprocess
 import sys
 
 from build_support import config, toolchain
@@ -114,16 +115,71 @@ def build_test(name: str, debug: bool):
     print(f"\nbuilt: {out}")
 
 
-def main():
-    args = parse_args()
-    target = args.target
-    debug = args.debug or config.DEFAULT_DEBUG
+def _enabled_backend_test_prefixes():
+    prefixes = []
 
-    if args.clean:
-        toolchain.clean_dir(config.BUILD_DIR)
+    if config.ENABLE_CPU:
+        prefixes.append("test_")
+        prefixes.append("test_activation_codec_v2")
 
-    config.BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    if config.ENABLE_CUDA:
+        prefixes.append("test_gpu_info_cuda_v2")
+        prefixes.append("test_activation_codec_cuda_v2")
 
+    return prefixes
+
+
+def should_run_test(name: str) -> bool:
+    # codec cpu test is backend-agnostic enough to run always
+    if name == "test_activation_codec_v2":
+        return True
+
+    if "_cpu_" in name:
+        return config.ENABLE_CPU
+    if "_cuda_" in name:
+        return config.ENABLE_CUDA
+    if "_amd_" in name:
+        return config.ENABLE_AMD
+    if "_intel_" in name:
+        return config.ENABLE_INTEL
+
+    # fallback: run unknown/general tests
+    return True
+
+
+def run_test_binary(name: str):
+    exe = config.BUILD_DIR / name
+    if not exe.exists():
+        raise RuntimeError(f"test binary not found: {exe}")
+
+    cmd = [str(exe)]
+    print("+", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
+def build_regression(debug: bool):
+    selected = [name for name in config.TEST_TARGETS.keys() if should_run_test(name)]
+
+    if not selected:
+        print("no regression tests selected")
+        return
+
+    print("=== regression tests ===")
+    for name in selected:
+        print(name)
+
+    for name in selected:
+        print(f"\n=== build {name} ===")
+        build_test(name=name, debug=debug)
+
+    for name in selected:
+        print(f"\n=== run {name} ===")
+        run_test_binary(name)
+
+    print("\nregression: PASS")
+
+
+def print_config(target: str, debug: bool):
     print("=== config ===")
     print(f"THIS_DIR={config.THIS_DIR}")
     print(f"REPO_ROOT={config.REPO_ROOT}")
@@ -134,8 +190,22 @@ def main():
     for name, enabled in config.FEATURE_DEFINES.items():
         print(f"{name}={enabled}")
 
+
+def main():
+    args = parse_args()
+    target = args.target
+    debug = args.debug or config.DEFAULT_DEBUG
+
+    if args.clean:
+        toolchain.clean_dir(config.BUILD_DIR)
+
+    config.BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    print_config(target=target, debug=debug)
+
     if target == "main":
         build_main(debug=debug)
+    elif target == "regression":
+        build_regression(debug=debug)
     else:
         build_test(target, debug=debug)
 
