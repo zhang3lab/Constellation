@@ -1,5 +1,8 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#if EXPERT_NODE_V2_ENABLE_CUDA_BF16
+#include <cuda_bf16.h>
+#endif
 
 #include <cstdint>
 
