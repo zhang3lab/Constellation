@@ -14,6 +14,43 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+#if EXPERT_NODE_V2_ENABLE_CUDA_BF16
+static void verify_bf16_encode_matches_cuda_bf16(
+    const std::vector<float>& x_float) {
+    int first_bad = -1;
+
+    for (std::size_t i = 0; i < x_float.size(); ++i) {
+        const float x = x_float[i];
+
+        const std::uint16_t cpu_bits = EncodeFloatToBf16V2(x);
+
+        const __nv_bfloat16 b = __float2bfloat16(x);
+        std::uint16_t cuda_bits = 0;
+        static_assert(sizeof(cuda_bits) == sizeof(b));
+        std::memcpy(&cuda_bits, &b, sizeof(cuda_bits));
+
+        if (cpu_bits != cuda_bits) {
+            first_bad = static_cast<int>(i);
+            std::printf(
+                "first bf16 encode mismatch "
+                "k=%d x=%g cpu_bits=0x%04x cuda_bits=0x%04x "
+                "cpu_decode=%g cuda_decode=%g\n",
+                first_bad,
+                x,
+                static_cast<unsigned>(cpu_bits),
+                static_cast<unsigned>(cuda_bits),
+                DecodeBf16ToFloatV2(cpu_bits),
+                __bfloat162float(b));
+            break;
+        }
+    }
+
+    if (first_bad < 0) {
+        std::printf("bf16 encode check: all matched\n");
+    }
+}
+#endif
+
 static void verify_fp16_encode_matches_cuda_half(
     const std::vector<float>& x_float) {
     int first_bad = -1;
@@ -361,6 +398,9 @@ int main() {
         &x_float,
         &x_fp16);
 
+#if EXPERT_NODE_V2_ENABLE_CUDA_BF16
+    verify_bf16_encode_matches_cuda_bf16(x_float);
+#endif
     verify_fp16_encode_matches_cuda_half(x_float);
     std::vector<__half> x_half(hidden_dim);
     for (int i = 0; i < hidden_dim; ++i) {
