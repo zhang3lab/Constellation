@@ -24,6 +24,7 @@ CORE_CPP = [
     "control.cc",
     "worker.cc",
     "backend/backend_workspace_v2.cc",
+    "backend/backend_registry_v2.cc",
     "node_info.cc",
     "expert_registry_v2.cc",
     "expert_format_v2.cc",

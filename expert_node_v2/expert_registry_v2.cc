@@ -117,8 +117,18 @@ bool ExpertRegistryV2::Update(
     const std::array<common::VendorWorkerSpan, 256>& vendor_spans) {
     if (expert_id < 0 || worker_id < 0) return false;
 
+    const expert_node_v2::BackendRegistryEntryV2* backend =
+        expert_node_v2::FindBackendRegistryEntryV2(vendor);
+    if (backend == nullptr) {
+        return false;
+    }
+    if (backend->upload_expert == nullptr ||
+        backend->free_expert_weights == nullptr) {
+        return false;
+    }
+
     const common::VendorWorkerSpan& vendor_span =
-        vendor_spans[static_cast<size_t>(vendor)];
+        vendor_spans[static_cast<std::size_t>(vendor)];
 
     if (worker_id < vendor_span.worker_id_begin) return false;
     if (worker_id >= vendor_span.worker_id_begin + vendor_span.worker_count) {
@@ -135,56 +145,13 @@ bool ExpertRegistryV2::Update(
     if (slot == nullptr) return false;
 
     if (slot->resident_ready) {
-        switch (vendor) {
-#if EXPERT_NODE_V2_ENABLE_CUDA
-            case common::GpuVendor::Nvidia:
-                FreeExpertWeightsCudaV2(&slot->storage);
-                break;
-#endif
-
-#if EXPERT_NODE_V2_ENABLE_AMD
-            case common::GpuVendor::AMD:
-                FreeExpertWeightsAmdV2(&slot->storage);
-                break;
-#endif
-
-#if EXPERT_NODE_V2_ENABLE_INTEL
-            case common::GpuVendor::Intel:
-                FreeExpertWeightsIntelV2(&slot->storage);
-                break;
-#endif
-
-            default:
-                return false;
-        }
-
+        backend->free_expert_weights(&slot->storage);
         slot->storage.clear();
         slot->resident_ready = false;
     }
 
-    bool ok = false;
-    switch (vendor) {
-#if EXPERT_NODE_V2_ENABLE_CUDA
-        case common::GpuVendor::Nvidia:
-            ok = UploadExpertCudaV2(local_gpu_id, entry->incoming, &slot->storage);
-            break;
-#endif
-
-#if EXPERT_NODE_V2_ENABLE_AMD
-        case common::GpuVendor::AMD:
-            ok = UploadExpertAmdV2(local_gpu_id, entry->incoming, &slot->storage);
-            break;
-#endif
-
-#if EXPERT_NODE_V2_ENABLE_INTEL
-        case common::GpuVendor::Intel:
-            ok = UploadExpertIntelV2(local_gpu_id, entry->incoming, &slot->storage);
-            break;
-#endif
-
-        default:
-            return false;
-    }
+    const bool ok =
+        backend->upload_expert(local_gpu_id, entry->incoming, &slot->storage);
 
     if (!ok) {
         std::fprintf(stderr,

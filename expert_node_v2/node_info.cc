@@ -4,9 +4,7 @@
 #include <utility>
 #include <vector>
 
-#include "expert_node_v2/backend/cuda/gpu_info_cuda_v2.h"
-#include "expert_node_v2/backend/amd/gpu_info_amd_v2.h"
-#include "expert_node_v2/backend/intel/gpu_info_intel_v2.h"
+#include "expert_node_v2/backend/backend_registry_v2.h"
 
 namespace {
 
@@ -25,6 +23,16 @@ bool ValidateWorkerIndexedGpus(
         }
     }
     return true;
+}
+
+template <class TGpu>
+void AppendGpus(
+    std::vector<TGpu>* dst,
+    std::vector<TGpu>* src) {
+    dst->insert(
+        dst->end(),
+        std::make_move_iterator(src->begin()),
+        std::make_move_iterator(src->end()));
 }
 
 }  // namespace
@@ -49,85 +57,31 @@ bool BuildStaticNodeInfo(
 
     std::int32_t next_worker_id = 0;
 
-#if EXPERT_NODE_V2_ENABLE_CUDA
-    {
+    for (const auto& entry : expert_node_v2::GetBackendRegistryV2()) {
+        if (entry.build_static == nullptr) {
+            continue;
+        }
+
         std::vector<common::StaticGpuInfo> gpus;
-        if (!BuildLocalCudaGpuInfosV2(
+        if (!entry.build_static(
                 next_worker_id,
                 static_cast<std::uint32_t>(worker_port_base),
                 &gpus)) {
-            std::fprintf(stderr, "BuildLocalCudaGpuInfosV2 failed\n");
-        } else {
-            auto& span =
-                node.vendor_spans[static_cast<std::size_t>(common::GpuVendor::Nvidia)];
-            span.worker_id_begin = next_worker_id;
-            span.worker_count = static_cast<std::int32_t>(gpus.size());
-
-            next_worker_id += static_cast<std::int32_t>(gpus.size());
-
-            node.gpus.insert(
-                node.gpus.end(),
-                std::make_move_iterator(gpus.begin()),
-                std::make_move_iterator(gpus.end()));
+            std::fprintf(stderr,
+                         "[%s] static gpu probe failed for vendor=%s\n",
+                         node.node_id.c_str(),
+                         common::gpu_vendor_name(entry.vendor));
+            continue;
         }
+
+        auto& span =
+            node.vendor_spans[static_cast<std::size_t>(entry.vendor)];
+        span.worker_id_begin = next_worker_id;
+        span.worker_count = static_cast<std::int32_t>(gpus.size());
+
+        next_worker_id += static_cast<std::int32_t>(gpus.size());
+        AppendGpus(&node.gpus, &gpus);
     }
-#endif
-
-#if EXPERT_NODE_V2_ENABLE_AMD
-    {
-        std::vector<common::StaticGpuInfo> gpus;
-        // TODO: replace stub with real AMD probe.
-        // bool ok = BuildLocalAmdGpuInfosV2(
-        //     next_worker_id,
-        //     static_cast<std::uint32_t>(worker_port_base),
-        //     &gpus);
-        bool ok = true;
-
-        if (!ok) {
-            std::fprintf(stderr, "BuildLocalAmdGpuInfosV2 failed\n");
-        } else {
-            auto& span =
-                node.vendor_spans[static_cast<std::size_t>(common::GpuVendor::AMD)];
-            span.worker_id_begin = next_worker_id;
-            span.worker_count = static_cast<std::int32_t>(gpus.size());
-
-            next_worker_id += static_cast<std::int32_t>(gpus.size());
-
-            node.gpus.insert(
-                node.gpus.end(),
-                std::make_move_iterator(gpus.begin()),
-                std::make_move_iterator(gpus.end()));
-        }
-    }
-#endif
-
-#if EXPERT_NODE_V2_ENABLE_INTEL
-    {
-        std::vector<common::StaticGpuInfo> gpus;
-        // TODO: replace stub with real Intel probe.
-        // bool ok = BuildLocalIntelGpuInfosV2(
-        //     next_worker_id,
-        //     static_cast<std::uint32_t>(worker_port_base),
-        //     &gpus);
-        bool ok = true;
-
-        if (!ok) {
-            std::fprintf(stderr, "BuildLocalIntelGpuInfosV2 failed\n");
-        } else {
-            auto& span =
-                node.vendor_spans[static_cast<std::size_t>(common::GpuVendor::Intel)];
-            span.worker_id_begin = next_worker_id;
-            span.worker_count = static_cast<std::int32_t>(gpus.size());
-
-            next_worker_id += static_cast<std::int32_t>(gpus.size());
-
-            node.gpus.insert(
-                node.gpus.end(),
-                std::make_move_iterator(gpus.begin()),
-                std::make_move_iterator(gpus.end()));
-        }
-    }
-#endif
 
     if (!ValidateWorkerIndexedGpus(node.node_id, node.gpus)) {
         return false;
@@ -147,68 +101,28 @@ bool BuildDynamicNodeInfo(
     node.node_id = static_info.node_id;
     node.node_status = node_status;
 
-#if EXPERT_NODE_V2_ENABLE_CUDA
-    {
-        const auto& span =
-            static_info.vendor_spans[static_cast<std::size_t>(common::GpuVendor::Nvidia)];
-
-        if (span.worker_id_begin >= 0 && span.worker_count > 0) {
-            std::vector<common::DynamicGpuInfo> gpus;
-            if (!BuildLocalCudaDynamicGpuInfosV2(
-                    span.worker_id_begin,
-                    &gpus)) {
-                std::fprintf(stderr, "BuildLocalCudaDynamicGpuInfosV2 failed\n");
-            } else {
-                node.gpus.insert(
-                    node.gpus.end(),
-                    std::make_move_iterator(gpus.begin()),
-                    std::make_move_iterator(gpus.end()));
-            }
+    for (const auto& entry : expert_node_v2::GetBackendRegistryV2()) {
+        if (entry.build_dynamic == nullptr) {
+            continue;
         }
-    }
-#endif
 
-#if EXPERT_NODE_V2_ENABLE_AMD
-    {
         const auto& span =
-            static_info.vendor_spans[static_cast<std::size_t>(common::GpuVendor::AMD)];
-
-        if (span.worker_id_begin >= 0 && span.worker_count > 0) {
-            std::vector<common::DynamicGpuInfo> gpus;
-            if (!BuildLocalAmdDynamicGpuInfosV2(
-                    span.worker_id_begin,
-                    &gpus)) {
-                std::fprintf(stderr, "BuildLocalAmdDynamicGpuInfosV2 failed\n");
-            } else {
-                node.gpus.insert(
-                    node.gpus.end(),
-                    std::make_move_iterator(gpus.begin()),
-                    std::make_move_iterator(gpus.end()));
-            }
+            static_info.vendor_spans[static_cast<std::size_t>(entry.vendor)];
+        if (span.worker_id_begin < 0 || span.worker_count <= 0) {
+            continue;
         }
-    }
-#endif
 
-#if EXPERT_NODE_V2_ENABLE_INTEL
-    {
-        const auto& span =
-            static_info.vendor_spans[static_cast<std::size_t>(common::GpuVendor::Intel)];
-
-        if (span.worker_id_begin >= 0 && span.worker_count > 0) {
-            std::vector<common::DynamicGpuInfo> gpus;
-            if (!BuildLocalIntelDynamicGpuInfosV2(
-                    span.worker_id_begin,
-                    &gpus)) {
-                std::fprintf(stderr, "BuildLocalIntelDynamicGpuInfosV2 failed\n");
-            } else {
-                node.gpus.insert(
-                    node.gpus.end(),
-                    std::make_move_iterator(gpus.begin()),
-                    std::make_move_iterator(gpus.end()));
-            }
+        std::vector<common::DynamicGpuInfo> gpus;
+        if (!entry.build_dynamic(span.worker_id_begin, &gpus)) {
+            std::fprintf(stderr,
+                         "[%s] dynamic gpu probe failed for vendor=%s\n",
+                         node.node_id.c_str(),
+                         common::gpu_vendor_name(entry.vendor));
+            continue;
         }
+
+        AppendGpus(&node.gpus, &gpus);
     }
-#endif
 
     if (!ValidateWorkerIndexedGpus(node.node_id, node.gpus)) {
         return false;
