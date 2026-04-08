@@ -82,12 +82,7 @@ def build_test(name: str, debug: bool):
     src = toolchain.existing_sources(config.THIS_DIR, spec["src"])
 
     defines = toolchain.common_defines(
-        enable_cpu=config.ENABLE_CPU,
-        enable_cuda=config.ENABLE_CUDA,
-        enable_amd=config.ENABLE_AMD,
-        enable_intel=config.ENABLE_INTEL,
-        enable_bf16=config.ENABLE_BF16,
-        enable_cuda_bf16=config.ENABLE_CUDA_BF16,
+        feature_defines=config.FEATURE_DEFINES,
         debug=debug,
     )
 

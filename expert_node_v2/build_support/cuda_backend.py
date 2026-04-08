@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .toolchain import include_flags, obj_path, run, resolve_src
+from .common import include_flags, obj_path, resolve_src, run
 
 _FALLBACK_SMS = ["89"]
 _CACHED_NVCC = None
@@ -17,7 +17,7 @@ def _capture(cmd):
     return subprocess.check_output(cmd, text=True)
 
 
-def _resolve_nvcc(explicit_nvcc: str | None):
+def _resolve_nvcc(explicit_nvcc):
     candidates = []
 
     if explicit_nvcc:
@@ -164,7 +164,7 @@ def get_cuda_link_flags():
     return list(_CACHED_CUDA_LINK_FLAGS)
 
 
-def _ensure_cuda_toolchain(nvcc: str | None):
+def _ensure_cuda_toolchain(nvcc):
     global _CACHED_NVCC, _CACHED_SMS
     if _CACHED_NVCC is None:
         _CACHED_NVCC = _resolve_nvcc(nvcc)

@@ -1,27 +1,8 @@
-import shlex
 import shutil
-import subprocess
 from pathlib import Path
 
 from . import cuda_backend
-
-
-def quote_cmd(cmd):
-    return " ".join(shlex.quote(str(x)) for x in cmd)
-
-
-def run(cmd, cwd=None):
-    print("+", quote_cmd(cmd))
-    subprocess.run(cmd, cwd=cwd, check=True)
-
-
-def resolve_src(project_root: Path, src_rel: str) -> Path:
-    return (project_root / src_rel).resolve()
-
-
-def obj_path(build_dir: Path, src_rel: str) -> Path:
-    safe = src_rel.replace("../", "__PARENT__/").replace("/", "__")
-    return build_dir / f"{safe}.o"
+from .common import include_flags, obj_path, resolve_src, run
 
 
 def existing_sources(project_root: Path, srcs):
@@ -42,13 +23,6 @@ def common_defines(feature_defines, debug: bool):
     if debug:
         defs += ["-g", "-DDEBUG=1"]
     return defs
-
-
-def include_flags(project_root: Path, repo_root: Path):
-    return [
-        "-I", str(project_root),
-        "-I", str(repo_root),
-    ]
 
 
 def compile_cpp(
