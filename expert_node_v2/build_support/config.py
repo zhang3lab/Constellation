@@ -8,7 +8,7 @@ CXX = "g++"
 NVCC = "nvcc"
 
 ENABLE_CPU = True
-ENABLE_CUDA = False
+ENABLE_CUDA = True
 ENABLE_AMD = False
 ENABLE_INTEL = False
 
@@ -116,6 +116,8 @@ TEST_TARGETS = {
     "test_down_cuda_v2": {
         "src": [
             "backend/cuda/tests/test_down_cuda_v2.cc",
+            "backend/cuda/backend_cuda_v2.cc",
+            "expert_format_v2.cc",
             "backend/expert_reference_v2.cc",
             "backend/dummy_expert_data_v2.cc",
             "backend/fp8_lut_v2.cc",
@@ -126,6 +128,8 @@ TEST_TARGETS = {
     "test_fused_up_gate_cuda_v2": {
         "src": [
             "backend/cuda/tests/test_fused_up_gate_cuda_v2.cc",
+            "backend/cuda/backend_cuda_v2.cc",
+            "expert_format_v2.cc",
             "backend/expert_reference_v2.cc",
             "backend/dummy_expert_data_v2.cc",
             "backend/fp8_lut_v2.cc",
