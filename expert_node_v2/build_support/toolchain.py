@@ -35,6 +35,7 @@ def existing_sources(project_root: Path, srcs):
 
 
 def common_defines(
+    enable_cpu: bool,
     enable_cuda: bool,
     enable_amd: bool,
     enable_intel: bool,
@@ -43,6 +44,7 @@ def common_defines(
     debug: bool,
 ):
     defs = [
+        f"-DEXPERT_NODE_V2_ENABLE_CPU={1 if enable_cpu else 0}",
         f"-DEXPERT_NODE_V2_ENABLE_CUDA={1 if enable_cuda else 0}",
         f"-DEXPERT_NODE_V2_ENABLE_AMD={1 if enable_amd else 0}",
         f"-DEXPERT_NODE_V2_ENABLE_INTEL={1 if enable_intel else 0}",
@@ -134,6 +136,93 @@ def compile_cpp(
 
     run(cmd)
     return obj
+
+
+def compile_cu(
+    nvcc: str,
+    project_root: Path,
+    repo_root: Path,
+    build_dir: Path,
+    src_rel: str,
+    cxx_std: str,
+    opt: str,
+    defines,
+    debug: bool,
+):
+    src = resolve_src(project_root, src_rel)
+    obj = obj_path(build_dir, src_rel)
+    obj.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        nvcc,
+        f"-std={cxx_std}",
+        opt,
+        "-c",
+        str(src),
+        "-o",
+        str(obj),
+    ]
+    cmd += list(defines)
+    cmd += include_flags(project_root, repo_root)
+
+    if debug:
+        cmd += ["-g", "-G"]
+
+    run(cmd)
+    return obj
+
+
+def resolve_source_kind(src_rel: str, source_rules):
+    ext = Path(src_rel).suffix
+    kind = source_rules.get(ext)
+    if kind is None:
+        raise RuntimeError(f"unsupported source extension: {src_rel}")
+    return kind
+
+
+def compile_source(
+    project_root: Path,
+    repo_root: Path,
+    build_dir: Path,
+    src_rel: str,
+    cxx_std: str,
+    opt: str,
+    defines,
+    debug: bool,
+    enable_cuda: bool,
+    source_rules,
+    toolchains,
+):
+    kind = resolve_source_kind(src_rel, source_rules)
+
+    if kind == "cpp":
+        return compile_cpp(
+            cxx=toolchains["cpp"]["compiler"],
+            project_root=project_root,
+            repo_root=repo_root,
+            build_dir=build_dir,
+            src_rel=src_rel,
+            cxx_std=cxx_std,
+            opt=opt,
+            defines=defines,
+            debug=debug,
+            enable_cuda=enable_cuda,
+        )
+
+    if kind == "cuda":
+        return compile_cu(
+            nvcc=toolchains["cuda"]["compiler"],
+            project_root=project_root,
+            repo_root=repo_root,
+            build_dir=build_dir,
+            src_rel=src_rel,
+            cxx_std=cxx_std,
+            opt=opt,
+            defines=defines,
+            debug=debug,
+        )
+
+    raise RuntimeError(f"unsupported source kind: {kind}")
 
 
 def link_exe(

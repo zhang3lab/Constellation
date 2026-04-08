@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from build_support import amd_backend, config, cuda_backend, intel_backend, toolchain
+from build_support import config, toolchain
 
 
 def parse_args():
@@ -25,23 +25,24 @@ def parse_args():
     return parser.parse_args()
 
 
+def enabled_backend_src():
+    out = []
+    for _, spec in config.BACKENDS.items():
+        if spec.get("enabled", False):
+            out += spec.get("src", [])
+    return out
+
+
 def build_main(debug: bool):
-    cpp = []
-    cpp += config.CORE_CPP
-    cpp += config.COMMON_CPP
-    if config.ENABLE_CUDA:
-        cpp += config.CUDA_CPP
-    if config.ENABLE_AMD:
-        cpp += config.AMD_CPP
-    if config.ENABLE_INTEL:
-        cpp += config.INTEL_CPP
+    src = []
+    src += config.CORE_CPP
+    src += config.COMMON_CPP
+    src += enabled_backend_src()
 
-    cu = config.CUDA_CU if config.ENABLE_CUDA else []
-
-    cpp = toolchain.existing_sources(config.THIS_DIR, cpp)
-    cu = toolchain.existing_sources(config.THIS_DIR, cu)
+    src = toolchain.existing_sources(config.THIS_DIR, src)
 
     defines = toolchain.common_defines(
+        enable_cpu=config.ENABLE_CPU,
         enable_cuda=config.ENABLE_CUDA,
         enable_amd=config.ENABLE_AMD,
         enable_intel=config.ENABLE_INTEL,
@@ -51,10 +52,9 @@ def build_main(debug: bool):
     )
 
     objs = []
-    for s in cpp:
+    for s in src:
         objs.append(
-            toolchain.compile_cpp(
-                cxx=config.CXX,
+            toolchain.compile_source(
                 project_root=config.THIS_DIR,
                 repo_root=config.REPO_ROOT,
                 build_dir=config.BUILD_DIR,
@@ -64,27 +64,10 @@ def build_main(debug: bool):
                 defines=defines,
                 debug=debug,
                 enable_cuda=config.ENABLE_CUDA,
+                source_rules=config.SOURCE_RULES,
+                toolchains=config.TOOLCHAINS,
             )
         )
-
-    if config.ENABLE_CUDA:
-        objs += cuda_backend.build_objects(
-            nvcc=config.NVCC,
-            project_root=config.THIS_DIR,
-            repo_root=config.REPO_ROOT,
-            build_dir=config.BUILD_DIR,
-            sources=cu,
-            cxx_std=config.CXX_STD,
-            opt=config.OPT,
-            defines=defines,
-            debug=debug,
-        )
-
-    if config.ENABLE_AMD:
-        objs += amd_backend.build_objects()
-
-    if config.ENABLE_INTEL:
-        objs += intel_backend.build_objects()
 
     out = config.BUILD_DIR / "expert_node_v2_main"
     toolchain.link_exe(
@@ -101,10 +84,10 @@ def build_test(name: str, debug: bool):
         raise RuntimeError(f"unknown test target: {name}")
 
     spec = config.TEST_TARGETS[name]
-    cpp = toolchain.existing_sources(config.THIS_DIR, spec["cpp"])
-    cu = toolchain.existing_sources(config.THIS_DIR, spec["cu"])
+    src = toolchain.existing_sources(config.THIS_DIR, spec["src"])
 
     defines = toolchain.common_defines(
+        enable_cpu=config.ENABLE_CPU,
         enable_cuda=config.ENABLE_CUDA,
         enable_amd=config.ENABLE_AMD,
         enable_intel=config.ENABLE_INTEL,
@@ -114,10 +97,9 @@ def build_test(name: str, debug: bool):
     )
 
     objs = []
-    for s in cpp:
+    for s in src:
         objs.append(
-            toolchain.compile_cpp(
-                cxx=config.CXX,
+            toolchain.compile_source(
                 project_root=config.THIS_DIR,
                 repo_root=config.REPO_ROOT,
                 build_dir=config.BUILD_DIR,
@@ -127,20 +109,9 @@ def build_test(name: str, debug: bool):
                 defines=defines,
                 debug=debug,
                 enable_cuda=config.ENABLE_CUDA,
+                source_rules=config.SOURCE_RULES,
+                toolchains=config.TOOLCHAINS,
             )
-        )
-
-    if config.ENABLE_CUDA and cu:
-        objs += cuda_backend.build_objects(
-            nvcc=config.NVCC,
-            project_root=config.THIS_DIR,
-            repo_root=config.REPO_ROOT,
-            build_dir=config.BUILD_DIR,
-            sources=cu,
-            cxx_std=config.CXX_STD,
-            opt=config.OPT,
-            defines=defines,
-            debug=debug,
         )
 
     out = config.BUILD_DIR / name
@@ -169,6 +140,7 @@ def main():
     print(f"BUILD_DIR={config.BUILD_DIR}")
     print(f"TARGET={target}")
     print(f"DEBUG={debug}")
+    print(f"ENABLE_CPU={config.ENABLE_CPU}")
     print(f"ENABLE_CUDA={config.ENABLE_CUDA}")
     print(f"ENABLE_AMD={config.ENABLE_AMD}")
     print(f"ENABLE_INTEL={config.ENABLE_INTEL}")

@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef EXPERT_NODE_V2_ENABLE_CPU
+#define EXPERT_NODE_V2_ENABLE_CPU 1
+#endif
+
 #ifndef EXPERT_NODE_V2_ENABLE_CUDA
 #define EXPERT_NODE_V2_ENABLE_CUDA 1
 #endif

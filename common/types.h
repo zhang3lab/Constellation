@@ -40,10 +40,23 @@ enum class ExpertStatus : std::uint32_t {
 
 enum class GpuVendor : std::uint32_t {
     Unknown = 0,
-    Nvidia = 1,
-    AMD = 2,
-    Intel = 3,
+    Cpu = 1,
+    Nvidia = 2,
+    AMD = 3,
+    Intel = 4,
 };
+
+inline constexpr std::size_t kGpuVendorCount = 5;
+inline const char* gpu_vendor_name(GpuVendor v) {
+    switch (v) {
+        case GpuVendor::Unknown: return "unknown";
+        case GpuVendor::Cpu: return "cpu";
+        case GpuVendor::Nvidia: return "nvidia";
+        case GpuVendor::AMD: return "amd";
+        case GpuVendor::Intel: return "intel";
+        default: return "invalid_gpu_vendor";
+    }
+}
 
 constexpr std::uint32_t kGpuCapFp16 = 1u << 0;
 constexpr std::uint32_t kGpuCapBf16 = 1u << 1;
@@ -71,7 +84,7 @@ struct StaticNodeInfo {
     std::string host;
     std::int32_t control_port = -1;
 
-    std::array<VendorWorkerSpan, 256> vendor_spans{};
+    std::array<VendorWorkerSpan, kGpuVendorCount> vendor_spans{};
     std::vector<StaticGpuInfo> gpus;
 };
 

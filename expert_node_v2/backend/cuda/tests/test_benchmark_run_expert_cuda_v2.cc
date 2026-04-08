@@ -10,119 +10,14 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "expert_node_v2/build_config_v2.h"
+#include "expert_node_v2/backend/expert_reference_v2.h"
+#include "expert_node_v2/backend/dummy_expert_data_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 #include "expert_node_v2/backend/cuda/backend_cuda_v2.h"
-
-static float decode_torch_e4m3fn_byte(std::uint8_t v) {
-    const int sign = (v >> 7) & 0x1;
-    const int exp = (v >> 3) & 0xF;
-    const int mant = v & 0x7;
-    const float s = sign ? -1.0f : 1.0f;
-    const int bias = 7;
-
-    if (exp == 0) {
-        if (mant == 0) return s * 0.0f;
-        return s * std::ldexp(static_cast<float>(mant) / 8.0f, 1 - bias);
-    }
-    if (exp == 0xF) {
-        if (mant == 0x7) return s * 448.0f;
-        return s * std::ldexp(1.0f + static_cast<float>(mant) / 8.0f, exp - bias);
-    }
-    return s * std::ldexp(1.0f + static_cast<float>(mant) / 8.0f, exp - bias);
-}
-
-static void fill_dummy_bundle(ExpertTensorBundleV2* bundle) {
-    const int inter_dim = 2048;
-    const int hidden_dim = 7168;
-    const int down_rows = 7168;
-    const int down_cols = 2048;
-    const int row_block = 128;
-    const int col_block = 128;
-
-    const int up_num_row_blocks = (inter_dim + row_block - 1) / row_block;
-    const int up_num_col_blocks = (hidden_dim + col_block - 1) / col_block;
-
-    bundle->w_up.shape = {inter_dim, hidden_dim};
-    bundle->w_up.dtype = "torch.float8_e4m3fn";
-    bundle->w_up.bytes.resize(static_cast<std::size_t>(inter_dim) * hidden_dim);
-    bundle->w_up.ready = true;
-    for (std::size_t i = 0; i < bundle->w_up.bytes.size(); ++i) {
-        bundle->w_up.bytes[i] = static_cast<std::uint8_t>((i * 7 + 3) & 0xff);
-    }
-
-    bundle->w_up_scale.shape = {up_num_row_blocks, up_num_col_blocks};
-    bundle->w_up_scale.dtype = "torch.float32";
-    bundle->w_up_scale.bytes.resize(
-        static_cast<std::size_t>(up_num_row_blocks) *
-        static_cast<std::size_t>(up_num_col_blocks) * sizeof(float));
-    bundle->w_up_scale.ready = true;
-    {
-        float* scales = reinterpret_cast<float*>(bundle->w_up_scale.bytes.data());
-        for (int rb = 0; rb < up_num_row_blocks; ++rb) {
-            for (int cb = 0; cb < up_num_col_blocks; ++cb) {
-                scales[rb * up_num_col_blocks + cb] =
-                    0.010f + 0.0005f * static_cast<float>(rb) +
-                    0.00005f * static_cast<float>(cb);
-            }
-        }
-    }
-
-    bundle->w_gate.shape = {inter_dim, hidden_dim};
-    bundle->w_gate.dtype = "torch.float8_e4m3fn";
-    bundle->w_gate.bytes.resize(static_cast<std::size_t>(inter_dim) * hidden_dim);
-    bundle->w_gate.ready = true;
-    for (std::size_t i = 0; i < bundle->w_gate.bytes.size(); ++i) {
-        bundle->w_gate.bytes[i] = static_cast<std::uint8_t>((i * 11 + 5) & 0xff);
-    }
-
-    bundle->w_gate_scale.shape = {up_num_row_blocks, up_num_col_blocks};
-    bundle->w_gate_scale.dtype = "torch.float32";
-    bundle->w_gate_scale.bytes.resize(
-        static_cast<std::size_t>(up_num_row_blocks) *
-        static_cast<std::size_t>(up_num_col_blocks) * sizeof(float));
-    bundle->w_gate_scale.ready = true;
-    {
-        float* scales = reinterpret_cast<float*>(bundle->w_gate_scale.bytes.data());
-        for (int rb = 0; rb < up_num_row_blocks; ++rb) {
-            for (int cb = 0; cb < up_num_col_blocks; ++cb) {
-                scales[rb * up_num_col_blocks + cb] =
-                    0.020f + 0.0003f * static_cast<float>(rb) +
-                    0.00007f * static_cast<float>(cb);
-            }
-        }
-    }
-
-    const int down_num_row_blocks = (down_rows + row_block - 1) / row_block;
-    const int down_num_col_blocks = (down_cols + col_block - 1) / col_block;
-
-    bundle->w_down.shape = {down_rows, down_cols};
-    bundle->w_down.dtype = "torch.float8_e4m3fn";
-    bundle->w_down.bytes.resize(static_cast<std::size_t>(down_rows) * down_cols);
-    bundle->w_down.ready = true;
-    for (std::size_t i = 0; i < bundle->w_down.bytes.size(); ++i) {
-        bundle->w_down.bytes[i] = static_cast<std::uint8_t>((i * 13 + 17) & 0xff);
-    }
-
-    bundle->w_down_scale.shape = {down_num_row_blocks, down_num_col_blocks};
-    bundle->w_down_scale.dtype = "torch.float32";
-    bundle->w_down_scale.bytes.resize(
-        static_cast<std::size_t>(down_num_row_blocks) *
-        static_cast<std::size_t>(down_num_col_blocks) * sizeof(float));
-    bundle->w_down_scale.ready = true;
-    {
-        float* scales = reinterpret_cast<float*>(bundle->w_down_scale.bytes.data());
-        for (int rb = 0; rb < down_num_row_blocks; ++rb) {
-            for (int cb = 0; cb < down_num_col_blocks; ++cb) {
-                scales[rb * down_num_col_blocks + cb] =
-                    0.005f + 0.001f * static_cast<float>(rb) +
-                    0.0001f * static_cast<float>(cb);
-            }
-        }
-    }
-}
 
 template <class T>
 static T cast_from_float(float x);
@@ -153,56 +48,6 @@ float cast_to_float<__nv_bfloat16>(__nv_bfloat16 x) {
     return __bfloat162float(x);
 }
 #endif
-
-static std::vector<float> run_matvec_cpu_reference(
-    const HostTensorV2& weight_ht,
-    const HostTensorV2& scale_ht,
-    int rows,
-    int cols,
-    const std::vector<float>& x) {
-    const int row_block = 128;
-    const int col_block = 128;
-    const int num_col_blocks = (cols + col_block - 1) / col_block;
-
-    const std::uint8_t* weights = weight_ht.bytes.data();
-    const float* scales =
-        reinterpret_cast<const float*>(scale_ht.bytes.data());
-
-    std::vector<float> y(rows, 0.0f);
-    for (int r = 0; r < rows; ++r) {
-        const int rb = r / row_block;
-        float sum = 0.0f;
-        for (int k = 0; k < cols; ++k) {
-            const int cb = k / col_block;
-            const std::size_t w_idx =
-                static_cast<std::size_t>(r) * static_cast<std::size_t>(cols) +
-                static_cast<std::size_t>(k);
-            const std::size_t s_idx =
-                static_cast<std::size_t>(rb) *
-                static_cast<std::size_t>(num_col_blocks) +
-                static_cast<std::size_t>(cb);
-            const float w = decode_torch_e4m3fn_byte(weights[w_idx]) * scales[s_idx];
-            sum += w * x[k];
-        }
-        y[r] = sum;
-    }
-    return y;
-}
-
-static std::vector<float> run_expert_cpu_reference(
-    const ExpertTensorBundleV2& bundle,
-    const std::vector<float>& x) {
-    std::vector<float> up = run_matvec_cpu_reference(bundle.w_up, bundle.w_up_scale, 2048, 7168, x);
-    std::vector<float> gate = run_matvec_cpu_reference(bundle.w_gate, bundle.w_gate_scale, 2048, 7168, x);
-
-    std::vector<float> h(2048);
-    for (int i = 0; i < 2048; ++i) {
-        const float g = gate[i];
-        h[i] = (g / (1.0f + std::exp(-g))) * up[i];
-    }
-
-    return run_matvec_cpu_reference(bundle.w_down, bundle.w_down_scale, 7168, 2048, h);
-}
 
 static float percentile(std::vector<float> v, float p) {
     if (v.empty()) return 0.0f;
@@ -246,10 +91,16 @@ int run_main_typed(const Args& args) {
     }
 
     ExpertTensorBundleV2 bundle;
-    fill_dummy_bundle(&bundle);
+    FillDummyExpertBundleV2(&bundle);
+
+    ExpertWeightsViewV2 host_view;
+    if (!BuildExpertWeightsViewV2(bundle, &host_view)) {
+        std::printf("BuildExpertWeightsViewV2 failed\n");
+        return 1;
+    }
 
     ExpertDeviceStorageV2 storage;
-    if (!UploadExpertCudaV2(bundle, &storage)) {
+    if (!UploadExpertCudaV2(0, bundle, &storage)) {
         std::printf("UploadExpertCudaV2 failed\n");
         return 1;
     }
@@ -265,14 +116,26 @@ int run_main_typed(const Args& args) {
         return 1;
     }
 
-    std::vector<float> x_full(cfg.hidden_dim);
-    std::vector<TAct> x_dev_host(cfg.hidden_dim);
-    std::vector<float> x_quant(cfg.hidden_dim);
+    std::vector<float> x_float;
+    std::vector<std::uint16_t> x_act_u16;
+    const common::ActivationDType act_dtype =
+        std::is_same_v<TAct, __half>
+            ? common::ActivationDType::FP16
+#if EXPERT_NODE_V2_HAS_CUDA_BF16
+            : common::ActivationDType::BF16;
+#else
+            : common::ActivationDType::FP16;
+#endif
 
+    FillDummyInputActivationV2(
+        cfg.hidden_dim,
+        act_dtype,
+        &x_float,
+        &x_act_u16);
+
+    std::vector<TAct> x_dev_host(cfg.hidden_dim);
     for (int i = 0; i < cfg.hidden_dim; ++i) {
-        x_full[i] = std::sin(0.0005f * static_cast<float>(i));
-        x_dev_host[i] = cast_from_float<TAct>(x_full[i]);
-        x_quant[i] = cast_to_float<TAct>(x_dev_host[i]);
+        x_dev_host[i] = cast_from_float<TAct>(x_float[i]);
     }
 
     TAct* d_x = nullptr;
@@ -312,7 +175,7 @@ int run_main_typed(const Args& args) {
     }
 
     if (args.mode == "correctness") {
-        if (!RunExpertCudaV2<TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
+        if (!RunExpertCudaV2<TAct, TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
             std::printf("RunExpertCudaV2 failed\n");
             cudaFree(d_x);
             cudaFree(d_y);
@@ -351,54 +214,67 @@ int run_main_typed(const Args& args) {
             y_gpu[i] = cast_to_float<TAct>(y_gpu_t[i]);
         }
 
-        std::vector<float> y_cpu_full = run_expert_cpu_reference(bundle, x_full);
-        std::vector<float> y_cpu_quant = run_expert_cpu_reference(bundle, x_quant);
+        std::vector<std::uint8_t> y_ref_bytes;
+        std::vector<float> h_ref_debug;
+        if (!RunExpertReferenceV2(
+                host_view,
+                x_act_u16.data(),
+                act_dtype,
+                act_dtype,
+                &y_ref_bytes,
+                &h_ref_debug)) {
+            std::printf("RunExpertReferenceV2 failed\n");
+            cudaFree(d_x);
+            cudaFree(d_y);
+            FreeExpertWorkspaceCudaV2(&ws);
+            FreeExpertWeightsCudaV2(&storage);
+            return 1;
+        }
+
+        const auto* y_ref_t =
+            reinterpret_cast<const TAct*>(y_ref_bytes.data());
+
+        std::vector<float> y_ref(cfg.hidden_dim);
+        for (int i = 0; i < cfg.hidden_dim; ++i) {
+            y_ref[i] = cast_to_float<TAct>(y_ref_t[i]);
+        }
 
         float max_abs = 0.0f;
         float sum_abs = 0.0f;
         float dot = 0.0f;
-        float norm_cpu = 0.0f;
+        float norm_ref = 0.0f;
         float norm_gpu = 0.0f;
 
-        float max_abs_full = 0.0f;
-        float sum_abs_full = 0.0f;
-
         for (int i = 0; i < cfg.hidden_dim; ++i) {
-            const float cpu_full_v = y_cpu_full[i];
-            const float cpu_q_v = y_cpu_quant[i];
+            const float ref_v = y_ref[i];
             const float gpu_v = y_gpu[i];
 
-            const float abs_err = std::fabs(cpu_q_v - gpu_v);
-            const float abs_err_full = std::fabs(cpu_full_v - gpu_v);
-
+            const float abs_err = std::fabs(ref_v - gpu_v);
             if (abs_err > max_abs) max_abs = abs_err;
-            if (abs_err_full > max_abs_full) max_abs_full = abs_err_full;
 
             sum_abs += abs_err;
-            sum_abs_full += abs_err_full;
-            dot += cpu_q_v * gpu_v;
-            norm_cpu += cpu_q_v * cpu_q_v;
+            dot += ref_v * gpu_v;
+            norm_ref += ref_v * ref_v;
             norm_gpu += gpu_v * gpu_v;
         }
 
         const float mean_abs = sum_abs / static_cast<float>(cfg.hidden_dim);
-        const float mean_abs_full = sum_abs_full / static_cast<float>(cfg.hidden_dim);
         const float cos =
-            (norm_cpu > 0.0f && norm_gpu > 0.0f)
-                ? (dot / (std::sqrt(norm_cpu) * std::sqrt(norm_gpu)))
+            (norm_ref > 0.0f && norm_gpu > 0.0f)
+                ? (dot / (std::sqrt(norm_ref) * std::sqrt(norm_gpu)))
                 : 0.0f;
 
         std::printf(
-            "correctness: q_max_abs=%g q_mean_abs=%g full_max_abs=%g full_mean_abs=%g cos=%g\n",
-            max_abs, mean_abs, max_abs_full, mean_abs_full, cos);
+            "correctness: max_abs=%g mean_abs=%g cos=%g\n",
+            max_abs, mean_abs, cos);
 
         for (int i = 0; i < 8; ++i) {
-            std::printf("cpu_full[%d]=%g cpu_q[%d]=%g gpu[%d]=%g\n",
-                        i, y_cpu_full[i], i, y_cpu_quant[i], i, y_gpu[i]);
+            std::printf("ref[%d]=%g gpu[%d]=%g\n",
+                        i, y_ref[i], i, y_gpu[i]);
         }
     } else {
         for (int i = 0; i < args.warmup; ++i) {
-            if (!RunExpertCudaV2<TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
+            if (!RunExpertCudaV2<TAct, TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
                 std::printf("warmup failed at iter=%d\n", i);
                 cudaFree(d_x);
                 cudaFree(d_y);
@@ -427,7 +303,7 @@ int run_main_typed(const Args& args) {
 
         for (int i = 0; i < args.iters; ++i) {
             cudaEventRecord(ev_start);
-            if (!RunExpertCudaV2<TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
+            if (!RunExpertCudaV2<TAct, TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
                 std::printf("benchmark failed at iter=%d\n", i);
                 cudaEventDestroy(ev_start);
                 cudaEventDestroy(ev_stop);

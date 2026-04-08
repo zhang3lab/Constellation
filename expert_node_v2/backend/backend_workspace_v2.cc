@@ -2,6 +2,10 @@
 
 #include "expert_node_v2/build_config_v2.h"
 
+#if EXPERT_NODE_V2_ENABLE_CPU
+#include "expert_node_v2/backend/cpu/backend_workspace_cpu_v2.h"
+#endif
+
 #if EXPERT_NODE_V2_ENABLE_CUDA
 #include "expert_node_v2/backend/cuda/backend_workspace_cuda_v2.h"
 #endif
@@ -22,6 +26,16 @@ std::unique_ptr<BackendWorkspaceV2> CreateBackendWorkspaceV2(
     const int local_gpu_id = worker_id - vendor_span.worker_id_begin;
 
     switch (vendor) {
+#if EXPERT_NODE_V2_ENABLE_CPU
+        case common::GpuVendor::Cpu: {
+            auto p = std::make_unique<BackendWorkspaceCpuV2>(local_gpu_id);
+            if (!p->ok()) {
+                return nullptr;
+            }
+            return p;
+        }
+#endif
+
 #if EXPERT_NODE_V2_ENABLE_CUDA
         case common::GpuVendor::Nvidia: {
             auto p = std::make_unique<BackendWorkspaceCudaV2>(local_gpu_id);
