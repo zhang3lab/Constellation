@@ -29,6 +29,18 @@ enum class GpuStatus : std::uint32_t {
     Failed = 5,
 };
 
+inline const char* gpu_status_name(common::GpuStatus s) {
+    switch (s) {
+        case common::GpuStatus::Init: return "init";
+        case common::GpuStatus::Idle: return "idle";
+        case common::GpuStatus::Loading: return "loading";
+        case common::GpuStatus::Ready: return "ready";
+        case common::GpuStatus::Busy: return "busy";
+        case common::GpuStatus::Failed: return "failed";
+        default: return "unknown";
+    }
+}
+
 enum class ExpertStatus : std::uint32_t {
     Empty = 0,
     Assigned = 1,

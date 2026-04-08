@@ -3,18 +3,6 @@
 
 #include "expert_node_v2/backend/cuda/gpu_info_cuda_v2.h"
 
-static const char* gpu_status_name(common::GpuStatus s) {
-    switch (s) {
-        case common::GpuStatus::Init: return "init";
-        case common::GpuStatus::Idle: return "idle";
-        case common::GpuStatus::Loading: return "loading";
-        case common::GpuStatus::Ready: return "ready";
-        case common::GpuStatus::Busy: return "busy";
-        case common::GpuStatus::Failed: return "failed";
-        default: return "unknown";
-    }
-}
-
 int main() {
     constexpr int kWorkerIdBegin = 0;
     constexpr int kWorkerPortBase = 50000;
@@ -56,7 +44,7 @@ int main() {
             "[dynamic] worker_id=%d free=%llu status=%s\n",
             gpu.worker_id,
             static_cast<unsigned long long>(gpu.free_mem_bytes),
-            gpu_status_name(gpu.gpu_status));
+            common::gpu_status_name(gpu.gpu_status));
     }
 
     return 0;

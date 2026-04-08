@@ -120,6 +120,12 @@ TEST_TARGETS = {
     },
 
     # cpu backend
+    "test_gpu_info_cpu_v2": {
+        "src": [
+            "backend/cpu/tests/test_gpu_info_cpu_v2.cc",
+            "backend/cpu/gpu_info_cpu_v2.cc",
+        ],
+    },
     "test_fused_up_gate_cpu_v2": {
         "src": [
             "backend/cpu/tests/test_fused_up_gate_cpu_v2.cc",
