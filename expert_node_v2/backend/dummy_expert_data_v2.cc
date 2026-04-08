@@ -24,7 +24,7 @@ void FillDummyExpertBundleV2(
         static_cast<std::uint64_t>(inter_dim),
         static_cast<std::uint64_t>(hidden_dim),
     };
-    bundle->w_up.meta.dtype = "torch.float8_e4m3fn";
+    bundle->w_up.meta.dtype = "float8_e4m3fn";
     bundle->w_up.meta.row_block = static_cast<std::uint32_t>(row_block);
     bundle->w_up.meta.col_block = static_cast<std::uint32_t>(col_block);
     bundle->w_up.bytes.resize(static_cast<std::size_t>(inter_dim) * hidden_dim);
@@ -37,9 +37,9 @@ void FillDummyExpertBundleV2(
         static_cast<std::uint64_t>(up_num_row_blocks),
         static_cast<std::uint64_t>(up_num_col_blocks),
     };
-    bundle->w_up_scale.meta.dtype = "torch.float32";
-    bundle->w_up_scale.meta.row_block = static_cast<std::uint32_t>(row_block);
-    bundle->w_up_scale.meta.col_block = static_cast<std::uint32_t>(col_block);
+    bundle->w_up_scale.meta.dtype = "float32";
+    bundle->w_up_scale.meta.row_block = 0;
+    bundle->w_up_scale.meta.col_block = 0;
     bundle->w_up_scale.bytes.resize(
         static_cast<std::size_t>(up_num_row_blocks) *
         static_cast<std::size_t>(up_num_col_blocks) * sizeof(float));
@@ -59,7 +59,7 @@ void FillDummyExpertBundleV2(
         static_cast<std::uint64_t>(inter_dim),
         static_cast<std::uint64_t>(hidden_dim),
     };
-    bundle->w_gate.meta.dtype = "torch.float8_e4m3fn";
+    bundle->w_gate.meta.dtype = "float8_e4m3fn";
     bundle->w_gate.meta.row_block = static_cast<std::uint32_t>(row_block);
     bundle->w_gate.meta.col_block = static_cast<std::uint32_t>(col_block);
     bundle->w_gate.bytes.resize(static_cast<std::size_t>(inter_dim) * hidden_dim);
@@ -72,9 +72,9 @@ void FillDummyExpertBundleV2(
         static_cast<std::uint64_t>(up_num_row_blocks),
         static_cast<std::uint64_t>(up_num_col_blocks),
     };
-    bundle->w_gate_scale.meta.dtype = "torch.float32";
-    bundle->w_gate_scale.meta.row_block = static_cast<std::uint32_t>(row_block);
-    bundle->w_gate_scale.meta.col_block = static_cast<std::uint32_t>(col_block);
+    bundle->w_gate_scale.meta.dtype = "float32";
+    bundle->w_gate_scale.meta.row_block = 0;
+    bundle->w_gate_scale.meta.col_block = 0;
     bundle->w_gate_scale.bytes.resize(
         static_cast<std::size_t>(up_num_row_blocks) *
         static_cast<std::size_t>(up_num_col_blocks) * sizeof(float));
@@ -99,7 +99,7 @@ void FillDummyExpertBundleV2(
         static_cast<std::uint64_t>(down_rows),
         static_cast<std::uint64_t>(down_cols),
     };
-    bundle->w_down.meta.dtype = "torch.float8_e4m3fn";
+    bundle->w_down.meta.dtype = "float8_e4m3fn";
     bundle->w_down.meta.row_block = static_cast<std::uint32_t>(row_block);
     bundle->w_down.meta.col_block = static_cast<std::uint32_t>(col_block);
     bundle->w_down.bytes.resize(static_cast<std::size_t>(down_rows) * down_cols);
@@ -112,9 +112,9 @@ void FillDummyExpertBundleV2(
         static_cast<std::uint64_t>(down_num_row_blocks),
         static_cast<std::uint64_t>(down_num_col_blocks),
     };
-    bundle->w_down_scale.meta.dtype = "torch.float32";
-    bundle->w_down_scale.meta.row_block = static_cast<std::uint32_t>(row_block);
-    bundle->w_down_scale.meta.col_block = static_cast<std::uint32_t>(col_block);
+    bundle->w_down_scale.meta.dtype = "float32";
+    bundle->w_down_scale.meta.row_block = 0;
+    bundle->w_down_scale.meta.col_block = 0;
     bundle->w_down_scale.bytes.resize(
         static_cast<std::size_t>(down_num_row_blocks) *
         static_cast<std::size_t>(down_num_col_blocks) * sizeof(float));
