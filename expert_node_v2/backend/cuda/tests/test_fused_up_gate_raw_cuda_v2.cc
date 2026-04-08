@@ -14,6 +14,49 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+static void print_up_cpu_debug_row0(
+    const MatrixBlockScaleViewV2& w_up,
+    const std::uint16_t* x_u16,
+    common::ActivationDType input_dtype,
+    int k_limit) {
+    const int row = 0;
+    const int cols = w_up.matrix.cols;
+
+    const float* lut_up = GetHostFp8LutV2(w_up.matrix.fp8_format);
+    const int rb_up = row / w_up.scale_meta.row_block;
+
+    std::printf("=== CPU up debug row=0 ===\n");
+    for (int k = 0; k < cols && k < k_limit; ++k) {
+        const int cb_up = k / w_up.scale_meta.col_block;
+
+        const std::size_t up_w_idx =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) +
+            static_cast<std::size_t>(k);
+        const std::size_t up_s_idx =
+            static_cast<std::size_t>(rb_up) *
+                static_cast<std::size_t>(w_up.scale_meta.num_col_blocks) +
+            static_cast<std::size_t>(cb_up);
+
+        const std::uint8_t w_byte = w_up.weight.data[up_w_idx];
+        const float scale = w_up.scale.data[up_s_idx];
+        const float decoded = lut_up[w_byte];
+        const float x_val = DecodeActivationToFloatV2(input_dtype, x_u16[k]);
+        const float contrib = decoded * scale * x_val;
+
+        std::printf(
+            "CPU k=%d cb=%d w_idx=%zu s_idx=%zu w_byte=%u scale=%g decoded=%g x=%g contrib=%g\n",
+            k,
+            cb_up,
+            up_w_idx,
+            up_s_idx,
+            static_cast<unsigned>(w_byte),
+            scale,
+            decoded,
+            x_val,
+            contrib);
+    }
+}
+
 template <class TAct>
 bool LaunchFusedUpGateRawCudaV2(
     const MatrixBlockScaleViewV2& w_up,
@@ -199,6 +242,26 @@ static void print_compare(
     }
 }
 
+struct UpDebugItemCudaV2 {
+    int k;
+    int cb;
+    std::size_t w_idx;
+    std::size_t s_idx;
+    std::uint8_t w_byte;
+    float scale;
+    float decoded;
+    float x_val;
+    float contrib;
+};
+
+template <class TAct>
+bool LaunchDebugUpRow0CudaV2(
+    const MatrixBlockScaleViewV2& w_up,
+    const TAct* d_x,
+    UpDebugItemCudaV2* d_out,
+    int k_limit,
+    cudaStream_t stream);
+
 int main() {
     cudaError_t err = cudaSetDevice(0);
     if (err != cudaSuccess) {
@@ -237,6 +300,12 @@ int main() {
     for (int i = 0; i < hidden_dim; ++i) {
         x_half[static_cast<std::size_t>(i)] = __float2half(x_float[static_cast<std::size_t>(i)]);
     }
+
+    print_up_cpu_debug_row0(
+        host_view.w_up,
+        x_fp16.data(),
+        common::ActivationDType::FP16,
+        16);
 
     std::vector<float> up_ref_serial, gate_ref_serial;
     run_fused_up_gate_raw_cpu_reference(
@@ -317,6 +386,46 @@ int main() {
         x_half.data(),
         static_cast<std::size_t>(hidden_dim) * sizeof(__half),
         cudaMemcpyHostToDevice);
+    const int k_limit = 16;
+UpDebugItemCudaV2* d_debug = nullptr;
+cudaMalloc(reinterpret_cast<void**>(&d_debug),
+           static_cast<std::size_t>(k_limit) * sizeof(UpDebugItemCudaV2));
+
+if (!LaunchDebugUpRow0CudaV2<__half>(
+        storage.view().w_up,
+        d_x,
+        d_debug,
+        k_limit,
+        nullptr)) {
+    std::printf("LaunchDebugUpRow0CudaV2 failed\n");
+    return 1;
+}
+
+cudaDeviceSynchronize();
+
+std::vector<UpDebugItemCudaV2> debug_items(static_cast<std::size_t>(k_limit));
+cudaMemcpy(
+    debug_items.data(),
+    d_debug,
+    static_cast<std::size_t>(k_limit) * sizeof(UpDebugItemCudaV2),
+    cudaMemcpyDeviceToHost);
+
+std::printf("=== GPU up debug row=0 ===\n");
+for (int i = 0; i < k_limit; ++i) {
+    const auto& it = debug_items[static_cast<std::size_t>(i)];
+    std::printf(
+        "GPU k=%d cb=%d w_idx=%zu s_idx=%zu w_byte=%u scale=%g decoded=%g x=%g contrib=%g\n",
+        it.k,
+        it.cb,
+        it.w_idx,
+        it.s_idx,
+        static_cast<unsigned>(it.w_byte),
+        it.scale,
+        it.decoded,
+        it.x_val,
+        it.contrib);
+}
+cudaFree(d_debug);
     if (err != cudaSuccess) {
         std::printf("cudaMemcpy d_x failed: %s\n", cudaGetErrorString(err));
         cudaFree(d_x);
