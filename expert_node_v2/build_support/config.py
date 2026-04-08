@@ -107,6 +107,16 @@ FEATURE_DEFINES = {
 }
 
 TEST_TARGETS = {
+    "test_activation_codec_v2": {
+        "src": [
+            "backend/tests/test_activation_codec_v2.cc",
+        ],
+    },
+    "test_activation_codec_cuda_v2": {
+        "src": [
+            "backend/cuda/tests/test_activation_codec_cuda_v2.cc",
+        ],
+    },
     "test_gpu_info_cuda_v2": {
         "src": [
             "backend/cuda/tests/test_gpu_info_cuda_v2.cc",
