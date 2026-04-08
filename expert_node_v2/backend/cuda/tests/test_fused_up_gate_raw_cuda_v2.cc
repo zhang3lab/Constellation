@@ -14,6 +14,46 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+static void verify_fp16_encode_matches_cuda_half(
+    const std::vector<float>& x_float) {
+    int first_bad = -1;
+
+    for (std::size_t i = 0; i < x_float.size(); ++i) {
+        const float x = x_float[i];
+
+        const std::uint16_t cpu_bits = EncodeFloatToFp16V2(x);
+
+        const __half h = __float2half(x);
+        std::uint16_t cuda_bits = 0;
+        static_assert(sizeof(cuda_bits) == sizeof(h));
+        std::memcpy(&cuda_bits, &h, sizeof(cuda_bits));
+
+        if (cpu_bits != cuda_bits) {
+            first_bad = static_cast<int>(i);
+
+            const float cpu_decode = DecodeFp16ToFloatV2(cpu_bits);
+            const float cuda_decode = __half2float(h);
+
+            std::printf(
+                "first fp16 encode mismatch "
+                "k=%d x=%g cpu_bits=0x%04x cuda_bits=0x%04x "
+                "cpu_decode=%g cuda_decode=%g\n",
+                first_bad,
+                x,
+                static_cast<unsigned>(cpu_bits),
+                static_cast<unsigned>(cuda_bits),
+                cpu_decode,
+                cuda_decode);
+
+            break;
+        }
+    }
+
+    if (first_bad < 0) {
+        std::printf("fp16 encode check: all matched\n");
+    }
+}
+
 static void print_up_cpu_debug_row0(
     const MatrixBlockScaleViewV2& w_up,
     const std::uint16_t* x_u16,
@@ -321,6 +361,7 @@ int main() {
         &x_float,
         &x_fp16);
 
+    verify_fp16_encode_matches_cuda_half(x_float);
     std::vector<__half> x_half(hidden_dim);
     for (int i = 0; i < hidden_dim; ++i) {
         x_half[static_cast<std::size_t>(i)] = __float2half(x_float[static_cast<std::size_t>(i)]);
