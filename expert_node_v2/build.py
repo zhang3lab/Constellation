@@ -42,12 +42,7 @@ def build_main(debug: bool):
     src = toolchain.existing_sources(config.THIS_DIR, src)
 
     defines = toolchain.common_defines(
-        enable_cpu=config.ENABLE_CPU,
-        enable_cuda=config.ENABLE_CUDA,
-        enable_amd=config.ENABLE_AMD,
-        enable_intel=config.ENABLE_INTEL,
-        enable_bf16=config.ENABLE_BF16,
-        enable_cuda_bf16=config.ENABLE_CUDA_BF16,
+        feature_defines=config.FEATURE_DEFINES,
         debug=debug,
     )
 
@@ -141,11 +136,8 @@ def main():
     print(f"TARGET={target}")
     print(f"DEBUG={debug}")
 
-    for backend_name, backend_spec in config.BACKENDS.items():
-        print(f"ENABLE_{backend_name.upper()}={backend_spec.get('enabled', False)}")
-
-    print(f"ENABLE_BF16={config.ENABLE_BF16}")
-    print(f"ENABLE_CUDA_BF16={config.ENABLE_CUDA_BF16}")
+    for name, enabled in config.FEATURE_DEFINES.items():
+        print(f"{name}={enabled}")
 
     if target == "main":
         build_main(debug=debug)

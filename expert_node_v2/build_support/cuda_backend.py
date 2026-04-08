@@ -7,6 +7,10 @@ from pathlib import Path
 from .toolchain import include_flags, obj_path, run, resolve_src
 
 _FALLBACK_SMS = ["89"]
+_CACHED_NVCC = None
+_CACHED_SMS = None
+_CACHED_CUDA_INCLUDE_FLAGS = None
+_CACHED_CUDA_LINK_FLAGS = None
 
 
 def _capture(cmd):
@@ -92,7 +96,84 @@ def _gencode_flags(sms):
     return flags
 
 
-def _compile_cu(
+def _detect_cuda_include_dirs():
+    dirs = []
+
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if cuda_home:
+        inc = Path(cuda_home) / "include"
+        if inc.exists():
+            dirs.append(inc)
+
+    nvcc = shutil.which("nvcc")
+    if nvcc:
+        nvcc_path = Path(nvcc).resolve()
+        for cand in [
+            nvcc_path.parent.parent / "include",
+            nvcc_path.parent / "include",
+        ]:
+            if cand.exists() and cand not in dirs:
+                dirs.append(cand)
+
+    for cand in [
+        Path("/usr/local/cuda/include"),
+        Path("/usr/local/include"),
+        Path("/usr/include"),
+    ]:
+        if cand.exists() and cand not in dirs:
+            dirs.append(cand)
+
+    return dirs
+
+
+def get_cuda_include_flags():
+    global _CACHED_CUDA_INCLUDE_FLAGS
+    if _CACHED_CUDA_INCLUDE_FLAGS is None:
+        flags = []
+        for d in _detect_cuda_include_dirs():
+            flags += ["-I", str(d)]
+        _CACHED_CUDA_INCLUDE_FLAGS = flags
+    return list(_CACHED_CUDA_INCLUDE_FLAGS)
+
+
+def get_cuda_link_flags():
+    global _CACHED_CUDA_LINK_FLAGS
+    if _CACHED_CUDA_LINK_FLAGS is not None:
+        return list(_CACHED_CUDA_LINK_FLAGS)
+
+    flags = []
+
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if cuda_home:
+        lib64 = Path(cuda_home) / "lib64"
+        if lib64.exists():
+            flags += ["-L", str(lib64)]
+
+    nvcc = shutil.which("nvcc")
+    if nvcc:
+        nvcc_path = Path(nvcc).resolve()
+        for cand in [
+            nvcc_path.parent.parent / "lib64",
+            nvcc_path.parent.parent / "targets/x86_64-linux/lib",
+        ]:
+            if cand.exists():
+                flags += ["-L", str(cand)]
+
+    flags += ["-lcudart", "-ldl"]
+    _CACHED_CUDA_LINK_FLAGS = flags
+    return list(_CACHED_CUDA_LINK_FLAGS)
+
+
+def _ensure_cuda_toolchain(nvcc: str | None):
+    global _CACHED_NVCC, _CACHED_SMS
+    if _CACHED_NVCC is None:
+        _CACHED_NVCC = _resolve_nvcc(nvcc)
+    if _CACHED_SMS is None:
+        _CACHED_SMS = _resolve_sms()
+    return _CACHED_NVCC, _CACHED_SMS
+
+
+def compile_source(
     nvcc: str,
     project_root: Path,
     repo_root: Path,
@@ -102,14 +183,15 @@ def _compile_cu(
     opt: str,
     defines,
     debug: bool,
-    sms,
 ):
+    nvcc_path, sms = _ensure_cuda_toolchain(nvcc)
+
     src = resolve_src(project_root, src_rel)
     obj = obj_path(build_dir, src_rel)
     obj.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        nvcc,
+        nvcc_path,
         f"-std={cxx_std}",
         opt,
         "-c",
@@ -128,39 +210,3 @@ def _compile_cu(
 
     run(cmd)
     return obj
-
-
-def build_objects(
-    nvcc: str,
-    project_root: Path,
-    repo_root: Path,
-    build_dir: Path,
-    sources,
-    cxx_std: str,
-    opt: str,
-    defines,
-    debug: bool,
-):
-    if not sources:
-        return []
-
-    nvcc_path = _resolve_nvcc(nvcc)
-    sms = _resolve_sms()
-
-    objs = []
-    for src_rel in sources:
-        objs.append(
-            _compile_cu(
-                nvcc=nvcc_path,
-                project_root=project_root,
-                repo_root=repo_root,
-                build_dir=build_dir,
-                src_rel=src_rel,
-                cxx_std=cxx_std,
-                opt=opt,
-                defines=defines,
-                debug=debug,
-                sms=sms,
-            )
-        )
-    return objs
