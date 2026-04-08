@@ -169,5 +169,8 @@ int main() {
     cudaFree(d_x);
     cudaFree(d_h);
     FreeExpertWeightsCudaV2(&storage);
-    return 0;
+
+    const bool pass = (max_abs <= 1e-3f) && (cos >= 0.99999f);
+    std::printf("PASS=%d\n", pass ? 1 : 0);
+    return pass ? 0 : 1;
 }

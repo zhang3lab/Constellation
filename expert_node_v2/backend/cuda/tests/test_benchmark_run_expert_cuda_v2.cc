@@ -272,7 +272,14 @@ int run_main_typed(const Args& args) {
             std::printf("ref[%d]=%g gpu[%d]=%g\n",
                         i, y_ref[i], i, y_gpu[i]);
         }
-    } else {
+
+	const bool pass =
+            (max_abs <= 5e-3f) &&
+            (mean_abs <= 1e-3f) &&
+            (cos >= 0.9999f);
+        std::printf("PASS=%d\n", pass ? 1 : 0);
+        return pass ? 0 : 1;
+    } else if (args.mode == "benchmark") {
         for (int i = 0; i < args.warmup; ++i) {
             if (!RunExpertCudaV2<TAct, TAct>(storage.view(), &ws, d_x, d_y, nullptr)) {
                 std::printf("warmup failed at iter=%d\n", i);
@@ -334,6 +341,9 @@ int run_main_typed(const Args& args) {
 
         cudaEventDestroy(ev_start);
         cudaEventDestroy(ev_stop);
+    } else {
+        std::printf("unsupported mode: %s\n", args.mode.c_str());
+        return 1;
     }
 
     cudaFree(d_x);

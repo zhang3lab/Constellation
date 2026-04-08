@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
             std::printf("ref[%d]=%g cpu[%d]=%g\n",
                         i, y_ref[i], i, y_cpu[i]);
         }
-    } else {
+    } else if (args.mode == "benchmark") {
         for (int i = 0; i < args.warmup; ++i) {
             if (!RunExpertCpuV2(
                     storage.view(),
@@ -222,6 +222,9 @@ int main(int argc, char** argv) {
         std::printf("CSV_ROW,run_expert_cpu,%s,%d,%d,%g,%g,%g,%g\n",
                     args.dtype.c_str(), args.warmup, args.iters,
                     mean, p50, p90, p99);
+    } else {
+        std::printf("unsupported mode: %s\n", args.mode.c_str());
+        return 1;
     }
 
     FreeExpertWorkspaceCpuV2(&ws);

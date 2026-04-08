@@ -161,17 +161,14 @@ bool BuildExpertWeightsViewV2(
 
     if (!BuildMatrixBlockScaleViewV2(
             bundle.w_up, bundle.w_up_scale, w_up_rows, w_up_cols, &out->w_up)) {
-	std::fprintf(stderr, "[BuildExpertWeightsViewV2] w_up failed\n");
         return false;
     }
     if (!BuildMatrixBlockScaleViewV2(
             bundle.w_gate, bundle.w_gate_scale, w_gate_rows, w_gate_cols, &out->w_gate)) {
-	std::fprintf(stderr, "[BuildExpertWeightsViewV2] w_gate failed\n");
         return false;
     }
     if (!BuildMatrixBlockScaleViewV2(
             bundle.w_down, bundle.w_down_scale, w_down_rows, w_down_cols, &out->w_down)) {
-	std::fprintf(stderr, "[BuildExpertWeightsViewV2] w_down failed\n");
         return false;
     }
 
