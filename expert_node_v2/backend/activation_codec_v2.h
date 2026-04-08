@@ -65,10 +65,19 @@ inline std::uint16_t EncodeFloatToFp16V2(float x) {
         return static_cast<std::uint16_t>(sign | 0x7C00u);
     }
 
+    std::uint32_t half_mant = (mant + 0x1000u) >> 13;
+    if (half_mant == 0x0400u) {
+        half_mant = 0;
+        ++exp;
+        if (exp >= 31) {
+            return static_cast<std::uint16_t>(sign | 0x7C00u);
+        }
+    }
+
     return static_cast<std::uint16_t>(
         sign |
         (static_cast<std::uint32_t>(exp) << 10) |
-        ((mant + 0x1000u) >> 13));
+        half_mant);
 }
 
 inline std::uint16_t EncodeFloatToBf16V2(float x) {
