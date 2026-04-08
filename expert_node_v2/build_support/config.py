@@ -151,12 +151,12 @@ TEST_TARGETS = {
             "backend/cuda/fused_up_gate_cuda_v2.cu",
             "backend/cuda/fp8_decode_lut_v2.cu",
             "backend/cuda/tests/fused_up_gate_raw_cuda_v2.cu",
+            "backend/cuda/tests/fused_up_gate_debug_cuda_v2.cu",
         ],
     },
     "test_benchmark_run_expert_cuda_v2": {
         "src": [
             "backend/cuda/tests/test_benchmark_run_expert_cuda_v2.cc",
-            "backend/cuda/tests/fused_up_gate_debug_cuda_v2.cu",
             "backend/cuda/backend_cuda_v2.cc",
             "expert_format_v2.cc",
             "backend/expert_reference_v2.cc",
