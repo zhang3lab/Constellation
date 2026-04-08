@@ -115,35 +115,46 @@ def build_test(name: str, debug: bool):
     print(f"\nbuilt: {out}")
 
 
-def _enabled_backend_test_prefixes():
-    prefixes = []
+def _backend_src_prefixes():
+    out = {}
+    for backend_name, spec in config.BACKENDS.items():
+        prefixes = set()
+        for src in spec.get("src", []):
+            norm = src.replace("\\", "/")
+            marker = f"backend/{backend_name}/"
+            idx = norm.find(marker)
+            if idx >= 0:
+                prefixes.add(marker)
+        out[backend_name] = sorted(prefixes)
+    return out
 
-    if config.ENABLE_CPU:
-        prefixes.append("test_")
-        prefixes.append("test_activation_codec_v2")
 
-    if config.ENABLE_CUDA:
-        prefixes.append("test_gpu_info_cuda_v2")
-        prefixes.append("test_activation_codec_cuda_v2")
+def _test_required_backends(test_name: str):
+    spec = config.TEST_TARGETS[test_name]
+    srcs = [s.replace("\\", "/") for s in spec.get("src", [])]
 
-    return prefixes
+    required = set()
+    backend_prefixes = _backend_src_prefixes()
+
+    for backend_name, prefixes in backend_prefixes.items():
+        for prefix in prefixes:
+            if any(src.startswith(prefix) for src in srcs):
+                required.add(backend_name)
+                break
+
+    return sorted(required)
 
 
 def should_run_test(name: str) -> bool:
-    # codec cpu test is backend-agnostic enough to run always
-    if name == "test_activation_codec_v2":
+    required = _test_required_backends(name)
+    if not required:
         return True
 
-    if "_cpu_" in name:
-        return config.ENABLE_CPU
-    if "_cuda_" in name:
-        return config.ENABLE_CUDA
-    if "_amd_" in name:
-        return config.ENABLE_AMD
-    if "_intel_" in name:
-        return config.ENABLE_INTEL
+    for backend_name in required:
+        backend_spec = config.BACKENDS.get(backend_name, {})
+        if not backend_spec.get("enabled", False):
+            return False
 
-    # fallback: run unknown/general tests
     return True
 
 
