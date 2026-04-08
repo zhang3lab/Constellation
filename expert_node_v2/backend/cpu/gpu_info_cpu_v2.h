@@ -1,13 +1,15 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "common/types.h"
 
-namespace expert_node_v2 {
+bool BuildLocalCpuGpuInfosV2(
+    std::int32_t worker_id_begin,
+    std::uint32_t worker_port_base,
+    std::vector<common::StaticGpuInfo>* out);
 
-bool QueryGpuInfoCpuV2(
-    int num_cpu_workers,
-    std::vector<common::StaticGpuInfo>* out_gpus);
-
-}  // namespace expert_node_v2
+bool BuildLocalCpuDynamicGpuInfosV2(
+    std::int32_t worker_id_begin,
+    std::vector<common::DynamicGpuInfo>* out);

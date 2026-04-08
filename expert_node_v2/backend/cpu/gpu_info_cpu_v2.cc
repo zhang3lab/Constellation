@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 #if defined(__linux__)
 #include <sys/sysinfo.h>
@@ -12,8 +14,30 @@
 #include <sys/sysctl.h>
 #endif
 
-namespace expert_node_v2 {
 namespace {
+
+constexpr int kLocalCpuWorkerCount = 1;
+
+std::uint32_t make_cpu_capability_flags() {
+    std::uint32_t flags = 0;
+    flags |= common::kGpuCapFp16;
+    flags |= common::kGpuCapBf16;
+    return flags;
+}
+
+std::string make_cpu_arch_name() {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+    return "arm64";
+#else
+    return "cpu";
+#endif
+}
+
+common::GpuStatus make_initial_gpu_status() {
+    return common::GpuStatus::Idle;
+}
 
 #if defined(__linux__)
 bool ReadMemoryInfoLinuxProcMeminfo(
@@ -235,21 +259,19 @@ bool ReadCpuName(std::string* out_name) {
 
 }  // namespace
 
-bool QueryGpuInfoCpuV2(
-    int num_cpu_workers,
-    std::vector<common::StaticGpuInfo>* out_gpus) {
-    if (out_gpus == nullptr) return false;
-    out_gpus->clear();
+bool BuildLocalCpuGpuInfosV2(
+    std::int32_t worker_id_begin,
+    std::uint32_t worker_port_base,
+    std::vector<common::StaticGpuInfo>* out) {
+    if (out == nullptr) return false;
+    out->clear();
 
-    if (num_cpu_workers <= 0) {
+    std::uint64_t total_mem_bytes = 0;
+    std::uint64_t free_mem_bytes = 0;
+    if (!ReadHostMemoryInfo(&total_mem_bytes, &free_mem_bytes)) {
         return false;
     }
-
-    std::uint64_t total_bytes = 0;
-    std::uint64_t free_bytes = 0;
-    if (!ReadHostMemoryInfo(&total_bytes, &free_bytes)) {
-        return false;
-    }
+    (void)free_mem_bytes;
 
     std::string cpu_name = "cpu";
     {
@@ -259,23 +281,47 @@ bool QueryGpuInfoCpuV2(
         }
     }
 
-    const std::uint64_t per_worker_total =
-        total_bytes / static_cast<std::uint64_t>(num_cpu_workers);
-    const std::uint64_t per_worker_free =
-        free_bytes / static_cast<std::uint64_t>(num_cpu_workers);
-
-    out_gpus->reserve(static_cast<std::size_t>(num_cpu_workers));
-    for (int i = 0; i < num_cpu_workers; ++i) {
+    for (int i = 0; i < kLocalCpuWorkerCount; ++i) {
         common::StaticGpuInfo gpu;
-        gpu.worker_id = i;
+        gpu.worker_id = worker_id_begin + i;
+        gpu.gpu_name = cpu_name;
+        gpu.total_mem_bytes =
+            total_mem_bytes / static_cast<std::uint64_t>(kLocalCpuWorkerCount);
+        gpu.worker_port =
+            worker_port_base + static_cast<std::uint32_t>(gpu.worker_id);
+
         gpu.gpu_vendor = common::GpuVendor::Cpu;
-        gpu.name = cpu_name;
-        gpu.total_bytes = per_worker_total;
-        gpu.free_bytes = per_worker_free;
-        out_gpus->push_back(gpu);
+        gpu.capability_flags = make_cpu_capability_flags();
+        gpu.arch_name = make_cpu_arch_name();
+
+        out->push_back(std::move(gpu));
     }
 
     return true;
 }
 
-}  // namespace expert_node_v2
+bool BuildLocalCpuDynamicGpuInfosV2(
+    std::int32_t worker_id_begin,
+    std::vector<common::DynamicGpuInfo>* out) {
+    if (out == nullptr) return false;
+    out->clear();
+
+    std::uint64_t total_mem_bytes = 0;
+    std::uint64_t free_mem_bytes = 0;
+    if (!ReadHostMemoryInfo(&total_mem_bytes, &free_mem_bytes)) {
+        return false;
+    }
+    (void)total_mem_bytes;
+
+    for (int i = 0; i < kLocalCpuWorkerCount; ++i) {
+        common::DynamicGpuInfo gpu;
+        gpu.worker_id = worker_id_begin + i;
+        gpu.free_mem_bytes =
+            free_mem_bytes / static_cast<std::uint64_t>(kLocalCpuWorkerCount);
+        gpu.gpu_status = make_initial_gpu_status();
+
+        out->push_back(std::move(gpu));
+    }
+
+    return true;
+}
