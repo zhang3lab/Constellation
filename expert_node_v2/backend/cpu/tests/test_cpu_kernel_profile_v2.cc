@@ -189,152 +189,6 @@ float ms_since(std::clock_t t0, std::clock_t t1) {
            static_cast<float>(CLOCKS_PER_SEC);
 }
 
-bool RunDownCpuF32OutLocalV2(
-    const MatrixBlockScaleViewV2& w_down,
-    const float* h,
-    float* y) {
-    if (h == nullptr || y == nullptr) return false;
-
-    const int rows = w_down.matrix.rows;
-    const int cols = w_down.matrix.cols;
-    if (rows <= 0 || cols <= 0) return false;
-
-    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
-    if (lut == nullptr) return false;
-
-    const auto weights = w_down.weight.data;
-    const auto scales = w_down.scale.data;
-
-    const int row_block = w_down.scale_meta.row_block;
-    const int col_block = w_down.scale_meta.col_block;
-    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
-
-    for (int row = 0; row < rows; ++row) {
-        const int rb = row / row_block;
-        const std::size_t row_base =
-            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
-
-        float sum = 0.0f;
-
-        for (int k0 = 0; k0 < cols; k0 += col_block) {
-            const int k1 = std::min(k0 + col_block, cols);
-            const int cb = k0 / col_block;
-
-            const std::size_t s_idx =
-                static_cast<std::size_t>(rb) *
-                    static_cast<std::size_t>(num_col_blocks) +
-                static_cast<std::size_t>(cb);
-
-            const float scale = scales[s_idx];
-
-            for (int k = k0; k < k1; ++k) {
-                const std::size_t w_idx =
-                    row_base + static_cast<std::size_t>(k);
-                sum += (lut[weights[w_idx]] * scale) * h[k];
-            }
-        }
-
-        y[row] = sum;
-    }
-
-    return true;
-}
-
-bool RunFusedUpGateNoSiluLocalV2(
-    const MatrixBlockScaleViewV2& w_up,
-    const MatrixBlockScaleViewV2& w_gate,
-    const void* x,
-    common::ActivationDType input_dtype,
-    float* h) {
-    if (x == nullptr || h == nullptr) return false;
-
-    const int rows = w_up.matrix.rows;
-    const int cols = w_up.matrix.cols;
-    if (rows <= 0 || cols <= 0) return false;
-
-    if (w_gate.matrix.rows != rows || w_gate.matrix.cols != cols) {
-        return false;
-    }
-
-    switch (input_dtype) {
-        case common::ActivationDType::FP16:
-        case common::ActivationDType::BF16:
-            break;
-        default:
-            return false;
-    }
-
-    const float* lut_up = GetHostFp8LutV2(w_up.matrix.fp8_format);
-    const float* lut_gate = GetHostFp8LutV2(w_gate.matrix.fp8_format);
-    if (lut_up == nullptr || lut_gate == nullptr) return false;
-
-    const auto up_weights = w_up.weight.data;
-    const auto up_scales = w_up.scale.data;
-    const auto gate_weights = w_gate.weight.data;
-    const auto gate_scales = w_gate.scale.data;
-    const auto* x_u16 = static_cast<const std::uint16_t*>(x);
-
-    const int up_row_block = w_up.scale_meta.row_block;
-    const int up_col_block = w_up.scale_meta.col_block;
-    const int up_num_col_blocks = w_up.scale_meta.num_col_blocks;
-
-    const int gate_row_block = w_gate.scale_meta.row_block;
-    const int gate_col_block = w_gate.scale_meta.col_block;
-    const int gate_num_col_blocks = w_gate.scale_meta.num_col_blocks;
-
-    if (up_col_block != gate_col_block) {
-        return false;
-    }
-
-    std::vector<float> x_f32(static_cast<std::size_t>(cols));
-    for (int k = 0; k < cols; ++k) {
-        x_f32[static_cast<std::size_t>(k)] =
-            DecodeActivationToFloatV2(input_dtype, x_u16[k]);
-    }
-
-    for (int row = 0; row < rows; ++row) {
-        const int rb_up = row / up_row_block;
-        const int rb_gate = row / gate_row_block;
-        const std::size_t row_base =
-            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
-
-        float up_sum = 0.0f;
-        float gate_sum = 0.0f;
-
-        for (int k0 = 0; k0 < cols; k0 += up_col_block) {
-            const int k1 = std::min(k0 + up_col_block, cols);
-            const int cb_up = k0 / up_col_block;
-            const int cb_gate = k0 / gate_col_block;
-
-            const std::size_t up_s_idx =
-                static_cast<std::size_t>(rb_up) *
-                    static_cast<std::size_t>(up_num_col_blocks) +
-                static_cast<std::size_t>(cb_up);
-
-            const std::size_t gate_s_idx =
-                static_cast<std::size_t>(rb_gate) *
-                    static_cast<std::size_t>(gate_num_col_blocks) +
-                static_cast<std::size_t>(cb_gate);
-
-            const float up_scale = up_scales[up_s_idx];
-            const float gate_scale = gate_scales[gate_s_idx];
-
-            for (int k = k0; k < k1; ++k) {
-                const std::size_t w_idx =
-                    row_base + static_cast<std::size_t>(k);
-                const float x_val = x_f32[static_cast<std::size_t>(k)];
-
-                up_sum += (lut_up[up_weights[w_idx]] * up_scale) * x_val;
-                gate_sum += (lut_gate[gate_weights[w_idx]] * gate_scale) * x_val;
-            }
-        }
-
-        h[row] = gate_sum * up_sum;
-    }
-
-    return true;
-}
-
 struct TestContext {
     common::ActivationDType act_dtype = common::ActivationDType::FP16;
 
@@ -423,16 +277,11 @@ int main(int argc, char** argv) {
     std::vector<float> y_f32(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0.0f);
 
     std::vector<float> up_gate_ms_list;
-    std::vector<float> up_gate_no_silu_ms_list;
     std::vector<float> down_u16_ms_list;
-    std::vector<float> down_f32_ms_list;
+    std::vector<float> down_predecode_f32_ms_list;
 
     up_gate_ms_list.reserve(static_cast<std::size_t>(args.iters));
-    up_gate_no_silu_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_u16_ms_list.reserve(static_cast<std::size_t>(args.iters));
-    down_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
-
-    std::vector<float> down_predecode_f32_ms_list;
     down_predecode_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
     for (int i = 0; i < args.iters; ++i) {
@@ -454,22 +303,6 @@ int main(int argc, char** argv) {
 
         {
             const std::clock_t t0 = std::clock();
-            if (!RunFusedUpGateNoSiluLocalV2(
-                    ctx.storage.view().w_up,
-                    ctx.storage.view().w_gate,
-                    ctx.x_act.data(),
-                    ctx.act_dtype,
-                    h_mid.data())) {
-                std::printf("RunFusedUpGateNoSiluLocalV2 failed at iter=%d\n", i);
-                CleanupTestContext(&ctx);
-                return 1;
-            }
-            const std::clock_t t1 = std::clock();
-            up_gate_no_silu_ms_list.push_back(ms_since(t0, t1));
-        }
-
-        {
-            const std::clock_t t0 = std::clock();
             if (!RunDownCpuV2(
                     ctx.storage.view().w_down,
                     h_mid.data(),
@@ -485,37 +318,21 @@ int main(int argc, char** argv) {
 
         {
             const std::clock_t t0 = std::clock();
-            if (!RunDownCpuF32OutLocalV2(
+            if (!RunDownCpuPredecodeBlockLocalV2(
                     ctx.storage.view().w_down,
                     h_mid.data(),
                     y_f32.data())) {
-                std::printf("RunDownCpuF32OutLocalV2 failed at iter=%d\n", i);
+                std::printf("RunDownCpuPredecodeBlockLocalV2 failed at iter=%d\n", i);
                 CleanupTestContext(&ctx);
                 return 1;
             }
             const std::clock_t t1 = std::clock();
-            down_f32_ms_list.push_back(ms_since(t0, t1));
+            down_predecode_f32_ms_list.push_back(ms_since(t0, t1));
         }
-
-	{
-    const std::clock_t t0 = std::clock();
-    if (!RunDownCpuPredecodeBlockLocalV2(
-            ctx.storage.view().w_down,
-            h_mid.data(),
-            y_f32.data())) {
-        std::printf("RunDownCpuPredecodeBlockLocalV2 failed at iter=%d\n", i);
-        CleanupTestContext(&ctx);
-        return 1;
-    }
-    const std::clock_t t1 = std::clock();
-    down_predecode_f32_ms_list.push_back(ms_since(t0, t1));
-}
     }
 
     print_stats("up_gate", up_gate_ms_list);
-    print_stats("up_gate_no_silu", up_gate_no_silu_ms_list);
     print_stats("down_u16_out", down_u16_ms_list);
-    print_stats("down_f32_out", down_f32_ms_list);
     print_stats("down_predecode_f32", down_predecode_f32_ms_list);
 
     CleanupTestContext(&ctx);
