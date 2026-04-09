@@ -35,10 +35,10 @@ bool RunFusedUpGateCpuV2(
     const float* lut_gate = GetHostFp8LutV2(w_gate.matrix.fp8_format);
     if (lut_up == nullptr || lut_gate == nullptr) return false;
 
-    const auto* up_weights = w_up.weight.data;
-    const auto* up_scales = w_up.scale.data;
-    const auto* gate_weights = w_gate.weight.data;
-    const auto* gate_scales = w_gate.scale.data;
+    const auto up_weights = w_up.weight.data;
+    const auto up_scales = w_up.scale.data;
+    const auto gate_weights = w_gate.weight.data;
+    const auto gate_scales = w_gate.scale.data;
     const auto* x_u16 = static_cast<const std::uint16_t*>(x);
 
     const int up_row_block = w_up.scale_meta.row_block;
