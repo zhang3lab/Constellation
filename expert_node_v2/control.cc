@@ -486,7 +486,9 @@ bool HandleLoadWeightsEnd(
     std::uint64_t total_bytes = 0;
     std::size_t final_buffer_size = 0;
     common::GpuVendor vendor = static_cast<common::GpuVendor>(0);
-    bool incoming_ready = false;
+    bool incoming_ready_before_update = false;
+    bool incoming_cleared_after_update = false;
+    bool incoming_ready_after_update = false;
     bool resident_ready = false;
 
     {
@@ -585,8 +587,7 @@ bool HandleLoadWeightsEnd(
             return false;
         }
 
-        bool incoming_ready_before_update = entry->incoming_ready;
-        bool incoming_cleared_after_update = false;
+        incoming_ready_before_update = entry->incoming_ready;
 
         if (entry->incoming_ready) {
             if (!state->registry.Update(
@@ -629,7 +630,7 @@ bool HandleLoadWeightsEnd(
         const ExpertDeviceStorageV2* storage =
             state->registry.FindDeviceStorage(msg.expert_id, msg.worker_id);
 
-        incoming_ready = entry->incoming_ready;
+	incoming_ready_after_update = entry->incoming_ready;
         resident_ready = (storage != nullptr);
 
         state->registry.DebugPrint();
@@ -649,7 +650,7 @@ bool HandleLoadWeightsEnd(
                 static_cast<unsigned long long>(total_bytes),
                 final_buffer_size,
                 static_cast<int>(incoming_ready_before_update),
-                static_cast<int>(incoming_ready),
+                static_cast<int>(incoming_ready_after_update),
                 static_cast<int>(incoming_cleared_after_update),
                 static_cast<int>(resident_ready));
 
