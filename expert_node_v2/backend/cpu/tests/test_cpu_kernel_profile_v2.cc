@@ -21,6 +21,17 @@
 #include <immintrin.h>
 #endif
 
+void FlushCpuCachesLocalV2() {
+    static std::vector<std::uint8_t> buf(256 * 1024 * 1024, 1);
+    static volatile std::uint64_t sink = 0;
+
+    std::uint64_t acc = 0;
+    for (std::size_t i = 0; i < buf.size(); i += 64) {
+        acc += buf[i];
+    }
+    sink += acc;
+}
+
 struct Fp16ResidentMatrixLocalV2 {
     int rows = 0;
     int cols = 0;
@@ -821,6 +832,7 @@ int main(int argc, char** argv) {
         }
 
         {
+		FlushCpuCachesLocalV2();
             const auto t0 = std::chrono::steady_clock::now();
             if (!RunDownCpuFp16ResidentF16cAvx2LocalV2(
                     w_down_fp16,
@@ -836,6 +848,7 @@ int main(int argc, char** argv) {
         }
 
         {
+            FlushCpuCachesLocalV2();
             const auto t0 = std::chrono::steady_clock::now();
             if (!RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
                     w_down_fp16,
@@ -856,8 +869,8 @@ int main(int argc, char** argv) {
     print_stats("down_u16_out", down_u16_ms_list);
     print_stats("down_avx2_tile8_f32", down_avx2_tile8_f32_ms_list);
     print_stats("down_fp16_resident_f16c", down_fp16_resident_f16c_ms_list);
-    print_stats("down_fp16_resident_f16c_avx2", down_fp16_resident_f16c_avx2_ms_list);
-    print_stats("down_fp16_resident_f16c_avx2_omp", down_fp16_resident_f16c_avx2_omp_ms_list);
+    print_stats("down_fp16_resident_f16c_avx2_cold", down_fp16_resident_f16c_avx2_ms_list);
+    print_stats("down_fp16_resident_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
