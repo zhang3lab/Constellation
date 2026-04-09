@@ -16,6 +16,12 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+struct Fp16ResidentMatrixLocalV2 {
+    int rows = 0;
+    int cols = 0;
+    std::vector<std::uint16_t> data;  // fp16 payload
+};
+
 bool RunDownCpuFp16ResidentF16cLocalV2(
     const Fp16ResidentMatrixLocalV2& w_down_fp16,
     const float* h,
@@ -98,12 +104,6 @@ bool RunDownCpuFp16ResidentF16cLocalV2(
     return true;
 #endif
 }
-
-struct Fp16ResidentMatrixLocalV2 {
-    int rows = 0;
-    int cols = 0;
-    std::vector<std::uint16_t> data;  // fp16 payload
-};
 
 bool BuildDownFp16ResidentLocalV2(
     const MatrixBlockScaleViewV2& w_down,
