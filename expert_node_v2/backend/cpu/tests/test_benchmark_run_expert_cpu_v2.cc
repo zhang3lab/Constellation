@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -279,7 +280,7 @@ bool RunBenchmark(const Args& args, TestContext* ctx) {
     ms_list.reserve(static_cast<std::size_t>(args.iters));
 
     for (int i = 0; i < args.iters; ++i) {
-        const std::clock_t t0 = std::clock();
+        const auto t0 = std::chrono::steady_clock::now();
         if (!RunExpertCpuV2(
                 ctx->storage.view(),
                 &ctx->ws,
@@ -290,11 +291,10 @@ bool RunBenchmark(const Args& args, TestContext* ctx) {
             std::printf("benchmark failed at iter=%d\n", i);
             return false;
         }
-        const std::clock_t t1 = std::clock();
-        const float ms =
-            1000.0f *
-            static_cast<float>(t1 - t0) /
-            static_cast<float>(CLOCKS_PER_SEC);
+        const auto t1 = std::chrono::steady_clock::now();
+
+        const float ms = static_cast<float>(
+            std::chrono::duration<double, std::milli>(t1 - t0).count());
         ms_list.push_back(ms);
     }
 
