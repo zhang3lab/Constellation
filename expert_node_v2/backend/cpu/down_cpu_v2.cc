@@ -36,6 +36,7 @@ bool RunDownCpuV2(
     const int col_block = w_down.scale_meta.col_block;
     const int num_col_blocks = w_down.scale_meta.num_col_blocks;
 
+#pragma omp parallel for schedule(static)
     for (int row = 0; row < rows; ++row) {
         const int rb = row / row_block;
         const std::size_t row_base =

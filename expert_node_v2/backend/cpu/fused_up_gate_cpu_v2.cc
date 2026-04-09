@@ -53,6 +53,12 @@ bool RunFusedUpGateCpuV2(
         return false;
     }
 
+    std::vector<float> x_f32(static_cast<std::size_t>(cols));
+    for (int k = 0; k < cols; ++k) {
+        x_f32[static_cast<std::size_t>(k)] =
+            DecodeActivationToFloatV2(input_dtype, x_u16[k]);
+    }
+
 #pragma omp parallel for schedule(static)
     for (int row = 0; row < rows; ++row) {
         const int rb_up = row / up_row_block;
@@ -101,14 +107,10 @@ bool RunFusedUpGateCpuV2(
                 const std::size_t w_idx3 =
                     row_base + static_cast<std::size_t>(k + 3);
 
-                const float x0 =
-                    DecodeActivationToFloatV2(input_dtype, x_u16[k + 0]);
-                const float x1 =
-                    DecodeActivationToFloatV2(input_dtype, x_u16[k + 1]);
-                const float x2 =
-                    DecodeActivationToFloatV2(input_dtype, x_u16[k + 2]);
-                const float x3 =
-                    DecodeActivationToFloatV2(input_dtype, x_u16[k + 3]);
+                const float x0 = x_f32[static_cast<std::size_t>(k + 0)];
+                const float x1 = x_f32[static_cast<std::size_t>(k + 1)];
+                const float x2 = x_f32[static_cast<std::size_t>(k + 2)];
+                const float x3 = x_f32[static_cast<std::size_t>(k + 3)];
 
                 const float up_w0 = lut_up[up_weights[w_idx0]] * up_scale;
                 const float up_w1 = lut_up[up_weights[w_idx1]] * up_scale;
@@ -134,8 +136,7 @@ bool RunFusedUpGateCpuV2(
             for (; k < k1; ++k) {
                 const std::size_t w_idx =
                     row_base + static_cast<std::size_t>(k);
-                const float x_val =
-                    DecodeActivationToFloatV2(input_dtype, x_u16[k]);
+                const float x_val = x_f32[static_cast<std::size_t>(k)];
 
                 const float up_w = lut_up[up_weights[w_idx]] * up_scale;
                 const float gate_w = lut_gate[gate_weights[w_idx]] * gate_scale;
