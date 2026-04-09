@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "expert_node_v2/backend/backend_registry_v2.h"
 #include "expert_node_v2/build_config_v2.h"
 
 #if EXPERT_NODE_V2_ENABLE_CUDA
