@@ -17,6 +17,68 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+bool RunDownCpuBasicSimpleLocalV2(
+    const MatrixBlockScaleViewV2& w_down,
+    const float* h,
+    void* y,
+    common::ActivationDType output_dtype) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down.matrix.rows;
+    const int cols = w_down.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    switch (output_dtype) {
+        case common::ActivationDType::FP16:
+        case common::ActivationDType::BF16:
+            break;
+        default:
+            return false;
+    }
+
+    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
+    if (lut == nullptr) return false;
+
+    const auto weights = w_down.weight.data;
+    const auto scales = w_down.scale.data;
+    auto* y_u16 = static_cast<std::uint16_t*>(y);
+
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
+    for (int row = 0; row < rows; ++row) {
+        const int rb = row / row_block;
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        float sum = 0.0f;
+
+        for (int k0 = 0; k0 < cols; k0 += col_block) {
+            const int k1 = std::min(k0 + col_block, cols);
+            const int cb = k0 / col_block;
+
+            const std::size_t s_idx =
+                static_cast<std::size_t>(rb) *
+                    static_cast<std::size_t>(num_col_blocks) +
+                static_cast<std::size_t>(cb);
+
+            const float scale = scales[s_idx];
+
+            for (int k = k0; k < k1; ++k) {
+                const std::size_t w_idx =
+                    row_base + static_cast<std::size_t>(k);
+                const float w = lut[weights[w_idx]] * scale;
+                sum += w * h[k];
+            }
+        }
+
+        y_u16[row] = EncodeActivationFromFloatV2(output_dtype, sum);
+    }
+
+    return true;
+}
+
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -883,6 +945,11 @@ down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_fp16_resident_f16c_avx2_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_fp16_resident_f16c_avx2_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
+    std::vector<float> down_u16_basic_simple_ms_list;
+down_u16_basic_simple_ms_list.reserve(static_cast<std::size_t>(args.iters));
+std::vector<float> down_u16_basic_simple_omp_ms_list;
+down_u16_basic_simple_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     // OMP warmup to avoid first-use thread pool skew.
     if (!RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
             w_down_fp16,
@@ -1006,6 +1073,22 @@ down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_u16_omp_ms_list.push_back(
         std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
+
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!RunDownCpuBasicSimpleLocalV2(
+            ctx.storage.view().w_down,
+            h_mid.data(),
+            y_u16.data(),
+            ctx.act_dtype)) {
+        std::printf("RunDownCpuBasicSimpleLocalV2 failed at iter=%d\n", i);
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    down_u16_basic_simple_ms_list.push_back(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
@@ -1016,6 +1099,7 @@ down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
     print_stats("down_fp16_resident_f16c_avx2_cold", down_fp16_resident_f16c_avx2_ms_list);
     print_stats("down_fp16_resident_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
     print_stats("down_u16_out_omp_cold", down_u16_omp_ms_list);
+    print_stats("down_u16_basic_simple", down_u16_basic_simple_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
