@@ -41,7 +41,10 @@ bool RunDownCpuV2(
         const std::size_t row_base =
             static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
 
-        float sum = 0.0f;
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        float sum2 = 0.0f;
+        float sum3 = 0.0f;
 
         for (int k0 = 0; k0 < cols; k0 += col_block) {
             const int k1 = std::min(k0 + col_block, cols);
@@ -56,10 +59,14 @@ bool RunDownCpuV2(
 
             int k = k0;
             for (; k + 3 < k1; k += 4) {
-                const std::size_t w_idx0 = row_base + static_cast<std::size_t>(k + 0);
-                const std::size_t w_idx1 = row_base + static_cast<std::size_t>(k + 1);
-                const std::size_t w_idx2 = row_base + static_cast<std::size_t>(k + 2);
-                const std::size_t w_idx3 = row_base + static_cast<std::size_t>(k + 3);
+                const std::size_t w_idx0 =
+                    row_base + static_cast<std::size_t>(k + 0);
+                const std::size_t w_idx1 =
+                    row_base + static_cast<std::size_t>(k + 1);
+                const std::size_t w_idx2 =
+                    row_base + static_cast<std::size_t>(k + 2);
+                const std::size_t w_idx3 =
+                    row_base + static_cast<std::size_t>(k + 3);
 
                 const float h0 = h[k + 0];
                 const float h1 = h[k + 1];
@@ -71,19 +78,35 @@ bool RunDownCpuV2(
                 const float w2 = lut[weights[w_idx2]] * scale;
                 const float w3 = lut[weights[w_idx3]] * scale;
 
-                sum += w0 * h0;
-                sum += w1 * h1;
-                sum += w2 * h2;
-                sum += w3 * h3;
+                sum0 += w0 * h0;
+                sum1 += w1 * h1;
+                sum2 += w2 * h2;
+                sum3 += w3 * h3;
             }
 
             for (; k < k1; ++k) {
                 const std::size_t w_idx =
                     row_base + static_cast<std::size_t>(k);
-                sum += (lut[weights[w_idx]] * scale) * h[k];
+                const float w = lut[weights[w_idx]] * scale;
+
+                switch ((k - k0) & 3) {
+                    case 0:
+                        sum0 += w * h[k];
+                        break;
+                    case 1:
+                        sum1 += w * h[k];
+                        break;
+                    case 2:
+                        sum2 += w * h[k];
+                        break;
+                    default:
+                        sum3 += w * h[k];
+                        break;
+                }
             }
         }
 
+        const float sum = (sum0 + sum1) + (sum2 + sum3);
         y_u16[row] = EncodeActivationFromFloatV2(output_dtype, sum);
     }
 
