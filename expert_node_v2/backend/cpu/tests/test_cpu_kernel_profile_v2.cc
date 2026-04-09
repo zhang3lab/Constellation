@@ -16,6 +16,10 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
 struct Fp16ResidentMatrixLocalV2 {
     int rows = 0;
     int cols = 0;
@@ -229,10 +233,6 @@ bool RunDownCpuFp16ResidentLocalV2(
 
     return true;
 }
-
-#if defined(__AVX2__)
-#include <immintrin.h>
-#endif
 
 bool RunDownCpuAvx2Tile8LocalV2(
     const MatrixBlockScaleViewV2& w_down,
