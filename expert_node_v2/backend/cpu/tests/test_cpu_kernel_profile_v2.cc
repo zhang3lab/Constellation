@@ -16,6 +16,137 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+struct Fp16ResidentMatrixLocalV2 {
+    int rows = 0;
+    int cols = 0;
+    std::vector<std::uint16_t> data;  // fp16 payload
+};
+
+bool BuildDownFp16ResidentLocalV2(
+    const MatrixBlockScaleViewV2& w_down,
+    Fp16ResidentMatrixLocalV2* out) {
+    if (out == nullptr) return false;
+
+    const int rows = w_down.matrix.rows;
+    const int cols = w_down.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
+    if (lut == nullptr) return false;
+
+    const auto weights = w_down.weight.data;
+    const auto scales = w_down.scale.data;
+
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
+    out->rows = rows;
+    out->cols = cols;
+    out->data.assign(
+        static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols), 0);
+
+    for (int row = 0; row < rows; ++row) {
+        const int rb = row / row_block;
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        for (int k0 = 0; k0 < cols; k0 += col_block) {
+            const int k1 = std::min(k0 + col_block, cols);
+            const int cb = k0 / col_block;
+
+            const std::size_t s_idx =
+                static_cast<std::size_t>(rb) *
+                    static_cast<std::size_t>(num_col_blocks) +
+                static_cast<std::size_t>(cb);
+
+            const float scale = scales[s_idx];
+
+            for (int k = k0; k < k1; ++k) {
+                const std::size_t w_idx =
+                    row_base + static_cast<std::size_t>(k);
+                const float w = lut[weights[w_idx]] * scale;
+                out->data[w_idx] =
+                    EncodeActivationFromFloatV2(common::ActivationDType::FP16, w);
+            }
+        }
+    }
+
+    return true;
+}
+
+bool RunDownCpuFp16ResidentLocalV2(
+    const Fp16ResidentMatrixLocalV2& w_down_fp16,
+    const float* h,
+    float* y) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down_fp16.rows;
+    const int cols = w_down_fp16.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    const auto& weights = w_down_fp16.data;
+    if (weights.size() !=
+        static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols)) {
+        return false;
+    }
+
+    for (int row = 0; row < rows; ++row) {
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        float sum2 = 0.0f;
+        float sum3 = 0.0f;
+
+        int k = 0;
+        for (; k + 3 < cols; k += 4) {
+            const float w0 =
+                DecodeActivationToFloatV2(common::ActivationDType::FP16,
+                                          weights[row_base + static_cast<std::size_t>(k + 0)]);
+            const float w1 =
+                DecodeActivationToFloatV2(common::ActivationDType::FP16,
+                                          weights[row_base + static_cast<std::size_t>(k + 1)]);
+            const float w2 =
+                DecodeActivationToFloatV2(common::ActivationDType::FP16,
+                                          weights[row_base + static_cast<std::size_t>(k + 2)]);
+            const float w3 =
+                DecodeActivationToFloatV2(common::ActivationDType::FP16,
+                                          weights[row_base + static_cast<std::size_t>(k + 3)]);
+
+            sum0 += w0 * h[k + 0];
+            sum1 += w1 * h[k + 1];
+            sum2 += w2 * h[k + 2];
+            sum3 += w3 * h[k + 3];
+        }
+
+        for (; k < cols; ++k) {
+            const float w =
+                DecodeActivationToFloatV2(common::ActivationDType::FP16,
+                                          weights[row_base + static_cast<std::size_t>(k)]);
+            switch (k & 3) {
+                case 0:
+                    sum0 += w * h[k];
+                    break;
+                case 1:
+                    sum1 += w * h[k];
+                    break;
+                case 2:
+                    sum2 += w * h[k];
+                    break;
+                default:
+                    sum3 += w * h[k];
+                    break;
+            }
+        }
+
+        y[row] = (sum0 + sum1) + (sum2 + sum3);
+    }
+
+    return true;
+}
+
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -917,6 +1048,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    Fp16ResidentMatrixLocalV2 w_down_fp16;
+if (!BuildDownFp16ResidentLocalV2(ctx.storage.view().w_down, &w_down_fp16)) {
+    std::printf("BuildDownFp16ResidentLocalV2 failed\n");
+    CleanupTestContext(&ctx);
+    return 1;
+}
+std::vector<float> down_fp16_resident_ms_list;
+down_fp16_resident_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     std::vector<float> h_mid(static_cast<std::size_t>(ctx.cfg.inter_dim), 0.0f);
     std::vector<std::uint16_t> y_u16(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0);
     std::vector<float> y_f32(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0.0f);
@@ -1064,6 +1204,20 @@ down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
     const std::clock_t t1 = std::clock();
     down_avx2_tile8_f32_ms_list.push_back(ms_since(t0, t1));
 }
+
+{
+    const std::clock_t t0 = std::clock();
+    if (!RunDownCpuFp16ResidentLocalV2(
+            w_down_fp16,
+            h_mid.data(),
+            y_f32.data())) {
+        std::printf("RunDownCpuFp16ResidentLocalV2 failed at iter=%d\n", i);
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const std::clock_t t1 = std::clock();
+    down_fp16_resident_ms_list.push_back(ms_since(t0, t1));
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
@@ -1074,6 +1228,7 @@ print_stats("up_gate_pipe4", up_gate_pipe4_ms_list);
     print_stats("down_predecode_f32", down_predecode_f32_ms_list);
     print_stats("down_tile16_f32", down_tile16_f32_ms_list);
 print_stats("down_avx2_tile8_f32", down_avx2_tile8_f32_ms_list);
+print_stats("down_fp16_resident", down_fp16_resident_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
