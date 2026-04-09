@@ -13,6 +13,7 @@ namespace expert_node_v2 {
 
 struct ExpertResidentSlotV2 {
     int worker_id = -1;
+    common::GpuVendor vendor = common::GpuVendor::Unknown;
     ExpertDeviceStorageV2 storage;
     bool resident_ready = false;
 };
@@ -28,7 +29,7 @@ struct ExpertEntryV2 {
 
 class ExpertRegistryV2 {
 public:
-    void clear();
+    void Reset();
 
     bool StoreIncomingTensor(
         int expert_id,
@@ -37,11 +38,13 @@ public:
         std::vector<std::uint8_t>&& bytes,
         common::TensorMeta&& meta);
 
+    bool ClearIncoming(int expert_id);
+
     bool Update(
         int expert_id,
         int worker_id,
         common::GpuVendor vendor,
-        const std::array<common::VendorWorkerSpan, 256>& vendor_spans);
+        const std::array<common::VendorWorkerSpan, common::kGpuVendorCount>& vendor_spans);
 
     const ExpertEntryV2* FindEntry(int expert_id) const;
     const ExpertDeviceStorageV2* FindDeviceStorage(

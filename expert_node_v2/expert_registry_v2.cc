@@ -45,7 +45,37 @@ HostTensorV2* select_incoming_slot(
 
 }  // namespace
 
-void ExpertRegistryV2::clear() {
+void ExpertRegistryV2::Reset() {
+    for (auto& kv : entries_) {
+        ExpertEntryV2& entry = kv.second;
+
+        for (auto& rk : entry.residents) {
+            ExpertResidentSlotV2& slot = rk.second;
+
+            if (slot.resident_ready) {
+                const expert_node_v2::BackendRegistryEntryV2* backend =
+                    expert_node_v2::FindBackendRegistryEntryV2(slot.vendor);
+                if (backend == nullptr || backend->free_expert_weights == nullptr) {
+                    std::fprintf(stderr,
+                                 "[expert_registry_v2] missing backend free during reset "
+                                 "expert=%d worker=%d vendor=%u\n",
+                                 entry.expert_id,
+                                 slot.worker_id,
+                                 static_cast<unsigned>(slot.vendor));
+                    std::abort();
+                }
+
+                backend->free_expert_weights(&slot.storage);
+                slot.resident_ready = false;
+                slot.vendor = common::GpuVendor::Unknown;
+            }
+        }
+
+        entry.residents.clear();
+        entry.incoming.clear();
+        entry.incoming_ready = false;
+    }
+
     entries_.clear();
 }
 
@@ -110,11 +140,23 @@ bool ExpertRegistryV2::StoreIncomingTensor(
     return true;
 }
 
+bool ExpertRegistryV2::ClearIncoming(int expert_id) {
+    if (expert_id < 0) return false;
+
+    auto it = entries_.find(expert_id);
+    if (it == entries_.end()) return false;
+
+    ExpertEntryV2& entry = it->second;
+    entry.incoming.clear();
+    entry.incoming_ready = false;
+    return true;
+}
+
 bool ExpertRegistryV2::Update(
     int expert_id,
     int worker_id,
     common::GpuVendor vendor,
-    const std::array<common::VendorWorkerSpan, 256>& vendor_spans) {
+    const std::array<common::VendorWorkerSpan, common::kGpuVendorCount>& vendor_spans) {
     if (expert_id < 0 || worker_id < 0) return false;
 
     const expert_node_v2::BackendRegistryEntryV2* backend =
@@ -146,8 +188,8 @@ bool ExpertRegistryV2::Update(
 
     if (slot->resident_ready) {
         backend->free_expert_weights(&slot->storage);
-        slot->storage.clear();
         slot->resident_ready = false;
+        slot->vendor = common::GpuVendor::Unknown;
     }
 
     const bool ok =
@@ -159,12 +201,13 @@ bool ExpertRegistryV2::Update(
                      expert_id,
                      worker_id,
                      static_cast<unsigned>(vendor));
-        slot->storage.clear();
         slot->resident_ready = false;
+        slot->vendor = common::GpuVendor::Unknown;
         return false;
     }
 
     slot->resident_ready = true;
+    slot->vendor = vendor;
     return true;
 }
 

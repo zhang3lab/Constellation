@@ -268,7 +268,7 @@ bool HandlePlacementPlan(
         ack = BuildPlacementAck(*state, assignments);
 
         if (ack.needs_reload) {
-            state->registry.clear();
+            state->registry.Reset();
             state->active_load = ActiveLoad{};
         }
     }
@@ -585,6 +585,9 @@ bool HandleLoadWeightsEnd(
             return false;
         }
 
+        bool incoming_ready_before_update = entry->incoming_ready;
+        bool incoming_cleared_after_update = false;
+
         if (entry->incoming_ready) {
             if (!state->registry.Update(
                     msg.expert_id,
@@ -597,6 +600,28 @@ bool HandleLoadWeightsEnd(
                              msg.expert_id,
                              msg.worker_id,
                              static_cast<unsigned>(vendor));
+                return false;
+            }
+
+            if (!state->registry.ClearIncoming(msg.expert_id)) {
+                std::fprintf(stderr,
+                             "[%s] failed to clear incoming tensors after upload "
+                             "for expert=%d worker=%d vendor=%u\n",
+                             state->static_info.node_id.c_str(),
+                             msg.expert_id,
+                             msg.worker_id,
+                             static_cast<unsigned>(vendor));
+                return false;
+            }
+
+            incoming_cleared_after_update = true;
+
+            entry = state->registry.FindEntry(msg.expert_id);
+            if (entry == nullptr) {
+                std::fprintf(stderr,
+                             "[%s] missing entry after ClearIncoming for expert=%d\n",
+                             state->static_info.node_id.c_str(),
+                             msg.expert_id);
                 return false;
             }
         }
@@ -613,7 +638,8 @@ bool HandleLoadWeightsEnd(
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
                 "expert=%d worker_id=%d vendor=%u tensor_kind=%s total_bytes=%llu buffer_size=%zu "
-                "incoming_ready=%d resident_ready=%d\n",
+                "incoming_ready_before_update=%d incoming_ready_after_update=%d "
+                "incoming_cleared_after_update=%d resident_ready=%d\n",
                 state->static_info.node_id.c_str(),
                 req.request_id,
                 msg.expert_id,
@@ -622,7 +648,9 @@ bool HandleLoadWeightsEnd(
                 TensorKindName(msg.tensor_kind),
                 static_cast<unsigned long long>(total_bytes),
                 final_buffer_size,
+                static_cast<int>(incoming_ready_before_update),
                 static_cast<int>(incoming_ready),
+                static_cast<int>(incoming_cleared_after_update),
                 static_cast<int>(resident_ready));
 
     const bool ok =

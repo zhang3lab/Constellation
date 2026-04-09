@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <string>
 #include <vector>
@@ -128,25 +129,42 @@ struct ExpertWeightsViewV2 {
 };
 
 // -----------------------------------------------------------------------------
-// Generic owning buffer for device-resident memory.
-// size counts T elements.
-// Allocation/copy/free are handled by backend-specific code.
+// Backend-managed device buffer handle.
+// `data` points to backend-allocated device-resident memory and `size` counts
+// T elements.
+// This type does NOT own deallocation logic and must NOT provide a `clear()`
+// helper that merely nulls the pointer.
+// Allocation/copy/free are handled explicitly by backend-specific code.
+// The destructor asserts that backend-specific free/reset has already happened.
 // -----------------------------------------------------------------------------
 template <class T>
 struct DeviceBufferV2 {
     T* data = nullptr;
     std::size_t size = 0;  // number of T elements
 
-    void clear() {
-        data = nullptr;
-        size = 0;
+    ~DeviceBufferV2() {
+        if (data != nullptr || size != 0) {
+            std::fprintf(
+                stderr,
+                "[DeviceBufferV2] leaked device buffer detected at destruction: "
+                "data=%p size=%zu\n",
+                static_cast<void*>(data),
+                size);
+            std::abort();
+        }
     }
 };
 
 // -----------------------------------------------------------------------------
-// Device-resident storage for one expert.
-// Owns FP8 weight bytes + float block scales for w_up / w_gate / w_down, and
+// Backend-managed device-resident storage for one expert.
+// Holds FP8 weight bytes + float block scales for w_up / w_gate / w_down, and
 // can materialize uniform matrix/expert views for runtime execution.
+//
+// This type is only a container of backend-managed device handles.
+// It must NOT provide a `clear()` helper that merely resets fields without
+// freeing backend resources.
+// Callers must release storage through the corresponding backend-specific free
+// function, and only then reset the struct state.
 // -----------------------------------------------------------------------------
 struct ExpertDeviceStorageV2 {
     MatrixMetaV2 w_up_meta;
@@ -165,23 +183,6 @@ struct ExpertDeviceStorageV2 {
 
     DeviceBufferV2<std::uint8_t> w_down_weight;
     DeviceBufferV2<float> w_down_scale;
-
-    void clear() {
-        w_up_meta = MatrixMetaV2{};
-        w_gate_meta = MatrixMetaV2{};
-        w_down_meta = MatrixMetaV2{};
-
-        w_up_scale_meta = BlockScaleMetaV2{};
-        w_gate_scale_meta = BlockScaleMetaV2{};
-        w_down_scale_meta = BlockScaleMetaV2{};
-
-        w_up_weight.clear();
-        w_up_scale.clear();
-        w_gate_weight.clear();
-        w_gate_scale.clear();
-        w_down_weight.clear();
-        w_down_scale.clear();
-    }
 
     MatrixBlockScaleViewV2 w_up_view() const {
         return make_matrix_view(

@@ -1,5 +1,8 @@
 from pathlib import Path
+import threading
+import traceback
 from typing import Any, Dict, List, Sequence
+     
 
 from common.protocol import TensorKind
 from server.client import NodeClient
@@ -382,6 +385,74 @@ class Coordinator:
         )
 
 
+    def _preload_manifest_for_one_node(
+        self,
+        model_loader,
+        manifest_items,
+        chunk_size: int,
+        progress_prefix: str,
+    ):
+        if not manifest_items:
+            return
+     
+        first_target = manifest_items[0]["target"]
+        host = str(first_target["host"])
+        control_port = int(first_target["control_port"])
+        node_instance_id = str(first_target["node_instance_id"])
+     
+        client = None
+        shard_file = None
+        current_shard_path = None
+        done_entries = 0
+        total_entries = len(manifest_items)
+     
+        try:
+            client = NodeClient(host, control_port)
+            client.__enter__()
+     
+            print(
+                f"{progress_prefix} open control "
+                f"node={node_instance_id} host={host} port={control_port}"
+            )
+     
+            for item in manifest_items:
+                shard_path = str(item["shard_path"])
+     
+                if shard_path != current_shard_path:
+                    if shard_file is not None:
+                        shard_file.__exit__(None, None, None)
+                        shard_file = None
+     
+                    shard_file = model_loader.open_shard(shard_path)
+                    shard_file.__enter__()
+                    current_shard_path = shard_path
+     
+                    print(
+                        f"{progress_prefix} open shard "
+                        f"node={node_instance_id} path={shard_path}"
+                    )
+     
+                self.send_one_tensor_from_open_shard(
+                    shard_file=shard_file,
+                    item=item,
+                    chunk_size=chunk_size,
+                    client=client,
+                )
+     
+                done_entries += 1
+                if done_entries == 1 or done_entries % 32 == 0 or done_entries == total_entries:
+                    print(
+                        f"{progress_prefix} {done_entries}/{total_entries} "
+                        f"expert={item['expert_id']} tensor={item['tensor_kind_name']}"
+                    )
+     
+        finally:
+            if shard_file is not None:
+                shard_file.__exit__(None, None, None)
+            if client is not None:
+                client.__exit__(None, None, None)
+
+
     def preload_all_placed_experts(
         self,
         model_loader,
@@ -437,70 +508,50 @@ class Coordinator:
             f"experts_to_preload={len(preloaded_expert_ids)}"
         )
      
-        current_node_key = None
-        current_shard_path = None
-        client = None
-        shard_file = None
+        jobs_by_node = {}
+        for item in manifest:
+            node_instance_id = str(item["target"]["node_instance_id"])
+            jobs_by_node.setdefault(node_instance_id, []).append(item)
      
-        done_entries = 0
+        print(f"[preload] parallel nodes={len(jobs_by_node)}")
      
-        try:
-            for item in manifest:
-                target = item["target"]
-                node_key = (str(target["host"]), int(target["control_port"]))
-                shard_path = str(item["shard_path"])
+        errors = []
+        err_lock = threading.Lock()
+        threads = []
      
-                if node_key != current_node_key:
-                    if shard_file is not None:
-                        shard_file.__exit__(None, None, None)
-                        shard_file = None
-                    if client is not None:
-                        client.__exit__(None, None, None)
-                        client = None
-     
-                    client = NodeClient(target["host"], target["control_port"])
-                    client.__enter__()
-                    current_node_key = node_key
-                    current_shard_path = None
-     
-                    print(
-                        f"[preload] open control "
-                        f"node={target['node_instance_id']} "
-                        f"host={target['host']} port={target['control_port']}"
-                    )
-     
-                if shard_path != current_shard_path:
-                    if shard_file is not None:
-                        shard_file.__exit__(None, None, None)
-     
-                    shard_file = model_loader.open_shard(shard_path)
-                    shard_file.__enter__()
-                    current_shard_path = shard_path
-     
-                    print(
-                        f"[preload] open shard "
-                        f"node={target['node_instance_id']} "
-                        f"path={shard_path}"
-                    )
-     
-                self.send_one_tensor_from_open_shard(
-                    shard_file=shard_file,
-                    item=item,
+        def worker(node_instance_id, items):
+            target = items[0]["target"]
+            progress_prefix = f"[preload:{node_instance_id}]"
+            try:
+                self._preload_manifest_for_one_node(
+                    model_loader=model_loader,
+                    manifest_items=items,
                     chunk_size=chunk_size,
-                    client=client,
+                    progress_prefix=progress_prefix,
                 )
-     
-                done_entries += 1
-                if done_entries == 1 or done_entries % 32 == 0 or done_entries == total_entries:
-                    print(
-                        f"[preload] {done_entries}/{total_entries} "
-                        f"expert={item['expert_id']} tensor={item['tensor_kind_name']}"
+            except Exception:
+                tb = traceback.format_exc()
+                with err_lock:
+                    errors.append(
+                        f"node={node_instance_id} "
+                        f"host={target['host']} port={target['control_port']}\n{tb}"
                     )
      
-        finally:
-            if shard_file is not None:
-                shard_file.__exit__(None, None, None)
-            if client is not None:
-                client.__exit__(None, None, None)
+        for node_instance_id, items in jobs_by_node.items():
+            th = threading.Thread(
+                target=worker,
+                args=(node_instance_id, items),
+                name=f"preload-{node_instance_id}",
+            )
+            th.start()
+            threads.append(th)
+     
+        for th in threads:
+            th.join()
+     
+        if errors:
+            for err in errors:
+                print(f"[preload] ERROR\n{err}")
+            raise RuntimeError(f"preload failed on {len(errors)} node(s)")
      
         return all_expert_ids

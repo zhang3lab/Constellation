@@ -12,10 +12,6 @@
 
 struct ExpertWorkspaceCudaV2 {
     DeviceBufferV2<float> d_tmp;
-
-    void clear() {
-        d_tmp.clear();
-    }
 };
 
 bool UploadExpertCudaV2(

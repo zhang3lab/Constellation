@@ -6,10 +6,6 @@
 
 struct ExpertWorkspaceCpuV2 {
     DeviceBufferV2<float> tmp;
-
-    void clear() {
-        tmp.clear();
-    }
 };
 
 bool UploadExpertCpuV2(

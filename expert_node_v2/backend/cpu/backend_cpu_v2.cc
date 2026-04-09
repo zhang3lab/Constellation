@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <span>
@@ -14,45 +15,48 @@
 namespace {
 
 template <class T>
-bool AllocHostBuffer(std::size_t count, DeviceBufferV2<T>* out) {
+bool CopySpanToHost(
+    std::span<const T> src,
+    DeviceBufferV2<T>* out) {
     if (out == nullptr) return false;
-    out->clear();
-    if (count == 0) return false;
 
-    T* ptr = new (std::nothrow) T[count];
-    if (ptr == nullptr) {
+    if (out->data != nullptr || out->size != 0) {
+        std::fprintf(stderr,
+                     "[CopySpanToHost] output buffer must be empty before copy: "
+                     "data=%p size=%zu\n",
+                     static_cast<void*>(out->data),
+                     out->size);
+        std::abort();
+    }
+
+    if (src.empty()) {
         return false;
     }
 
+    T* ptr = new (std::nothrow) T[src.size()];
+    if (ptr == nullptr) {
+        out->data = nullptr;
+        out->size = 0;
+        return false;
+    }
+
+    std::memcpy(ptr, src.data(), src.size_bytes());
+
     out->data = ptr;
-    out->size = count;
+    out->size = src.size();
     return true;
 }
 
 template <class T>
 void FreeHostBuffer(DeviceBufferV2<T>* buf) {
     if (buf == nullptr) return;
+
     if (buf->data != nullptr) {
         delete[] buf->data;
-    }
-    buf->clear();
-}
-
-template <class T>
-bool CopySpanToHost(
-    std::span<const T> src,
-    DeviceBufferV2<T>* out) {
-    if (out == nullptr) return false;
-
-    out->clear();
-    if (src.empty()) return false;
-
-    if (!AllocHostBuffer<T>(src.size(), out)) {
-        return false;
+        buf->data = nullptr;
     }
 
-    std::memcpy(out->data, src.data(), src.size_bytes());
-    return true;
+    buf->size = 0;
 }
 
 bool UploadOneMatrixCpu(
@@ -89,7 +93,7 @@ bool UploadExpertCpuV2(
     ExpertDeviceStorageV2* out_storage) {
     if (local_gpu_id < 0 || out_storage == nullptr) return false;
 
-    out_storage->clear();
+    *out_storage = ExpertDeviceStorageV2{};
 
     ExpertWeightsViewV2 host_view;
     if (!BuildExpertWeightsViewV2(host_bundle, &host_view)) {
@@ -145,32 +149,48 @@ void FreeExpertWeightsCpuV2(ExpertDeviceStorageV2* storage) {
     FreeHostBuffer(&storage->w_down_weight);
     FreeHostBuffer(&storage->w_down_scale);
 
-    storage->clear();
+    storage->w_up_meta = MatrixMetaV2{};
+    storage->w_gate_meta = MatrixMetaV2{};
+    storage->w_down_meta = MatrixMetaV2{};
+
+    storage->w_up_scale_meta = BlockScaleMetaV2{};
+    storage->w_gate_scale_meta = BlockScaleMetaV2{};
+    storage->w_down_scale_meta = BlockScaleMetaV2{};
 }
 
 bool InitExpertWorkspaceCpuV2(
     const ExpertWorkspaceConfigV2& config,
     ExpertWorkspaceCpuV2* out_ws) {
     if (out_ws == nullptr) return false;
-    out_ws->clear();
+
+    if (out_ws->tmp.data != nullptr || out_ws->tmp.size != 0) {
+        std::fprintf(stderr,
+                     "[InitExpertWorkspaceCpuV2] workspace must be empty before init: "
+                     "tmp.data=%p tmp.size=%zu\n",
+                     static_cast<void*>(out_ws->tmp.data),
+                     out_ws->tmp.size);
+        std::abort();
+    }
 
     if (config.hidden_dim <= 0 || config.inter_dim <= 0) {
         return false;
     }
 
-    if (!AllocHostBuffer<float>(
-            static_cast<std::size_t>(config.inter_dim),
-            &out_ws->tmp)) {
+    float* ptr = new (std::nothrow) float[static_cast<std::size_t>(config.inter_dim)];
+    if (ptr == nullptr) {
+        out_ws->tmp.data = nullptr;
+        out_ws->tmp.size = 0;
         return false;
     }
 
+    out_ws->tmp.data = ptr;
+    out_ws->tmp.size = static_cast<std::size_t>(config.inter_dim);
     return true;
 }
 
 void FreeExpertWorkspaceCpuV2(ExpertWorkspaceCpuV2* ws) {
     if (ws == nullptr) return;
     FreeHostBuffer(&ws->tmp);
-    ws->clear();
 }
 
 bool RunExpertCpuV2(

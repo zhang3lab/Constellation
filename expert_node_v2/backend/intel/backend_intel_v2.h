@@ -10,14 +10,17 @@ inline bool UploadExpertIntelV2(
     ExpertDeviceStorageV2* out_storage) {
     (void)local_gpu_id;
     (void)host_bundle;
-    (void)out_storage;
+
+    if (out_storage != nullptr) {
+        *out_storage = ExpertDeviceStorageV2{};
+    }
     return false;
 }
 
 inline void FreeExpertWeightsIntelV2(ExpertDeviceStorageV2* storage) {
-    if (storage != nullptr) {
-        storage->clear();
-    }
+    if (storage == nullptr) return;
+    *storage = ExpertDeviceStorageV2{};
+
 }
 
 }  // namespace expert_node_v2

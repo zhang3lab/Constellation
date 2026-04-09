@@ -133,15 +133,17 @@ void FreeExpertWeights<Backend>V2(
 ```
 
 These are required for:
-- `ExpertRegistryV2::Update(...)`
+- ExpertRegistryV2::Update(...)
 - resident replacement
 - registry cleanup
 - future backend-agnostic expert lifecycle management
 
 Important:
 - upload/free must be symmetric
-- `FreeExpertWeights<Backend>V2(...)` must fully release backend-owned storage
-- storage should be left in a clear/reset state after free
+- FreeExpertWeights<Backend>V2(...) must fully release backend-owned storage
+- FreeExpertWeights<Backend>V2(...) must leave storage in a fully reset state
+- UploadExpert<Backend>V2(...) must leave output storage in a fully reset state on failure
+- callers must not rely on a generic clear() helper to clean up backend-managed device storage
 
 ---
 

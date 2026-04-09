@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 
 #include "expert_node_v2/backend/cuda/down_cuda_v2.h"
@@ -16,18 +17,33 @@ bool UploadSpanToCuda(
     DeviceBufferV2<T>* out) {
     if (out == nullptr) return false;
 
-    out->clear();
-    if (src.empty()) return false;
+    if (out->data != nullptr || out->size != 0) {
+        std::fprintf(stderr,
+                     "[UploadSpanToCuda] output buffer must be empty before upload: "
+                     "data=%p size=%zu\n",
+                     static_cast<void*>(out->data),
+                     out->size);
+        std::abort();
+    }
+
+    if (src.empty()) {
+        return false;
+    }
 
     T* ptr = nullptr;
-    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&ptr), src.size_bytes());
+    cudaError_t err =
+        cudaMalloc(reinterpret_cast<void**>(&ptr), src.size_bytes());
     if (err != cudaSuccess) {
+        out->data = nullptr;
+        out->size = 0;
         return false;
     }
 
     err = cudaMemcpy(ptr, src.data(), src.size_bytes(), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         cudaFree(ptr);
+        out->data = nullptr;
+        out->size = 0;
         return false;
     }
 
@@ -39,10 +55,13 @@ bool UploadSpanToCuda(
 template <class T>
 void FreeDeviceBuffer(DeviceBufferV2<T>* buf) {
     if (buf == nullptr) return;
+
     if (buf->data != nullptr) {
         cudaFree(buf->data);
+        buf->data = nullptr;
     }
-    buf->clear();
+
+    buf->size = 0;
 }
 
 bool UploadOneMatrixCuda(
@@ -78,10 +97,10 @@ bool UploadExpertCudaV2(
     ExpertDeviceStorageV2* out_storage) {
     if (local_gpu_id < 0 || out_storage == nullptr) return false;
 
+    *out_storage = ExpertDeviceStorageV2{};
+
     const cudaError_t err = cudaSetDevice(local_gpu_id);
     if (err != cudaSuccess) return false;
-
-    out_storage->clear();
 
     ExpertWeightsViewV2 host_view;
     if (!BuildExpertWeightsViewV2(host_bundle, &host_view)) {
@@ -130,21 +149,33 @@ void FreeExpertWeightsCudaV2(ExpertDeviceStorageV2* storage) {
 
     FreeDeviceBuffer(&storage->w_up_weight);
     FreeDeviceBuffer(&storage->w_up_scale);
-
     FreeDeviceBuffer(&storage->w_gate_weight);
     FreeDeviceBuffer(&storage->w_gate_scale);
-
     FreeDeviceBuffer(&storage->w_down_weight);
     FreeDeviceBuffer(&storage->w_down_scale);
 
-    storage->clear();
+    storage->w_up_meta = MatrixMetaV2{};
+    storage->w_gate_meta = MatrixMetaV2{};
+    storage->w_down_meta = MatrixMetaV2{};
+
+    storage->w_up_scale_meta = BlockScaleMetaV2{};
+    storage->w_gate_scale_meta = BlockScaleMetaV2{};
+    storage->w_down_scale_meta = BlockScaleMetaV2{};
 }
 
 bool InitExpertWorkspaceCudaV2(
     const ExpertWorkspaceConfigV2& config,
     ExpertWorkspaceCudaV2* out_ws) {
     if (out_ws == nullptr) return false;
-    out_ws->clear();
+
+    if (out_ws->d_tmp.data != nullptr || out_ws->d_tmp.size != 0) {
+        std::fprintf(stderr,
+                     "[InitExpertWorkspaceCudaV2] workspace must be empty before init: "
+                     "d_tmp.data=%p d_tmp.size=%zu\n",
+                     static_cast<void*>(out_ws->d_tmp.data),
+                     out_ws->d_tmp.size);
+        std::abort();
+    }
 
     if (config.hidden_dim <= 0 || config.inter_dim <= 0) {
         return false;
@@ -155,6 +186,8 @@ bool InitExpertWorkspaceCudaV2(
         reinterpret_cast<void**>(&h_ptr),
         static_cast<std::size_t>(config.inter_dim) * sizeof(float));
     if (err != cudaSuccess) {
+        out_ws->d_tmp.data = nullptr;
+        out_ws->d_tmp.size = 0;
         return false;
     }
 
@@ -166,7 +199,6 @@ bool InitExpertWorkspaceCudaV2(
 void FreeExpertWorkspaceCudaV2(ExpertWorkspaceCudaV2* ws) {
     if (ws == nullptr) return;
     FreeDeviceBuffer(&ws->d_tmp);
-    ws->clear();
 }
 
 template <class TIn, class TOut>
