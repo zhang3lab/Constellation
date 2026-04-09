@@ -32,6 +32,21 @@ void FlushCpuCachesLocalV2() {
     sink += acc;
 }
 
+void FlushCpuCachesOmpLocalV2() {
+    static std::vector<std::uint8_t> buf(512 * 1024 * 1024, 1);
+    static volatile std::uint64_t sink = 0;
+
+    std::uint64_t acc = 0;
+
+#pragma omp parallel for reduction(+:acc) schedule(static)
+    for (std::size_t i = 0; i < buf.size(); i += 64) {
+        buf[i] ^= 1;
+        acc += buf[i];
+    }
+
+    sink += acc;
+}
+
 struct Fp16ResidentMatrixLocalV2 {
     int rows = 0;
     int cols = 0;
@@ -832,7 +847,7 @@ int main(int argc, char** argv) {
         }
 
         {
-		FlushCpuCachesLocalV2();
+		FlushCpuCachesOmpLocalV2();
             const auto t0 = std::chrono::steady_clock::now();
             if (!RunDownCpuFp16ResidentF16cAvx2LocalV2(
                     w_down_fp16,
@@ -848,7 +863,7 @@ int main(int argc, char** argv) {
         }
 
         {
-            FlushCpuCachesLocalV2();
+		FlushCpuCachesOmpLocalV2();
             const auto t0 = std::chrono::steady_clock::now();
             if (!RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
                     w_down_fp16,
