@@ -32,24 +32,33 @@ bool RunDownCpuV2(
     const auto scales = w_down.scale.data;
     auto* y_u16 = static_cast<std::uint16_t*>(y);
 
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
     for (int row = 0; row < rows; ++row) {
-        const int rb = row / w_down.scale_meta.row_block;
+        const int rb = row / row_block;
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
         float sum = 0.0f;
 
-        for (int k = 0; k < cols; ++k) {
-            const int cb = k / w_down.scale_meta.col_block;
+        for (int k0 = 0; k0 < cols; k0 += col_block) {
+            const int k1 = std::min(k0 + col_block, cols);
+            const int cb = k0 / col_block;
 
-            const std::size_t w_idx =
-                static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) +
-                static_cast<std::size_t>(k);
             const std::size_t s_idx =
                 static_cast<std::size_t>(rb) *
-                    static_cast<std::size_t>(w_down.scale_meta.num_col_blocks) +
+                    static_cast<std::size_t>(num_col_blocks) +
                 static_cast<std::size_t>(cb);
 
             const float scale = scales[s_idx];
-            const float w = lut[weights[w_idx]] * scale;
-            sum += w * h[k];
+
+            for (int k = k0; k < k1; ++k) {
+                const std::size_t w_idx =
+                    row_base + static_cast<std::size_t>(k);
+                sum += (lut[weights[w_idx]] * scale) * h[k];
+            }
         }
 
         y_u16[row] = EncodeActivationFromFloatV2(output_dtype, sum);
