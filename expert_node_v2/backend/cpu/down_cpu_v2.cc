@@ -54,7 +54,30 @@ bool RunDownCpuV2(
 
             const float scale = scales[s_idx];
 
-            for (int k = k0; k < k1; ++k) {
+            int k = k0;
+            for (; k + 3 < k1; k += 4) {
+                const std::size_t w_idx0 = row_base + static_cast<std::size_t>(k + 0);
+                const std::size_t w_idx1 = row_base + static_cast<std::size_t>(k + 1);
+                const std::size_t w_idx2 = row_base + static_cast<std::size_t>(k + 2);
+                const std::size_t w_idx3 = row_base + static_cast<std::size_t>(k + 3);
+
+                const float h0 = h[k + 0];
+                const float h1 = h[k + 1];
+                const float h2 = h[k + 2];
+                const float h3 = h[k + 3];
+
+                const float w0 = lut[weights[w_idx0]] * scale;
+                const float w1 = lut[weights[w_idx1]] * scale;
+                const float w2 = lut[weights[w_idx2]] * scale;
+                const float w3 = lut[weights[w_idx3]] * scale;
+
+                sum += w0 * h0;
+                sum += w1 * h1;
+                sum += w2 * h2;
+                sum += w3 * h3;
+            }
+
+            for (; k < k1; ++k) {
                 const std::size_t w_idx =
                     row_base + static_cast<std::size_t>(k);
                 sum += (lut[weights[w_idx]] * scale) * h[k];
