@@ -16,6 +16,89 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+bool RunDownCpuFp16ResidentF16cLocalV2(
+    const Fp16ResidentMatrixLocalV2& w_down_fp16,
+    const float* h,
+    float* y) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down_fp16.rows;
+    const int cols = w_down_fp16.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    const auto& weights = w_down_fp16.data;
+    if (weights.size() !=
+        static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols)) {
+        return false;
+    }
+
+#if !defined(__F16C__)
+    (void)h;
+    (void)y;
+    return false;
+#else
+    alignas(32) float tmp[8];
+
+    for (int row = 0; row < rows; ++row) {
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        float sum2 = 0.0f;
+        float sum3 = 0.0f;
+
+        int k = 0;
+        for (; k + 7 < cols; k += 8) {
+            const std::uint16_t* src =
+                weights.data() + row_base + static_cast<std::size_t>(k);
+
+            const __m128i h8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
+            const __m256 f8 = _mm256_cvtph_ps(h8);
+            _mm256_store_ps(tmp, f8);
+
+            sum0 += tmp[0] * h[k + 0];
+            sum1 += tmp[1] * h[k + 1];
+            sum2 += tmp[2] * h[k + 2];
+            sum3 += tmp[3] * h[k + 3];
+
+            sum0 += tmp[4] * h[k + 4];
+            sum1 += tmp[5] * h[k + 5];
+            sum2 += tmp[6] * h[k + 6];
+            sum3 += tmp[7] * h[k + 7];
+        }
+
+        for (; k < cols; ++k) {
+            const std::uint16_t bits =
+                weights[row_base + static_cast<std::size_t>(k)];
+
+            const __m128i h1 = _mm_cvtsi32_si128(static_cast<int>(bits));
+            const __m128 f4 = _mm_cvtph_ps(h1);
+            const float w = _mm_cvtss_f32(f4);
+
+            switch (k & 3) {
+                case 0:
+                    sum0 += w * h[k];
+                    break;
+                case 1:
+                    sum1 += w * h[k];
+                    break;
+                case 2:
+                    sum2 += w * h[k];
+                    break;
+                default:
+                    sum3 += w * h[k];
+                    break;
+            }
+        }
+
+        y[row] = (sum0 + sum1) + (sum2 + sum3);
+    }
+
+    return true;
+#endif
+}
+
 struct Fp16ResidentMatrixLocalV2 {
     int rows = 0;
     int cols = 0;
@@ -1083,6 +1166,9 @@ up_gate_pipe4_ms_list.reserve(static_cast<std::size_t>(args.iters));
 std::vector<float> down_avx2_tile8_f32_ms_list;
 down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
+std::vector<float> down_fp16_resident_f16c_ms_list;
+down_fp16_resident_f16c_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     for (int i = 0; i < args.iters; ++i) {
         {
             const std::clock_t t0 = std::clock();
@@ -1218,6 +1304,20 @@ down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
     const std::clock_t t1 = std::clock();
     down_fp16_resident_ms_list.push_back(ms_since(t0, t1));
 }
+
+{
+    const std::clock_t t0 = std::clock();
+    if (!RunDownCpuFp16ResidentF16cLocalV2(
+            w_down_fp16,
+            h_mid.data(),
+            y_f32.data())) {
+        std::printf("RunDownCpuFp16ResidentF16cLocalV2 failed at iter=%d\n", i);
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const std::clock_t t1 = std::clock();
+    down_fp16_resident_f16c_ms_list.push_back(ms_since(t0, t1));
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
@@ -1229,6 +1329,8 @@ print_stats("up_gate_pipe4", up_gate_pipe4_ms_list);
     print_stats("down_tile16_f32", down_tile16_f32_ms_list);
 print_stats("down_avx2_tile8_f32", down_avx2_tile8_f32_ms_list);
 print_stats("down_fp16_resident", down_fp16_resident_ms_list);
+
+print_stats("down_fp16_resident_f16c", down_fp16_resident_f16c_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
