@@ -16,6 +16,108 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
+bool RunDownCpuAvx2Tile8LocalV2(
+    const MatrixBlockScaleViewV2& w_down,
+    const float* h,
+    float* y) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down.matrix.rows;
+    const int cols = w_down.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+#if !defined(__AVX2__)
+    (void)w_down;
+    (void)h;
+    (void)y;
+    return false;
+#else
+    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
+    if (lut == nullptr) return false;
+
+    const auto weights = w_down.weight.data;
+    const auto scales = w_down.scale.data;
+
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
+    alignas(32) float tmp[8];
+
+    for (int row = 0; row < rows; ++row) {
+        const int rb = row / row_block;
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        __m256 acc = _mm256_setzero_ps();
+
+        for (int k0 = 0; k0 < cols; k0 += col_block) {
+            const int k1 = std::min(k0 + col_block, cols);
+            const int cb = k0 / col_block;
+
+            const std::size_t s_idx =
+                static_cast<std::size_t>(rb) *
+                    static_cast<std::size_t>(num_col_blocks) +
+                static_cast<std::size_t>(cb);
+
+            const float scale = scales[s_idx];
+
+            int k = k0;
+            for (; k + 7 < k1; k += 8) {
+                const std::size_t w0 = row_base + static_cast<std::size_t>(k + 0);
+                const std::size_t w1 = row_base + static_cast<std::size_t>(k + 1);
+                const std::size_t w2 = row_base + static_cast<std::size_t>(k + 2);
+                const std::size_t w3 = row_base + static_cast<std::size_t>(k + 3);
+                const std::size_t w4 = row_base + static_cast<std::size_t>(k + 4);
+                const std::size_t w5 = row_base + static_cast<std::size_t>(k + 5);
+                const std::size_t w6 = row_base + static_cast<std::size_t>(k + 6);
+                const std::size_t w7 = row_base + static_cast<std::size_t>(k + 7);
+
+                tmp[0] = lut[weights[w0]] * scale;
+                tmp[1] = lut[weights[w1]] * scale;
+                tmp[2] = lut[weights[w2]] * scale;
+                tmp[3] = lut[weights[w3]] * scale;
+                tmp[4] = lut[weights[w4]] * scale;
+                tmp[5] = lut[weights[w5]] * scale;
+                tmp[6] = lut[weights[w6]] * scale;
+                tmp[7] = lut[weights[w7]] * scale;
+
+                const __m256 wv = _mm256_load_ps(tmp);
+                const __m256 hv = _mm256_loadu_ps(h + k);
+#if defined(__FMA__)
+                acc = _mm256_fmadd_ps(wv, hv, acc);
+#else
+                acc = _mm256_add_ps(acc, _mm256_mul_ps(wv, hv));
+#endif
+            }
+
+            float tail = 0.0f;
+            for (; k < k1; ++k) {
+                const std::size_t w_idx =
+                    row_base + static_cast<std::size_t>(k);
+                tail += (lut[weights[w_idx]] * scale) * h[k];
+            }
+
+            if (tail != 0.0f) {
+                alignas(32) float tail_buf[8] = {tail, 0, 0, 0, 0, 0, 0, 0};
+                acc = _mm256_add_ps(acc, _mm256_load_ps(tail_buf));
+            }
+        }
+
+        alignas(32) float acc_buf[8];
+        _mm256_store_ps(acc_buf, acc);
+        y[row] = acc_buf[0] + acc_buf[1] + acc_buf[2] + acc_buf[3] +
+                 acc_buf[4] + acc_buf[5] + acc_buf[6] + acc_buf[7];
+    }
+
+    return true;
+#endif
+}
+
 bool RunFusedUpGatePipeline4LocalV2(
     const MatrixBlockScaleViewV2& w_up,
     const MatrixBlockScaleViewV2& w_gate,
@@ -838,6 +940,9 @@ std::vector<float> up_gate_pipe4_ms_list;
 up_gate_acc8_ms_list.reserve(static_cast<std::size_t>(args.iters));
 up_gate_pipe4_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
+std::vector<float> down_avx2_tile8_f32_ms_list;
+down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     for (int i = 0; i < args.iters; ++i) {
         {
             const std::clock_t t0 = std::clock();
@@ -945,14 +1050,30 @@ up_gate_pipe4_ms_list.reserve(static_cast<std::size_t>(args.iters));
     const std::clock_t t1 = std::clock();
     up_gate_pipe4_ms_list.push_back(ms_since(t0, t1));
 }
+
+{
+    const std::clock_t t0 = std::clock();
+    if (!RunDownCpuAvx2Tile8LocalV2(
+            ctx.storage.view().w_down,
+            h_mid.data(),
+            y_f32.data())) {
+        std::printf("RunDownCpuAvx2Tile8LocalV2 failed at iter=%d\n", i);
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const std::clock_t t1 = std::clock();
+    down_avx2_tile8_f32_ms_list.push_back(ms_since(t0, t1));
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
 print_stats("up_gate_acc8", up_gate_acc8_ms_list);
 print_stats("up_gate_pipe4", up_gate_pipe4_ms_list);
+
     print_stats("down_u16_out", down_u16_ms_list);
     print_stats("down_predecode_f32", down_predecode_f32_ms_list);
     print_stats("down_tile16_f32", down_tile16_f32_ms_list);
+print_stats("down_avx2_tile8_f32", down_avx2_tile8_f32_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
