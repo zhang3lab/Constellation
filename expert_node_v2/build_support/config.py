@@ -69,6 +69,7 @@ BACKENDS = {
         "src": [
             "backend/cpu/backend_workspace_cpu_v2.cc",
             "backend/cpu/backend_cpu_v2.cc",
+            "backend/cpu/gpu_info_cpu_v2.cc",
             "backend/cpu/fused_up_gate_cpu_v2.cc",
             "backend/cpu/down_cpu_v2.cc",
         ],
