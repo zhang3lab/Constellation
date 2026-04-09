@@ -21,6 +21,114 @@
 #include <immintrin.h>
 #endif
 
+bool RunDownCpuOmpLocalV2(
+    const MatrixBlockScaleViewV2& w_down,
+    const float* h,
+    void* y,
+    common::ActivationDType output_dtype) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down.matrix.rows;
+    const int cols = w_down.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    switch (output_dtype) {
+        case common::ActivationDType::FP16:
+        case common::ActivationDType::BF16:
+            break;
+        default:
+            return false;
+    }
+
+    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
+    if (lut == nullptr) return false;
+
+    const auto weights = w_down.weight.data;
+    const auto scales = w_down.scale.data;
+    auto* y_u16 = static_cast<std::uint16_t*>(y);
+
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
+#pragma omp parallel for schedule(static)
+    for (int row = 0; row < rows; ++row) {
+        const int rb = row / row_block;
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        float sum2 = 0.0f;
+        float sum3 = 0.0f;
+
+        for (int k0 = 0; k0 < cols; k0 += col_block) {
+            const int k1 = std::min(k0 + col_block, cols);
+            const int cb = k0 / col_block;
+
+            const std::size_t s_idx =
+                static_cast<std::size_t>(rb) *
+                    static_cast<std::size_t>(num_col_blocks) +
+                static_cast<std::size_t>(cb);
+
+            const float scale = scales[s_idx];
+
+            int k = k0;
+            for (; k + 3 < k1; k += 4) {
+                const std::size_t w_idx0 =
+                    row_base + static_cast<std::size_t>(k + 0);
+                const std::size_t w_idx1 =
+                    row_base + static_cast<std::size_t>(k + 1);
+                const std::size_t w_idx2 =
+                    row_base + static_cast<std::size_t>(k + 2);
+                const std::size_t w_idx3 =
+                    row_base + static_cast<std::size_t>(k + 3);
+
+                const float h0 = h[k + 0];
+                const float h1 = h[k + 1];
+                const float h2 = h[k + 2];
+                const float h3 = h[k + 3];
+
+                const float w0 = lut[weights[w_idx0]] * scale;
+                const float w1 = lut[weights[w_idx1]] * scale;
+                const float w2 = lut[weights[w_idx2]] * scale;
+                const float w3 = lut[weights[w_idx3]] * scale;
+
+                sum0 += w0 * h0;
+                sum1 += w1 * h1;
+                sum2 += w2 * h2;
+                sum3 += w3 * h3;
+            }
+
+            for (; k < k1; ++k) {
+                const std::size_t w_idx =
+                    row_base + static_cast<std::size_t>(k);
+                const float w = lut[weights[w_idx]] * scale;
+
+                switch ((k - k0) & 3) {
+                    case 0:
+                        sum0 += w * h[k];
+                        break;
+                    case 1:
+                        sum1 += w * h[k];
+                        break;
+                    case 2:
+                        sum2 += w * h[k];
+                        break;
+                    default:
+                        sum3 += w * h[k];
+                        break;
+                }
+            }
+        }
+
+        const float sum = (sum0 + sum1) + (sum2 + sum3);
+        y_u16[row] = EncodeActivationFromFloatV2(output_dtype, sum);
+    }
+
+    return true;
+}
+
 void FlushCpuCachesLocalV2() {
     static std::vector<std::uint8_t> buf(256 * 1024 * 1024, 1);
     static volatile std::uint64_t sink = 0;
@@ -765,6 +873,9 @@ int main(int argc, char** argv) {
     std::vector<float> down_fp16_resident_f16c_avx2_ms_list;
     std::vector<float> down_fp16_resident_f16c_avx2_omp_ms_list;
 
+    std::vector<float> down_u16_omp_ms_list;
+down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     up_gate_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_u16_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
@@ -877,6 +988,24 @@ int main(int argc, char** argv) {
             down_fp16_resident_f16c_avx2_omp_ms_list.push_back(
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
         }
+
+	{
+    FlushCpuCachesOmpLocalV2();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!RunDownCpuOmpLocalV2(
+            ctx.storage.view().w_down,
+            h_mid.data(),
+            y_u16.data(),
+            ctx.act_dtype)) {
+        std::printf("RunDownCpuOmpLocalV2 failed at iter=%d\n", i);
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    down_u16_omp_ms_list.push_back(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
@@ -886,6 +1015,7 @@ int main(int argc, char** argv) {
     print_stats("down_fp16_resident_f16c", down_fp16_resident_f16c_ms_list);
     print_stats("down_fp16_resident_f16c_avx2_cold", down_fp16_resident_f16c_avx2_ms_list);
     print_stats("down_fp16_resident_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
+    print_stats("down_u16_out_omp_cold", down_u16_omp_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
