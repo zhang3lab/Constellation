@@ -260,6 +260,21 @@ bool RunCorrectness(const Args& args, TestContext* ctx) {
     return true;
 }
 
+void FlushCpuCachesOmpLocalV2() {
+    static std::vector<std::uint8_t> buf(512 * 1024 * 1024, 1);
+    static volatile std::uint64_t sink = 0;
+
+    std::uint64_t acc = 0;
+
+#pragma omp parallel for reduction(+:acc) schedule(static)
+    for (std::size_t i = 0; i < buf.size(); i += 64) {
+        buf[i] ^= 1;
+        acc += buf[i];
+    }
+
+    sink += acc;
+}
+
 bool RunBenchmark(const Args& args, TestContext* ctx) {
     if (ctx == nullptr) return false;
 
@@ -280,6 +295,8 @@ bool RunBenchmark(const Args& args, TestContext* ctx) {
     ms_list.reserve(static_cast<std::size_t>(args.iters));
 
     for (int i = 0; i < args.iters; ++i) {
+        FlushCpuCachesOmpLocalV2();
+
         const auto t0 = std::chrono::steady_clock::now();
         if (!RunExpertCpuV2(
                 ctx->storage.view(),
