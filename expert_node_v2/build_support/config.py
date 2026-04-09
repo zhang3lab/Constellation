@@ -160,6 +160,18 @@ TEST_TARGETS = {
             "backend/fp8_lut_v2.cc",
         ],
     },
+    "test_cpu_kernel_profile_v2": {
+        "src": [
+            "backend/cpu/tests/test_cpu_kernel_profile_v2.cc",
+            "backend/cpu/backend_cpu_v2.cc",
+            "backend/cpu/fused_up_gate_cpu_v2.cc",
+            "backend/cpu/down_cpu_v2.cc",
+            "expert_format_v2.cc",
+            "backend/expert_reference_v2.cc",
+            "backend/dummy_expert_data_v2.cc",
+            "backend/fp8_lut_v2.cc",
+        ],
+    },
 
     # cuda backend
     "test_gpu_info_cuda_v2": {
