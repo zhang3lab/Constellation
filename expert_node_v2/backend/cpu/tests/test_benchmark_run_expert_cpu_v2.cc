@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "common/protocol.h"
-#include "expert_node_v2/activation_codec_v2.h"
+#include "expert_node_v2/backend/activation_codec_v2.h"
 #include "expert_node_v2/backend/cpu/backend_cpu_v2.h"
 #include "expert_node_v2/backend/dummy_expert_data_v2.h"
 #include "expert_node_v2/backend/expert_reference_v2.h"
