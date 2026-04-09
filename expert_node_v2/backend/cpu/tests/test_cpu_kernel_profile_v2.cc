@@ -108,6 +108,102 @@ bool RunDownCpuPredecodeBlockLocalV2(
     return true;
 }
 
+bool RunDownCpuTileDecodeLocalV2(
+    const MatrixBlockScaleViewV2& w_down,
+    const float* h,
+    float* y) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down.matrix.rows;
+    const int cols = w_down.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
+    if (lut == nullptr) return false;
+
+    const auto weights = w_down.weight.data;
+    const auto scales = w_down.scale.data;
+
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
+    constexpr int TILE = 16;
+    float tmp[TILE];
+
+    for (int row = 0; row < rows; ++row) {
+        const int rb = row / row_block;
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        float sum0 = 0.0f;
+        float sum1 = 0.0f;
+        float sum2 = 0.0f;
+        float sum3 = 0.0f;
+
+        for (int k0 = 0; k0 < cols; k0 += col_block) {
+            const int k1 = std::min(k0 + col_block, cols);
+            const int cb = k0 / col_block;
+
+            const std::size_t s_idx =
+                static_cast<std::size_t>(rb) *
+                    static_cast<std::size_t>(num_col_blocks) +
+                static_cast<std::size_t>(cb);
+
+            const float scale = scales[s_idx];
+
+            for (int t0 = k0; t0 < k1; t0 += TILE) {
+                const int t1 = std::min(t0 + TILE, k1);
+                const int tile_len = t1 - t0;
+
+                for (int t = 0; t < tile_len; ++t) {
+                    const std::size_t w_idx =
+                        row_base + static_cast<std::size_t>(t0 + t);
+                    tmp[t] = lut[weights[w_idx]] * scale;
+                }
+
+                int t = 0;
+                for (; t + 3 < tile_len; t += 4) {
+                    const int k = t0 + t;
+
+                    const float w0 = tmp[t + 0];
+                    const float w1 = tmp[t + 1];
+                    const float w2 = tmp[t + 2];
+                    const float w3 = tmp[t + 3];
+
+                    sum0 += w0 * h[k + 0];
+                    sum1 += w1 * h[k + 1];
+                    sum2 += w2 * h[k + 2];
+                    sum3 += w3 * h[k + 3];
+                }
+
+                for (; t < tile_len; ++t) {
+                    const int k = t0 + t;
+                    const float w = tmp[t];
+                    switch (t & 3) {
+                        case 0:
+                            sum0 += w * h[k];
+                            break;
+                        case 1:
+                            sum1 += w * h[k];
+                            break;
+                        case 2:
+                            sum2 += w * h[k];
+                            break;
+                        default:
+                            sum3 += w * h[k];
+                            break;
+                    }
+                }
+            }
+        }
+
+        y[row] = (sum0 + sum1) + (sum2 + sum3);
+    }
+
+    return true;
+}
+
 namespace {
 
 struct Args {
@@ -284,6 +380,9 @@ int main(int argc, char** argv) {
     down_u16_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_predecode_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
+    std::vector<float> down_tile16_f32_ms_list;
+    down_tile16_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     for (int i = 0; i < args.iters; ++i) {
         {
             const std::clock_t t0 = std::clock();
@@ -329,11 +428,26 @@ int main(int argc, char** argv) {
             const std::clock_t t1 = std::clock();
             down_predecode_f32_ms_list.push_back(ms_since(t0, t1));
         }
+
+	{
+    const std::clock_t t0 = std::clock();
+    if (!RunDownCpuTileDecodeLocalV2(
+            ctx.storage.view().w_down,
+            h_mid.data(),
+            y_f32.data())) {
+        std::printf("RunDownCpuTileDecodeLocalV2 failed at iter=%d\n", i);
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const std::clock_t t1 = std::clock();
+    down_tile16_f32_ms_list.push_back(ms_since(t0, t1));
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
     print_stats("down_u16_out", down_u16_ms_list);
     print_stats("down_predecode_f32", down_predecode_f32_ms_list);
+    print_stats("down_tile16_f32", down_tile16_f32_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
