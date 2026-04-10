@@ -144,7 +144,6 @@ worker_last_end_.assign(static_cast<std::size_t>(num_threads), -1);
         }
     }
 }
-}
 
 private:
     void worker_loop(int worker_id) {
