@@ -46,16 +46,18 @@ public:
         {
             std::lock_guard<std::mutex> lock(mu_);
             stop_ = false;
-            has_job_ = false;
             active_workers_ = 0;
             job_begin_ = 0;
             job_end_ = 0;
+            job_epoch_ = 0;
         }
 
         try {
             workers_.reserve(static_cast<std::size_t>(num_threads));
             for (int worker_id = 0; worker_id < num_threads; ++worker_id) {
-                workers_.emplace_back([this, worker_id]() { worker_loop(worker_id); });
+                workers_.emplace_back([this, worker_id]() {
+                    worker_loop(worker_id);
+                });
             }
         } catch (...) {
             shutdown();
@@ -69,7 +71,6 @@ public:
         {
             std::lock_guard<std::mutex> lock(mu_);
             stop_ = true;
-            has_job_ = false;
         }
         cv_job_.notify_all();
 
@@ -77,6 +78,16 @@ public:
             if (th.joinable()) th.join();
         }
         workers_.clear();
+
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            fn_ = nullptr;
+            active_workers_ = 0;
+            job_begin_ = 0;
+            job_end_ = 0;
+            job_epoch_ = 0;
+            stop_ = false;
+        }
     }
 
     int num_threads() const {
@@ -87,27 +98,26 @@ public:
         if (begin >= end) return true;
         if (!fn) return false;
 
-        if (workers_.empty()) {
+        const int nthreads = static_cast<int>(workers_.size());
+        if (nthreads == 0) {
             fn(begin, end);
             return true;
         }
 
         {
             std::unique_lock<std::mutex> lock(mu_);
-            if (has_job_) return false;
-
             fn_ = fn;
             job_begin_ = begin;
             job_end_ = end;
-            active_workers_ = 0;
-            has_job_ = true;
+            active_workers_ = nthreads;
+            ++job_epoch_;
         }
 
         cv_job_.notify_all();
 
         {
             std::unique_lock<std::mutex> lock(mu_);
-            cv_done_.wait(lock, [this]() { return !has_job_; });
+            cv_done_.wait(lock, [this]() { return active_workers_ == 0; });
         }
 
         return true;
@@ -115,30 +125,37 @@ public:
 
 private:
     void worker_loop(int worker_id) {
+        int seen_epoch = 0;
+
         for (;;) {
             RangeFn fn;
             int begin = 0;
             int end = 0;
+            int my_begin = 0;
+            int my_end = 0;
+            int my_epoch = 0;
             int nthreads = 0;
 
             {
                 std::unique_lock<std::mutex> lock(mu_);
-                cv_job_.wait(lock, [this]() { return stop_ || has_job_; });
+                cv_job_.wait(lock, [this, &seen_epoch]() {
+                    return stop_ || job_epoch_ != seen_epoch;
+                });
 
                 if (stop_) return;
 
                 fn = fn_;
                 begin = job_begin_;
                 end = job_end_;
+                my_epoch = job_epoch_;
                 nthreads = static_cast<int>(workers_.size());
-                ++active_workers_;
             }
 
             const int total = end - begin;
             const int chunk = (total + nthreads - 1) / nthreads;
 
-            const int my_begin = begin + worker_id * chunk;
-            const int my_end = std::min(my_begin + chunk, end);
+            my_begin = begin + worker_id * chunk;
+            my_end = std::min(my_begin + chunk, end);
 
             if (my_begin < my_end) {
                 fn(my_begin, my_end);
@@ -146,10 +163,9 @@ private:
 
             {
                 std::unique_lock<std::mutex> lock(mu_);
+                seen_epoch = my_epoch;
                 --active_workers_;
                 if (active_workers_ == 0) {
-                    has_job_ = false;
-                    fn_ = nullptr;
                     cv_done_.notify_one();
                 }
             }
@@ -157,10 +173,9 @@ private:
     }
 
 private:
-    std::mutex mu_;
+    mutable std::mutex mu_;
     std::condition_variable cv_job_;
     std::condition_variable cv_done_;
-
     std::vector<std::thread> workers_;
 
     RangeFn fn_;
@@ -168,8 +183,7 @@ private:
     int job_begin_ = 0;
     int job_end_ = 0;
     int active_workers_ = 0;
-
-    bool has_job_ = false;
+    int job_epoch_ = 0;
     bool stop_ = false;
 };
 
