@@ -1483,7 +1483,7 @@ down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.reserve(
         std::chrono::duration<double, std::milli>(t1 - t0).count());
     if (i == args.iters - 1) {
         pool.print_last_worker_times("down_fp16_f16c_avx2_threadpool_cold");
-    }:
+    }
 }
     }
 
