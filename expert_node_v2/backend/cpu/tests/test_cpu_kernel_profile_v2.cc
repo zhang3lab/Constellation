@@ -50,6 +50,7 @@ public:
             job_begin_ = 0;
             job_end_ = 0;
             job_epoch_ = 0;
+	    worker_last_ms_.assign(static_cast<std::size_t>(num_threads), 0.0);
         }
 
         try {
@@ -123,6 +124,17 @@ public:
         return true;
     }
 
+    void print_last_worker_times(const char* tag) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    for (std::size_t i = 0; i < worker_last_ms_.size(); ++i) {
+        std::printf(
+            "THREADPOOL,%s,worker=%zu,last_ms=%g\n",
+            tag,
+            i,
+            worker_last_ms_[i]);
+    }
+}
+
 private:
     void worker_loop(int worker_id) {
         int seen_epoch = 0;
@@ -158,8 +170,21 @@ private:
             my_end = std::min(my_begin + chunk, end);
 
             if (my_begin < my_end) {
-                fn(my_begin, my_end);
-            }
+     const auto t0 = std::chrono::steady_clock::now();
+    fn(my_begin, my_end);
+    const auto t1 = std::chrono::steady_clock::now();
+
+    const double ms =
+        std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    {
+        std::unique_lock<std::mutex> lock(mu_);
+        worker_last_ms_[static_cast<std::size_t>(worker_id)] = ms;
+    }
+            } else {
+    std::unique_lock<std::mutex> lock(mu_);
+    worker_last_ms_[static_cast<std::size_t>(worker_id)] = 0.0;
+}
 
             {
                 std::unique_lock<std::mutex> lock(mu_);
@@ -177,6 +202,7 @@ private:
     std::condition_variable cv_job_;
     std::condition_variable cv_done_;
     std::vector<std::thread> workers_;
+    std::vector<double> worker_last_ms_;
 
     RangeFn fn_;
 
@@ -1455,21 +1481,26 @@ down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.reserve(
     const auto t1 = std::chrono::steady_clock::now();
     down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.push_back(
         std::chrono::duration<double, std::milli>(t1 - t0).count());
+    if (i == args.iters - 1) {
+        pool.print_last_worker_times("down_fp16_f16c_avx2_threadpool_cold");
+    }:
 }
     }
 
-    print_stats("up_gate", up_gate_ms_list);
+print_stats("up_gate_basic_omp", up_gate_ms_list);
 
-    print_stats("down_u16_out", down_u16_ms_list);
-    print_stats("down_avx2_tile8_f32", down_avx2_tile8_f32_ms_list);
-    print_stats("down_fp16_resident_f16c", down_fp16_resident_f16c_ms_list);
-    print_stats("down_fp16_resident_f16c_avx2_cold", down_fp16_resident_f16c_avx2_ms_list);
-    print_stats(
-    "down_fp16_resident_f16c_avx2_threadpool_cold",
+print_stats("down_fp8_basic_single", down_u16_ms_list);
+print_stats("down_fp8_basic_omp_cold", down_u16_omp_ms_list);
+print_stats("down_fp8_basic_simple_single", down_u16_basic_simple_ms_list);
+
+print_stats("down_fp8_avx2_tile8_single", down_avx2_tile8_f32_ms_list);
+
+print_stats("down_fp16_f16c_single", down_fp16_resident_f16c_ms_list);
+print_stats("down_fp16_f16c_avx2_single_cold", down_fp16_resident_f16c_avx2_ms_list);
+print_stats(
+    "down_fp16_f16c_avx2_threadpool_cold",
     down_fp16_resident_f16c_avx2_threadpool_cold_ms_list);
-    print_stats("down_fp16_resident_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
-    print_stats("down_u16_out_omp_cold", down_u16_omp_ms_list);
-    print_stats("down_u16_basic_simple", down_u16_basic_simple_ms_list);
+print_stats("down_fp16_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
 
     CleanupTestContext(&ctx);
     return 0;
