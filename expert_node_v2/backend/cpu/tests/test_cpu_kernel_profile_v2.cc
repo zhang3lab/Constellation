@@ -7,6 +7,11 @@
 #include <ctime>
 #include <string>
 #include <vector>
+#include <condition_variable>
+#include <cstddef>
+#include <functional>
+#include <mutex>
+#include <thread>
 
 #include "expert_node_v2/backend/activation_codec_v2.h"
 #include "expert_node_v2/backend/cpu/down_cpu_v2.h"
@@ -16,6 +21,323 @@
 #include "expert_node_v2/backend/expert_reference_v2.h"
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
+
+class FixedRangeThreadPoolV2 {
+public:
+    using RangeFn = std::function<void(int, int)>;
+
+    FixedRangeThreadPoolV2() = default;
+    ~FixedRangeThreadPoolV2() { shutdown(); }
+
+    bool init(int num_threads) {
+        if (num_threads <= 0) return false;
+        shutdown();
+
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_ = false;
+            has_job_ = false;
+            active_workers_ = 0;
+            job_begin_ = 0;
+            job_end_ = 0;
+        }
+
+        try {
+            workers_.reserve(static_cast<std::size_t>(num_threads));
+            for (int worker_id = 0; worker_id < num_threads; ++worker_id) {
+                workers_.emplace_back([this, worker_id]() { worker_loop(worker_id); });
+            }
+        } catch (...) {
+            shutdown();
+            return false;
+        }
+
+        return true;
+    }
+
+    void shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_ = true;
+            has_job_ = false;
+        }
+        cv_job_.notify_all();
+
+        for (auto& th : workers_) {
+            if (th.joinable()) th.join();
+        }
+        workers_.clear();
+    }
+
+    int num_threads() const {
+        return static_cast<int>(workers_.size());
+    }
+
+    bool parallel_for_fixed(int begin, int end, const RangeFn& fn) {
+        if (begin >= end) return true;
+        if (!fn) return false;
+
+        if (workers_.empty()) {
+            fn(begin, end);
+            return true;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(mu_);
+            if (has_job_) return false;
+
+            fn_ = fn;
+            job_begin_ = begin;
+            job_end_ = end;
+            active_workers_ = 0;
+            has_job_ = true;
+        }
+
+        cv_job_.notify_all();
+
+        {
+            std::unique_lock<std::mutex> lock(mu_);
+            cv_done_.wait(lock, [this]() { return !has_job_; });
+        }
+
+        return true;
+    }
+
+private:
+    void worker_loop(int worker_id) {
+        for (;;) {
+            RangeFn fn;
+            int begin = 0;
+            int end = 0;
+            int nthreads = 0;
+
+            {
+                std::unique_lock<std::mutex> lock(mu_);
+                cv_job_.wait(lock, [this]() { return stop_ || has_job_; });
+
+                if (stop_) return;
+
+                fn = fn_;
+                begin = job_begin_;
+                end = job_end_;
+                nthreads = static_cast<int>(workers_.size());
+                ++active_workers_;
+            }
+
+            const int total = end - begin;
+            const int chunk = (total + nthreads - 1) / nthreads;
+
+            const int my_begin = begin + worker_id * chunk;
+            const int my_end = std::min(my_begin + chunk, end);
+
+            if (my_begin < my_end) {
+                fn(my_begin, my_end);
+            }
+
+            {
+                std::unique_lock<std::mutex> lock(mu_);
+                --active_workers_;
+                if (active_workers_ == 0) {
+                    has_job_ = false;
+                    fn_ = nullptr;
+                    cv_done_.notify_one();
+                }
+            }
+        }
+    }
+
+private:
+    std::mutex mu_;
+    std::condition_variable cv_job_;
+    std::condition_variable cv_done_;
+
+    std::vector<std::thread> workers_;
+
+    RangeFn fn_;
+
+    int job_begin_ = 0;
+    int job_end_ = 0;
+    int active_workers_ = 0;
+
+    bool has_job_ = false;
+    bool stop_ = false;
+};
+
+bool RunDownCpuFp16ResidentF16cAvx2ThreadPoolV2(
+    FixedRangeThreadPoolV2* pool,
+    const Fp16ResidentMatrixLocalV2& w_down_fp16,
+    const float* h,
+    float* y) {
+    if (pool == nullptr || h == nullptr || y == nullptr) return false;
+
+#if !defined(__AVX2__) || !defined(__F16C__)
+    (void)w_down_fp16;
+    (void)h;
+    (void)y;
+    return false;
+#else
+    const int rows = w_down_fp16.rows;
+    const int cols = w_down_fp16.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    const auto& weights = w_down_fp16.data;
+    if (weights.size() !=
+        static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols)) {
+        return false;
+    }
+
+    return pool->parallel_for_fixed(
+        0,
+        rows,
+        [&](int row_begin, int row_end) {
+            for (int row = row_begin; row < row_end; ++row) {
+                const std::size_t row_base =
+                    static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+                __m256 acc = _mm256_setzero_ps();
+
+                int k = 0;
+                for (; k + 7 < cols; k += 8) {
+                    const std::uint16_t* src =
+                        weights.data() + row_base + static_cast<std::size_t>(k);
+
+                    const __m128i h8 =
+                        _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
+                    const __m256 wv = _mm256_cvtph_ps(h8);
+                    const __m256 hv = _mm256_loadu_ps(h + k);
+
+#if defined(__FMA__)
+                    acc = _mm256_fmadd_ps(wv, hv, acc);
+#else
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(wv, hv));
+#endif
+                }
+
+                alignas(32) float acc_buf[8];
+                _mm256_store_ps(acc_buf, acc);
+                float sum =
+                    acc_buf[0] + acc_buf[1] + acc_buf[2] + acc_buf[3] +
+                    acc_buf[4] + acc_buf[5] + acc_buf[6] + acc_buf[7];
+
+                for (; k < cols; ++k) {
+                    const std::uint16_t bits =
+                        weights[row_base + static_cast<std::size_t>(k)];
+
+                    const __m128i h1 = _mm_cvtsi32_si128(static_cast<int>(bits));
+                    const __m128 f4 = _mm_cvtph_ps(h1);
+                    const float w = _mm_cvtss_f32(f4);
+
+                    sum += w * h[k];
+                }
+
+                y[row] = sum;
+            }
+        });
+#endif
+}
+
+bool RunDownCpuThreadPoolV2(
+    FixedRangeThreadPoolV2* pool,
+    const MatrixBlockScaleViewV2& w_down,
+    const float* h,
+    void* y,
+    common::ActivationDType output_dtype) {
+    if (pool == nullptr || h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down.matrix.rows;
+    const int cols = w_down.matrix.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    switch (output_dtype) {
+        case common::ActivationDType::FP16:
+        case common::ActivationDType::BF16:
+            break;
+        default:
+            return false;
+    }
+
+    const float* lut = GetHostFp8LutV2(w_down.matrix.fp8_format);
+    if (lut == nullptr) return false;
+
+    const auto weights = w_down.weight.data;
+    const auto scales = w_down.scale.data;
+    auto* y_u16 = static_cast<std::uint16_t*>(y);
+
+    const int row_block = w_down.scale_meta.row_block;
+    const int col_block = w_down.scale_meta.col_block;
+    const int num_col_blocks = w_down.scale_meta.num_col_blocks;
+
+    return pool->parallel_for_fixed(
+        0,
+        rows,
+        [&](int row_begin, int row_end) {
+            for (int row = row_begin; row < row_end; ++row) {
+                const int rb = row / row_block;
+                const std::size_t row_base =
+                    static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+                float sum0 = 0.0f;
+                float sum1 = 0.0f;
+                float sum2 = 0.0f;
+                float sum3 = 0.0f;
+
+                for (int k0 = 0; k0 < cols; k0 += col_block) {
+                    const int k1 = std::min(k0 + col_block, cols);
+                    const int cb = k0 / col_block;
+
+                    const std::size_t s_idx =
+                        static_cast<std::size_t>(rb) *
+                            static_cast<std::size_t>(num_col_blocks) +
+                        static_cast<std::size_t>(cb);
+
+                    const float scale = scales[s_idx];
+
+                    int k = k0;
+                    for (; k + 3 < k1; k += 4) {
+                        const std::size_t w_idx0 =
+                            row_base + static_cast<std::size_t>(k + 0);
+                        const std::size_t w_idx1 =
+                            row_base + static_cast<std::size_t>(k + 1);
+                        const std::size_t w_idx2 =
+                            row_base + static_cast<std::size_t>(k + 2);
+                        const std::size_t w_idx3 =
+                            row_base + static_cast<std::size_t>(k + 3);
+
+                        const float h0 = h[k + 0];
+                        const float h1 = h[k + 1];
+                        const float h2 = h[k + 2];
+                        const float h3 = h[k + 3];
+
+                        const float w0 = lut[weights[w_idx0]] * scale;
+                        const float w1 = lut[weights[w_idx1]] * scale;
+                        const float w2 = lut[weights[w_idx2]] * scale;
+                        const float w3 = lut[weights[w_idx3]] * scale;
+
+                        sum0 += w0 * h0;
+                        sum1 += w1 * h1;
+                        sum2 += w2 * h2;
+                        sum3 += w3 * h3;
+                    }
+
+                    for (; k < k1; ++k) {
+                        const std::size_t w_idx =
+                            row_base + static_cast<std::size_t>(k);
+                        const float w = lut[weights[w_idx]] * scale;
+
+                        switch ((k - k0) & 3) {
+                            case 0: sum0 += w * h[k]; break;
+                            case 1: sum1 += w * h[k]; break;
+                            case 2: sum2 += w * h[k]; break;
+                            default: sum3 += w * h[k]; break;
+                        }
+                    }
+                }
+
+                const float sum = (sum0 + sum1) + (sum2 + sum3);
+                y_u16[row] = EncodeActivationFromFloatV2(output_dtype, sum);
+            }
+        });
+}
 
 bool RunDownCpuBasicSimpleLocalV2(
     const MatrixBlockScaleViewV2& w_down,
@@ -924,6 +1246,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    FixedRangeThreadPoolV2 pool;
+if (!pool.init(/*num_threads=*/4)) {
+    std::printf("FixedRangeThreadPoolV2 init failed\n");
+    CleanupTestContext(&ctx);
+    return 1;
+}
+
     std::vector<float> h_mid(static_cast<std::size_t>(ctx.cfg.inter_dim), 0.0f);
     std::vector<std::uint16_t> y_u16(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0);
     std::vector<float> y_f32(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0.0f);
@@ -949,6 +1278,10 @@ down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
 down_u16_basic_simple_ms_list.reserve(static_cast<std::size_t>(args.iters));
 std::vector<float> down_u16_basic_simple_omp_ms_list;
 down_u16_basic_simple_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
+std::vector<float> down_fp16_resident_f16c_avx2_threadpool_cold_ms_list;
+down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.reserve(
+    static_cast<std::size_t>(args.iters));
 
     // OMP warmup to avoid first-use thread pool skew.
     if (!RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
@@ -1089,6 +1422,26 @@ down_u16_basic_simple_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_u16_basic_simple_ms_list.push_back(
         std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
+
+{
+    FlushCpuCachesOmpLocalV2();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!RunDownCpuFp16ResidentF16cAvx2ThreadPoolV2(
+            &pool,
+            w_down_fp16,
+            h_mid.data(),
+            y_f32.data())) {
+        std::printf(
+            "RunDownCpuFp16ResidentF16cAvx2ThreadPoolV2 failed at iter=%d\n", i);
+        pool.shutdown();
+        CleanupTestContext(&ctx);
+        return 1;
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+    down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.push_back(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
+}
     }
 
     print_stats("up_gate", up_gate_ms_list);
@@ -1097,6 +1450,9 @@ down_u16_basic_simple_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
     print_stats("down_avx2_tile8_f32", down_avx2_tile8_f32_ms_list);
     print_stats("down_fp16_resident_f16c", down_fp16_resident_f16c_ms_list);
     print_stats("down_fp16_resident_f16c_avx2_cold", down_fp16_resident_f16c_avx2_ms_list);
+    print_stats(
+    "down_fp16_resident_f16c_avx2_threadpool_cold",
+    down_fp16_resident_f16c_avx2_threadpool_cold_ms_list);
     print_stats("down_fp16_resident_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
     print_stats("down_u16_out_omp_cold", down_u16_omp_ms_list);
     print_stats("down_u16_basic_simple", down_u16_basic_simple_ms_list);
