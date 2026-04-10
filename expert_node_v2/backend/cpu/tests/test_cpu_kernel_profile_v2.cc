@@ -22,6 +22,12 @@
 #include "expert_node_v2/backend/fp8_lut_v2.h"
 #include "expert_node_v2/expert_format_v2.h"
 
+struct Fp16ResidentMatrixLocalV2 {
+    int rows = 0;
+    int cols = 0;
+    std::vector<std::uint16_t> data;  // fp16 payload
+};
+
 class FixedRangeThreadPoolV2 {
 public:
     using RangeFn = std::function<void(int, int)>;
@@ -538,12 +544,6 @@ void FlushCpuCachesOmpLocalV2() {
 
     sink += acc;
 }
-
-struct Fp16ResidentMatrixLocalV2 {
-    int rows = 0;
-    int cols = 0;
-    std::vector<std::uint16_t> data;  // fp16 payload
-};
 
 bool RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
     const Fp16ResidentMatrixLocalV2& w_down_fp16,
