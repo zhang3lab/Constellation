@@ -146,6 +146,7 @@ namespace {
 
 struct Args {
     std::string config = "server/test/config.json";
+    std::string dtype = "";
     int warmup = 5;
     int iters = 100;
     int threads = 4;
