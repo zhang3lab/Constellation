@@ -53,19 +53,6 @@ struct TestContext {
     bool ws_ready = false;
 };
 
-void CleanupTestContext(TestContext* ctx) {
-    if (ctx == nullptr) return;
-
-    if (ctx->ws_ready) {
-        FreeExpertWorkspaceCpuV2(&ctx->ws);
-        ctx->ws_ready = false;
-    }
-    if (ctx->storage_ready) {
-        FreeExpertWeightsCpuV2(&ctx->storage);
-        ctx->storage_ready = false;
-    }
-}
-
 bool InitTestContext(const Args& args, TestContext* ctx) {
     if (ctx == nullptr) return false;
 
@@ -87,6 +74,45 @@ bool InitTestContext(const Args& args, TestContext* ctx) {
 
     if (!UploadExpertCpuV2(0, ctx->bundle, &ctx->storage)) {
         std::printf("UploadExpertCpuV2 failed\n");
+        return false;
+    }
+    ctx->storage_ready = true;
+
+    ctx->cfg.hidden_dim = 7168;
+    ctx->cfg.inter_dim = 2048;
+
+    if (!InitExpertWorkspaceCpuV2(ctx->cfg, &ctx->ws)) {
+        std::printf("InitExpertWorkspaceCpuV2 failed\n");
+        return false;
+    }
+    ctx->ws_ready = true;
+
+    FillDummyInputActivationV2(
+        ctx->cfg.hidden_dim,
+        ctx->act_dtype,
+        &ctx->x_float,
+        &ctx->x_act);
+
+    ctx->y_cpu_bytes.assign(
+        static_cast<std::size_t>(ctx->cfg.hidden_dim) * sizeof(std::uint16_t),
+        0);
+
+    return true;
+}
+
+void CleanupTestContext(TestContext* ctx) {
+    if (ctx == nullptr) return;
+
+    if (ctx->ws_ready) {
+        FreeExpertWorkspaceCpuV2(&ctx->ws);
+        ctx->ws_ready = false;
+    }
+    if (ctx->storage_ready) {
+        FreeExpertWeightsCpuV2(&ctx->storage);
+        ctx->storage_ready = false;
+    }
+}
+
 void FlushCpuCachesOmpLocalV2() {
     static std::vector<std::uint8_t> buf(512 * 1024 * 1024, 1);
     static volatile std::uint64_t sink = 0;
