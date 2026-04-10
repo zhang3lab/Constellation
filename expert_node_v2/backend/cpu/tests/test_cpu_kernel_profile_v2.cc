@@ -1131,7 +1131,7 @@ Args parse_args(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string s = argv[i];
 
-        if (s == "--dtype") {
+	        if (s == "--dtype") {
             if (i + 1 >= argc) {
                 std::printf("missing value for --dtype\n");
                 std::exit(1);
@@ -1143,15 +1143,23 @@ Args parse_args(int argc, char** argv) {
                 std::exit(1);
             }
             args.iters = std::atoi(argv[++i]);
-        } else 
-	if (s == "--config") {
-            need_value("--config");
+        } else if (s == "--config") {
+            if (i + 1 >= argc) {
+                std::printf("missing value for --config\n");
+                std::exit(1);
+            }
             args.config = argv[++i];
         } else if (s == "--warmup") {
-            need_value("--warmup");
+            if (i + 1 >= argc) {
+                std::printf("missing value for --warmup\n");
+                std::exit(1);
+            }
             args.warmup = std::atoi(argv[++i]);
         } else if (s == "--threads") {
-            need_value("--threads");
+            if (i + 1 >= argc) {
+                std::printf("missing value for --threads\n");
+                std::exit(1);
+            }
             args.threads = std::atoi(argv[++i]);
         } else if (s == "--flush-cache") {
             args.flush_cache = true;
