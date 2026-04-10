@@ -28,6 +28,15 @@
 // - RunDownCpuFp16ResidentF16cAvx2ThreadPoolV2(...)
 // - FlushCpuCachesOmpLocalV2(...)
 
+struct Args {
+    std::string config = "server/test/config.json";
+    std::string dtype = "";
+    int warmup = 5;
+    int iters = 100;
+    int threads = 4;
+    bool flush_cache = false;
+};
+
 struct TestContext {
     common::ActivationDType act_dtype = common::ActivationDType::FP16;
 
@@ -143,15 +152,6 @@ public:
 
         for (auto& th : workers_) {
 namespace {
-
-struct Args {
-    std::string config = "server/test/config.json";
-    std::string dtype = "";
-    int warmup = 5;
-    int iters = 100;
-    int threads = 4;
-    bool flush_cache = false;
-};
 
 Args parse_args(int argc, char** argv) {
     Args args;
