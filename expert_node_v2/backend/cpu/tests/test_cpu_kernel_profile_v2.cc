@@ -1118,7 +1118,11 @@ namespace {
 
 struct Args {
     std::string dtype = "fp16";
-    int iters = 20;
+    std::string config = "server/test/config.json";
+    int warmup = 5;
+    int iters = 100;
+    int threads = 4;
+    bool flush_cache = false;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -1139,6 +1143,18 @@ Args parse_args(int argc, char** argv) {
                 std::exit(1);
             }
             args.iters = std::atoi(argv[++i]);
+        } else 
+	if (s == "--config") {
+            need_value("--config");
+            args.config = argv[++i];
+        } else if (s == "--warmup") {
+            need_value("--warmup");
+            args.warmup = std::atoi(argv[++i]);
+        } else if (s == "--threads") {
+            need_value("--threads");
+            args.threads = std::atoi(argv[++i]);
+        } else if (s == "--flush-cache") {
+            args.flush_cache = true;
         } else {
             std::printf("unknown arg: %s\n", s.c_str());
             std::exit(1);
