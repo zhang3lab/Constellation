@@ -53,6 +53,9 @@ public:
             job_end_ = 0;
             job_epoch_ = 0;
 	    worker_last_ms_.assign(static_cast<std::size_t>(num_threads), 0.0);
+	    worker_last_cpu_.assign(static_cast<std::size_t>(num_threads), -1);
+worker_last_begin_.assign(static_cast<std::size_t>(num_threads), -1);
+worker_last_end_.assign(static_cast<std::size_t>(num_threads), -1);
         }
 
         try {
@@ -126,15 +129,21 @@ public:
         return true;
     }
 
-    void print_last_worker_times(const char* tag) const {
+    void print_last_worker_ranges(const char* tag) const {
     std::lock_guard<std::mutex> lock(mu_);
-    for (std::size_t i = 0; i < worker_last_ms_.size(); ++i) {
-        std::printf(
-            "THREADPOOL,%s,worker=%zu,last_ms=%g\n",
-            tag,
-            i,
-            worker_last_ms_[i]);
+    for (std::size_t i = 0; i < worker_last_begin_.size(); ++i) {
+        if (worker_last_end_[i] > worker_last_begin_[i]) {
+            std::printf(
+                "THREADPOOL,%s,worker=%zu,cpu=%d,row_begin=%d,row_end=%d,last_ms=%g\n",
+                tag,
+                i,
+                worker_last_cpu_[i],
+                worker_last_begin_[i],
+                worker_last_end_[i],
+                worker_last_ms_[i]);
+        }
     }
+}
 }
 
 private:
@@ -171,6 +180,14 @@ private:
             my_begin = begin + worker_id * chunk;
             my_end = std::min(my_begin + chunk, end);
 
+	    const int cpu = sched_getcpu();
+
+{
+    std::unique_lock<std::mutex> lock(mu_);
+    worker_last_cpu_[static_cast<std::size_t>(worker_id)] = cpu;
+    worker_last_begin_[static_cast<std::size_t>(worker_id)] = my_begin;
+    worker_last_end_[static_cast<std::size_t>(worker_id)] = my_end;
+}
             if (my_begin < my_end) {
      const auto t0 = std::chrono::steady_clock::now();
     fn(my_begin, my_end);
@@ -205,6 +222,9 @@ private:
     std::condition_variable cv_done_;
     std::vector<std::thread> workers_;
     std::vector<double> worker_last_ms_;
+    std::vector<int> worker_last_cpu_;
+std::vector<int> worker_last_begin_;
+std::vector<int> worker_last_end_;
 
     RangeFn fn_;
 
@@ -1540,7 +1560,7 @@ down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.reserve(
     down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.push_back(
         std::chrono::duration<double, std::milli>(t1 - t0).count());
     if (i == args.iters - 1) {
-        pool.print_last_worker_times("down_fp16_f16c_avx2_threadpool_cold");
+        pool.print_last_worker_ranges("down_fp16_f16c_avx2_threadpool_cold");
     }
 }
     }
