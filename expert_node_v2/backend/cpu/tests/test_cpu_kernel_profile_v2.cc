@@ -12,6 +12,8 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <omp.h>
+#include <sched.h>
 
 #include "expert_node_v2/backend/activation_codec_v2.h"
 #include "expert_node_v2/backend/cpu/down_cpu_v2.h"
@@ -606,48 +608,79 @@ bool RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
     (void)y;
     return false;
 #else
-#pragma omp parallel for schedule(static)
-    for (int row = 0; row < rows; ++row) {
-        const std::size_t row_base =
-            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+    const int max_threads = omp_get_max_threads();
+    std::vector<int> first_row(static_cast<std::size_t>(max_threads), INT_MAX);
+    std::vector<int> last_row(static_cast<std::size_t>(max_threads), -1);
+    std::vector<int> cpu_id(static_cast<std::size_t>(max_threads), -1);
 
-        __m256 acc = _mm256_setzero_ps();
+#pragma omp parallel
+    {
+        const int tid = omp_get_thread_num();
+        cpu_id[static_cast<std::size_t>(tid)] = sched_getcpu();
 
-        int k = 0;
-        for (; k + 7 < cols; k += 8) {
-            const std::uint16_t* src =
-                weights.data() + row_base + static_cast<std::size_t>(k);
+#pragma omp for schedule(static)
+        for (int row = 0; row < rows; ++row) {
+            if (row < first_row[static_cast<std::size_t>(tid)]) {
+                first_row[static_cast<std::size_t>(tid)] = row;
+            }
+            if (row > last_row[static_cast<std::size_t>(tid)]) {
+                last_row[static_cast<std::size_t>(tid)] = row;
+            }
 
-            const __m128i h8 =
-                _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
-            const __m256 wv = _mm256_cvtph_ps(h8);
-            const __m256 hv = _mm256_loadu_ps(h + k);
+            const std::size_t row_base =
+                static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+            __m256 acc = _mm256_setzero_ps();
+
+            int k = 0;
+            for (; k + 7 < cols; k += 8) {
+                const std::uint16_t* src =
+                    weights.data() + row_base + static_cast<std::size_t>(k);
+
+                const __m128i h8 =
+                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
+                const __m256 wv = _mm256_cvtph_ps(h8);
+                const __m256 hv = _mm256_loadu_ps(h + k);
 
 #if defined(__FMA__)
-            acc = _mm256_fmadd_ps(wv, hv, acc);
+                acc = _mm256_fmadd_ps(wv, hv, acc);
 #else
-            acc = _mm256_add_ps(acc, _mm256_mul_ps(wv, hv));
+                acc = _mm256_add_ps(acc, _mm256_mul_ps(wv, hv));
 #endif
+            }
+
+            alignas(32) float acc_buf[8];
+            _mm256_store_ps(acc_buf, acc);
+            float sum =
+                acc_buf[0] + acc_buf[1] + acc_buf[2] + acc_buf[3] +
+                acc_buf[4] + acc_buf[5] + acc_buf[6] + acc_buf[7];
+
+            for (; k < cols; ++k) {
+                const std::uint16_t bits =
+                    weights[row_base + static_cast<std::size_t>(k)];
+
+                const __m128i h1 = _mm_cvtsi32_si128(static_cast<int>(bits));
+                const __m128 f4 = _mm_cvtph_ps(h1);
+                const float w = _mm_cvtss_f32(f4);
+
+                sum += w * h[k];
+            }
+
+            y[row] = sum;
         }
+    }
 
-        alignas(32) float acc_buf[8];
-        _mm256_store_ps(acc_buf, acc);
-        float sum =
-            acc_buf[0] + acc_buf[1] + acc_buf[2] + acc_buf[3] +
-            acc_buf[4] + acc_buf[5] + acc_buf[6] + acc_buf[7];
-
-        for (; k < cols; ++k) {
-            const std::uint16_t bits =
-                weights[row_base + static_cast<std::size_t>(k)];
-
-            const __m128i h1 = _mm_cvtsi32_si128(static_cast<int>(bits));
-            const __m128 f4 = _mm_cvtph_ps(h1);
-            const float w = _mm_cvtss_f32(f4);
-
-            sum += w * h[k];
+    for (int tid = 0; tid < max_threads; ++tid) {
+        const int begin = first_row[static_cast<std::size_t>(tid)];
+        const int end = last_row[static_cast<std::size_t>(tid)];
+        if (end >= 0) {
+            std::printf(
+                "OMP,worker=%d,cpu=%d,row_begin=%d,row_end=%d\n",
+                tid,
+                cpu_id[static_cast<std::size_t>(tid)],
+                begin,
+                end + 1);
         }
-
-        y[row] = sum;
     }
 
     return true;
@@ -1294,7 +1327,7 @@ bool InitTestContext(const Args& args, TestContext* ctx) {
 
 }  // namespace
 
-#if 0
+#if 1
 int main(int argc, char** argv) {
     const Args args = parse_args(argc, argv);
 
@@ -1530,7 +1563,7 @@ print_stats("down_fp16_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_
     CleanupTestContext(&ctx);
     return 0;
 }
-#endif
+#else
 // 需要包含：
 // - Args
 // - parse_args(...)
@@ -1641,3 +1674,4 @@ int main(int argc, char** argv) {
     CleanupTestContext(&ctx);
     return ok ? 0 : 1;
 }
+#endif
