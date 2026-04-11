@@ -254,8 +254,7 @@ bool RunExpertCpuFp16ResidentV2(
     const void* x,
     common::ActivationDType input_dtype,
     void* y,
-    common::ActivationDType output_dtype,
-    int omp_threads) {
+    common::ActivationDType output_dtype) {
     if (ws == nullptr || x == nullptr || y == nullptr) {
         return false;
     }
@@ -298,13 +297,16 @@ bool RunExpertCpuFp16ResidentV2(
             return false;
     }
 
+    constexpr int kCpuFp16ResidentUpGateOmpThreads = 4;
+    constexpr int kCpuFp16ResidentDownOmpThreads = 4;
+
     if (!RunFusedUpGateCpuFp16ResidentV2(
             expert_device_view.w_up,
             expert_device_view.w_gate,
             x,
             input_dtype,
             ws->tmp.data,
-            omp_threads)) {
+            kCpuFp16ResidentUpGateOmpThreads)) {
         return false;
     }
 
@@ -313,7 +315,7 @@ bool RunExpertCpuFp16ResidentV2(
             ws->tmp.data,
             y,
             output_dtype,
-            omp_threads)) {
+            kCpuFp16ResidentDownOmpThreads)) {
         return false;
     }
 

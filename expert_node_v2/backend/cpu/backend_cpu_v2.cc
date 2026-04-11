@@ -242,12 +242,15 @@ bool RunExpertCpuV2(
             return false;
     }
 
+    constexpr int kCpuUpGateOmpThreads = 16;
+    constexpr int kCpuDownOmpThreads = 16;
     if (!RunFusedUpGateCpuV2(
             expert_device_view.w_up,
             expert_device_view.w_gate,
             x,
             input_dtype,
-            ws->tmp.data)) {
+            ws->tmp.data,
+            kCpuUpGateOmpThreads)) {
         return false;
     }
 
@@ -255,7 +258,8 @@ bool RunExpertCpuV2(
             expert_device_view.w_down,
             ws->tmp.data,
             y,
-            output_dtype)) {
+            output_dtype,
+            kCpuDownOmpThreads)) {
         return false;
     }
 

@@ -25,5 +25,4 @@ bool RunExpertCpuFp16ResidentV2(
     const void* x,
     common::ActivationDType input_dtype,
     void* y,
-    common::ActivationDType output_dtype,
-    int omp_threads = 1);
+    common::ActivationDType output_dtype);
