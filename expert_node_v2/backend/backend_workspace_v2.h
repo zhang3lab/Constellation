@@ -13,6 +13,8 @@ public:
     explicit BackendWorkspaceV2(const ExpertWorkspaceConfigV2& config)
         : config_(config) {}
 
+    virtual ~BackendWorkspaceV2() = default;
+
     virtual bool RunExpertRequest(
         const ExpertDeviceStorageV2& storage,
         const common::InferRequestMsg& req,
