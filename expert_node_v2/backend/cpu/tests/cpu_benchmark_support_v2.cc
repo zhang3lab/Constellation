@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
+#include <vector>
+
+#include <omp.h>
 
 namespace {
 
@@ -195,4 +198,16 @@ bool InitTestContext(const Args& args, TestContext* ctx) {
         0);
 
     return true;
+}
+
+void FlushCpuCachesOmpLocalV2() {
+    constexpr std::size_t kFlushBytes = 256ull * 1024ull * 1024ull;
+    constexpr std::size_t kElems = kFlushBytes / sizeof(std::uint64_t);
+
+    static std::vector<std::uint64_t> buf(kElems, 0);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < buf.size(); ++i) {
+        buf[i] += 1;
+    }
 }
