@@ -110,8 +110,11 @@ bool run_expert_request_typed(
 
 }  // namespace
 
-BackendWorkspaceCudaV2::BackendWorkspaceCudaV2(int local_gpu_id)
-    : impl_(std::make_unique<Impl>()) {
+BackendWorkspaceCudaV2::BackendWorkspaceCudaV2(
+    int local_gpu_id,
+    const ExpertWorkspaceConfigV2& config)
+    : BackendWorkspaceV2(config),
+      impl_(std::make_unique<Impl>()) {
     impl_->local_gpu_id = local_gpu_id;
     if (impl_->local_gpu_id < 0) {
         return;
@@ -123,11 +126,7 @@ BackendWorkspaceCudaV2::BackendWorkspaceCudaV2(int local_gpu_id)
         return;
     }
 
-    ExpertWorkspaceConfigV2 cfg;
-    cfg.hidden_dim = 7168;
-    cfg.inter_dim = 2048;
-
-    impl_->ok = InitExpertWorkspaceCudaV2(cfg, &impl_->ws);
+    impl_->ok = InitExpertWorkspaceCudaV2(config_, &impl_->ws);
 }
 
 BackendWorkspaceCudaV2::~BackendWorkspaceCudaV2() {
@@ -143,7 +142,9 @@ bool BackendWorkspaceCudaV2::RunExpertRequest(
     common::InferResponseMsg* resp) {
     if (!impl_ || !impl_->ok || resp == nullptr) return false;
     if (impl_->local_gpu_id < 0) return false;
-    if (req.batch_size != 1 || req.hidden_dim != 7168) return false;
+
+    if (req.batch_size != 1) return false;
+    if (req.hidden_dim != config_.hidden_dim) return false;
 
     const cudaError_t err = cudaSetDevice(impl_->local_gpu_id);
     if (err != cudaSuccess) {

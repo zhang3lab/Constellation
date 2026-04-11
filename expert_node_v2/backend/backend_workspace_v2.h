@@ -10,12 +10,20 @@ namespace expert_node_v2 {
 
 class BackendWorkspaceV2 {
 public:
-    virtual ~BackendWorkspaceV2() = default;
+    explicit BackendWorkspaceV2(const ExpertWorkspaceConfigV2& config)
+        : config_(config) {}
 
     virtual bool RunExpertRequest(
         const ExpertDeviceStorageV2& storage,
         const common::InferRequestMsg& req,
         common::InferResponseMsg* resp) = 0;
+
+    const ExpertWorkspaceConfigV2& config() const {
+        return config_;
+    }
+
+protected:
+    ExpertWorkspaceConfigV2 config_;
 };
 
 std::unique_ptr<BackendWorkspaceV2> CreateBackendWorkspaceV2(

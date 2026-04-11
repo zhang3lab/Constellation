@@ -8,6 +8,7 @@ CXX = "g++"
 NVCC = "nvcc"
 
 ENABLE_CPU = True
+ENABLE_CPU_FP16_RESIDENT = True
 ENABLE_CUDA = True
 ENABLE_AMD = False
 ENABLE_INTEL = False
@@ -43,10 +44,6 @@ COMMON_CPP = [
     "../common/socket_utils.cc",
 ]
 
-# Source kind is inferred from file suffix for now.
-# If a future backend needs files whose toolchain cannot be determined by suffix
-# alone, extend the source spec format (for example, {"path": ..., "kind": ...})
-# and update toolchain.resolve_source_kind(...) accordingly.
 SOURCE_RULES = {
     ".cc": "cpp",
     ".cpp": "cpp",
@@ -73,6 +70,21 @@ BACKENDS = {
             "backend/cpu/fused_up_gate_cpu_v2.cc",
             "backend/cpu/down_cpu_v2.cc",
         ],
+        "cflags": [],
+    },
+    "cpu_fp16_resident": {
+        "enabled": ENABLE_CPU_FP16_RESIDENT,
+        "src": [
+            "backend/cpu_fp16_resident/backend_workspace_cpu_fp16_resident_v2.cc",
+            "backend/cpu_fp16_resident/backend_cpu_fp16_resident_v2.cc",
+            "backend/cpu_fp16_resident/fused_up_gate_cpu_fp16_resident_v2.cc",
+            "backend/cpu_fp16_resident/down_cpu_fp16_resident_v2.cc",
+        ],
+        "cflags": [
+            "-mavx2",
+            "-mf16c",
+            "-mfma",
+        ],
     },
     "cuda": {
         "enabled": ENABLE_CUDA,
@@ -84,23 +96,27 @@ BACKENDS = {
             "backend/cuda/fused_up_gate_cuda_v2.cu",
             "backend/cuda/fp8_decode_lut_v2.cu",
         ],
+        "cflags": [],
     },
     "amd": {
         "enabled": ENABLE_AMD,
         "src": [
             "backend/amd/gpu_info_amd_v2.cc",
         ],
+        "cflags": [],
     },
     "intel": {
         "enabled": ENABLE_INTEL,
         "src": [
             "backend/intel/gpu_info_intel_v2.cc",
         ],
+        "cflags": [],
     },
 }
 
 FEATURE_DEFINES = {
     "EXPERT_NODE_V2_ENABLE_CPU": ENABLE_CPU,
+    "EXPERT_NODE_V2_ENABLE_CPU_FP16_RESIDENT": ENABLE_CPU_FP16_RESIDENT,
     "EXPERT_NODE_V2_ENABLE_CUDA": ENABLE_CUDA,
     "EXPERT_NODE_V2_ENABLE_AMD": ENABLE_AMD,
     "EXPERT_NODE_V2_ENABLE_INTEL": ENABLE_INTEL,
@@ -148,9 +164,10 @@ TEST_TARGETS = {
             "backend/fp8_lut_v2.cc",
         ],
     },
-    "test_benchmark_run_expert_cpu_v2": {
+    "test_correctness_run_expert_cpu_v2": {
         "src": [
-            "backend/cpu/tests/test_benchmark_run_expert_cpu_v2.cc",
+            "backend/cpu/tests/test_correctness_run_expert_cpu_v2.cc",
+            "backend/cpu/tests/cpu_benchmark_support_v2.cc",
             "backend/cpu/backend_cpu_v2.cc",
             "backend/cpu/fused_up_gate_cpu_v2.cc",
             "backend/cpu/down_cpu_v2.cc",
@@ -160,30 +177,6 @@ TEST_TARGETS = {
             "backend/fp8_lut_v2.cc",
         ],
     },
-    "test_cpu_kernel_profile_v2": {
-        "src": [
-            "backend/cpu/tests/test_cpu_kernel_profile_v2.cc",
-            "backend/cpu/backend_cpu_v2.cc",
-            "backend/cpu/fused_up_gate_cpu_v2.cc",
-            "backend/cpu/down_cpu_v2.cc",
-            "expert_format_v2.cc",
-            "backend/expert_reference_v2.cc",
-            "backend/dummy_expert_data_v2.cc",
-            "backend/fp8_lut_v2.cc",
-        ],
-    },
-    "test_benchmark_down_threadpool_v2": {
-    "src": [
-        "backend/cpu/tests/test_benchmark_down_threadpool_v2.cc",
-        "backend/cpu/backend_cpu_v2.cc",
-        "backend/cpu/fused_up_gate_cpu_v2.cc",
-        "backend/cpu/down_cpu_v2.cc",
-        "expert_format_v2.cc",
-        "backend/expert_reference_v2.cc",
-        "backend/dummy_expert_data_v2.cc",
-        "backend/fp8_lut_v2.cc",
-    ],
-},
 
     # cpu fp16 resident backend
     "test_profile_cpu_fp16_resident_v2": {

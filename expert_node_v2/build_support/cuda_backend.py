@@ -183,12 +183,15 @@ def compile_source(
     opt: str,
     defines,
     debug: bool,
+    extra_cflags=None,
 ):
     nvcc_path, sms = _ensure_cuda_toolchain(nvcc)
 
     src = resolve_src(project_root, src_rel)
     obj = obj_path(build_dir, src_rel)
     obj.parent.mkdir(parents=True, exist_ok=True)
+
+    extra_cflags = list(extra_cflags or [])
 
     cmd = [
         nvcc_path,
@@ -207,6 +210,8 @@ def compile_source(
 
     if debug:
         cmd += ["-g", "-G"]
+
+    cmd += extra_cflags
 
     run(cmd)
     return obj

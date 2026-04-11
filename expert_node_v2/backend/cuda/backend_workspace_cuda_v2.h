@@ -8,7 +8,9 @@ namespace expert_node_v2 {
 
 class BackendWorkspaceCudaV2 final : public BackendWorkspaceV2 {
 public:
-    explicit BackendWorkspaceCudaV2(int local_gpu_id);
+    BackendWorkspaceCudaV2(
+        int local_gpu_id,
+        const ExpertWorkspaceConfigV2& config);
     ~BackendWorkspaceCudaV2() override;
 
     bool RunExpertRequest(

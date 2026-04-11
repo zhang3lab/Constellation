@@ -1,13 +1,13 @@
-#include "expert_node_v2/backend/cpu/backend_workspace_cpu_v2.h"
+#include "expert_node_v2/backend/cpu_fp16_resident/backend_workspace_cpu_fp16_resident_v2.h"
 
 #include <cstddef>
 #include <memory>
 
-#include "expert_node_v2/backend/cpu/backend_cpu_v2.h"
+#include "expert_node_v2/backend/cpu_fp16_resident/backend_cpu_fp16_resident_v2.h"
 
 namespace expert_node_v2 {
 
-class BackendWorkspaceCpuV2::Impl {
+class BackendWorkspaceCpuFp16ResidentV2::Impl {
 public:
     int local_gpu_id = -1;
     ExpertWorkspaceCpuV2 ws{};
@@ -16,7 +16,7 @@ public:
 
 namespace {
 
-bool run_expert_request_cpu(
+bool run_expert_request_cpu_fp16_resident(
     ExpertWorkspaceCpuV2* ws,
     const ExpertDeviceStorageV2& storage,
     const common::InferRequestMsg& req,
@@ -64,7 +64,7 @@ bool run_expert_request_cpu(
     resp->output_dtype = req.output_dtype;
     resp->output.resize(out_bytes);
 
-    return RunExpertCpuV2(
+    return RunExpertCpuFp16ResidentV2(
         storage.view(),
         ws,
         req.activation.data(),
@@ -75,7 +75,7 @@ bool run_expert_request_cpu(
 
 }  // namespace
 
-BackendWorkspaceCpuV2::BackendWorkspaceCpuV2(
+BackendWorkspaceCpuFp16ResidentV2::BackendWorkspaceCpuFp16ResidentV2(
     int local_gpu_id,
     const ExpertWorkspaceConfigV2& config)
     : BackendWorkspaceV2(config),
@@ -85,16 +85,16 @@ BackendWorkspaceCpuV2::BackendWorkspaceCpuV2(
         return;
     }
 
-    impl_->ok = InitExpertWorkspaceCpuV2(config_, &impl_->ws);
+    impl_->ok = InitExpertWorkspaceCpuFp16ResidentV2(config_, &impl_->ws);
 }
 
-BackendWorkspaceCpuV2::~BackendWorkspaceCpuV2() {
+BackendWorkspaceCpuFp16ResidentV2::~BackendWorkspaceCpuFp16ResidentV2() {
     if (impl_ && impl_->ok) {
-        FreeExpertWorkspaceCpuV2(&impl_->ws);
+        FreeExpertWorkspaceCpuFp16ResidentV2(&impl_->ws);
     }
 }
 
-bool BackendWorkspaceCpuV2::RunExpertRequest(
+bool BackendWorkspaceCpuFp16ResidentV2::RunExpertRequest(
     const ExpertDeviceStorageV2& storage,
     const common::InferRequestMsg& req,
     common::InferResponseMsg* resp) {
@@ -104,10 +104,10 @@ bool BackendWorkspaceCpuV2::RunExpertRequest(
     if (req.batch_size != 1) return false;
     if (req.hidden_dim != config_.hidden_dim) return false;
 
-    return run_expert_request_cpu(&impl_->ws, storage, req, resp);
+    return run_expert_request_cpu_fp16_resident(&impl_->ws, storage, req, resp);
 }
 
-bool BackendWorkspaceCpuV2::ok() const {
+bool BackendWorkspaceCpuFp16ResidentV2::ok() const {
     return impl_ && impl_->ok;
 }
 

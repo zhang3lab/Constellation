@@ -36,10 +36,13 @@ def compile_cpp(
     defines,
     debug: bool,
     enable_cuda: bool,
+    extra_cflags=None,
 ):
     src = resolve_src(project_root, src_rel)
     obj = obj_path(build_dir, src_rel)
     obj.parent.mkdir(parents=True, exist_ok=True)
+
+    extra_cflags = list(extra_cflags or [])
 
     cmd = [
         cxx,
@@ -58,6 +61,8 @@ def compile_cpp(
 
     if debug:
         cmd += ["-g"]
+
+    cmd += extra_cflags
 
     run(cmd)
     return obj
@@ -83,8 +88,10 @@ def compile_source(
     enable_cuda: bool,
     source_rules,
     toolchains,
+    extra_cflags=None,
 ):
     kind = resolve_source_kind(src_rel, source_rules)
+    extra_cflags = list(extra_cflags or [])
 
     if kind == "cpp":
         return compile_cpp(
@@ -98,6 +105,7 @@ def compile_source(
             defines=defines,
             debug=debug,
             enable_cuda=enable_cuda,
+            extra_cflags=extra_cflags,
         )
 
     if kind == "cuda":
@@ -111,6 +119,7 @@ def compile_source(
             opt=opt,
             defines=defines,
             debug=debug,
+            extra_cflags=extra_cflags,
         )
 
     raise RuntimeError(f"unsupported source kind: {kind}")

@@ -6,12 +6,12 @@
 
 namespace expert_node_v2 {
 
-class BackendWorkspaceCpuV2 final : public BackendWorkspaceV2 {
+class BackendWorkspaceCpuFp16ResidentV2 final : public BackendWorkspaceV2 {
 public:
-    BackendWorkspaceCpuV2(
+    BackendWorkspaceCpuFp16ResidentV2(
         int local_gpu_id,
         const ExpertWorkspaceConfigV2& config);
-    ~BackendWorkspaceCpuV2() override;
+    ~BackendWorkspaceCpuFp16ResidentV2() override;
 
     bool RunExpertRequest(
         const ExpertDeviceStorageV2& storage,

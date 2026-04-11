@@ -34,6 +34,41 @@ def enabled_backend_src():
     return out
 
 
+def _enabled_backend_specs():
+    cache = getattr(_enabled_backend_specs, "_cache", None)
+    if cache is not None:
+        return cache
+
+    out = {}
+    for name, spec in config.BACKENDS.items():
+        if spec.get("enabled", False):
+            out[name] = spec
+
+    _enabled_backend_specs._cache = out
+    return out
+
+
+def _src_extra_cflags_map():
+    cache = getattr(_src_extra_cflags_map, "_cache", None)
+    if cache is not None:
+        return cache
+
+    out = {}
+    for _, spec in _enabled_backend_specs().items():
+        cflags = list(spec.get("cflags", []))
+        for src in spec.get("src", []):
+            norm = src.replace("\\", "/")
+            out[norm] = cflags
+
+    _src_extra_cflags_map._cache = out
+    return out
+
+
+def _src_extra_cflags(src_rel: str):
+    norm = src_rel.replace("\\", "/")
+    return list(_src_extra_cflags_map().get(norm, []))
+
+
 def build_main(debug: bool):
     src = []
     src += config.CORE_CPP
@@ -62,6 +97,7 @@ def build_main(debug: bool):
                 enable_cuda=config.ENABLE_CUDA,
                 source_rules=config.SOURCE_RULES,
                 toolchains=config.TOOLCHAINS,
+                extra_cflags=_src_extra_cflags(s),
             )
         )
 
@@ -102,6 +138,7 @@ def build_test(name: str, debug: bool):
                 enable_cuda=config.ENABLE_CUDA,
                 source_rules=config.SOURCE_RULES,
                 toolchains=config.TOOLCHAINS,
+                extra_cflags=_src_extra_cflags(s),
             )
         )
 

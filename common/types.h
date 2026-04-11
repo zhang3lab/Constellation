@@ -56,9 +56,11 @@ enum class GpuVendor : std::uint32_t {
     Nvidia = 2,
     AMD = 3,
     Intel = 4,
+    CpuFp16Resident = 5,
 };
 
-inline constexpr std::size_t kGpuVendorCount = 5;
+inline constexpr std::size_t kGpuVendorCount = 6;
+
 inline const char* gpu_vendor_name(GpuVendor v) {
     switch (v) {
         case GpuVendor::Unknown: return "unknown";
@@ -66,6 +68,7 @@ inline const char* gpu_vendor_name(GpuVendor v) {
         case GpuVendor::Nvidia: return "nvidia";
         case GpuVendor::AMD: return "amd";
         case GpuVendor::Intel: return "intel";
+        case GpuVendor::CpuFp16Resident: return "cpu_fp16_resident";
         default: return "invalid_gpu_vendor";
     }
 }
