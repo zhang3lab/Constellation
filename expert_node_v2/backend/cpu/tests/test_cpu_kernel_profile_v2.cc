@@ -34,6 +34,104 @@ struct Fp16ResidentMatrixLocalV2 {
     std::vector<std::uint16_t> data;  // fp16 payload
 };
 
+bool RunDownCpuFp16ResidentF16cAvx2Unroll2Acc2LocalV2(
+    const Fp16ResidentMatrixLocalV2& w_down_fp16,
+    const float* h,
+    float* y) {
+    if (h == nullptr || y == nullptr) return false;
+
+    const int rows = w_down_fp16.rows;
+    const int cols = w_down_fp16.cols;
+    if (rows <= 0 || cols <= 0) return false;
+
+    const auto& weights = w_down_fp16.data;
+    if (weights.size() !=
+        static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols)) {
+        return false;
+    }
+
+#if !defined(__AVX2__) || !defined(__F16C__)
+    (void)h;
+    (void)y;
+    return false;
+#else
+    for (int row = 0; row < rows; ++row) {
+        const std::size_t row_base =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(cols);
+
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+
+        int k = 0;
+
+        for (; k + 15 < cols; k += 16) {
+            const std::uint16_t* src0 =
+                weights.data() + row_base + static_cast<std::size_t>(k + 0);
+            const std::uint16_t* src1 =
+                weights.data() + row_base + static_cast<std::size_t>(k + 8);
+
+            const __m128i h8_0 =
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(src0));
+            const __m128i h8_1 =
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(src1));
+
+            const __m256 wv0 = _mm256_cvtph_ps(h8_0);
+            const __m256 wv1 = _mm256_cvtph_ps(h8_1);
+
+            const __m256 hv0 = _mm256_loadu_ps(h + k + 0);
+            const __m256 hv1 = _mm256_loadu_ps(h + k + 8);
+
+#if defined(__FMA__)
+            acc0 = _mm256_fmadd_ps(wv0, hv0, acc0);
+            acc1 = _mm256_fmadd_ps(wv1, hv1, acc1);
+#else
+            acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(wv0, hv0));
+            acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(wv1, hv1));
+#endif
+        }
+
+        __m256 acc = _mm256_add_ps(acc0, acc1);
+
+        for (; k + 7 < cols; k += 8) {
+            const std::uint16_t* src =
+                weights.data() + row_base + static_cast<std::size_t>(k);
+
+            const __m128i h8 =
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
+            const __m256 wv = _mm256_cvtph_ps(h8);
+            const __m256 hv = _mm256_loadu_ps(h + k);
+
+#if defined(__FMA__)
+            acc = _mm256_fmadd_ps(wv, hv, acc);
+#else
+            acc = _mm256_add_ps(acc, _mm256_mul_ps(wv, hv));
+#endif
+        }
+
+        alignas(32) float acc_buf[8];
+        _mm256_store_ps(acc_buf, acc);
+        float sum =
+            acc_buf[0] + acc_buf[1] + acc_buf[2] + acc_buf[3] +
+            acc_buf[4] + acc_buf[5] + acc_buf[6] + acc_buf[7];
+
+        for (; k < cols; ++k) {
+            const std::uint16_t bits =
+                weights[row_base + static_cast<std::size_t>(k)];
+
+            const __m128i h1 = _mm_cvtsi32_si128(static_cast<int>(bits));
+            const __m128 f4 = _mm_cvtph_ps(h1);
+            const float w = _mm_cvtss_f32(f4);
+
+            sum += w * h[k];
+        }
+
+        y[row] = sum;
+    }
+
+    return true;
+#endif
+}
+
 bool RunDownCpuFp16ResidentF16cAvx2LocalUnroll2V2(
     const Fp16ResidentMatrixLocalV2& w_down_fp16,
     const float* h,
@@ -1097,6 +1195,9 @@ int main(int argc, char** argv) {
     std::vector<float> down_u16_omp_ms_list;
 down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
+std::vector<float> down_fp16_f16c_avx2_unroll2_acc2_single_cold_ms_list;
+down_fp16_f16c_avx2_unroll2_acc2_single_cold_ms_list.reserve(static_cast<std::size_t>(args.iters));
+
     up_gate_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_u16_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
@@ -1219,6 +1320,22 @@ down_u16_basic_simple_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
         {
 		FlushCpuCachesOmpLocalV2();
             const auto t0 = std::chrono::steady_clock::now();
+            if (!RunDownCpuFp16ResidentF16cAvx2Unroll2Acc2LocalV2(
+                    w_down_fp16,
+                    h_mid.data(),
+                    y_f32.data())) {
+                std::printf("RunDownCpuFp16ResidentF16cAvx2Unroll2Acc2LocalV2failed at iter=%d\n", i);
+                CleanupTestContext(&ctx);
+                return 1;
+            }
+            const auto t1 = std::chrono::steady_clock::now();
+            down_fp16_f16c_avx2_unroll2_acc2_single_cold_ms_list.push_back(
+                std::chrono::duration<double, std::milli>(t1 - t0).count());
+        }
+
+        {
+		FlushCpuCachesOmpLocalV2();
+            const auto t0 = std::chrono::steady_clock::now();
             if (!RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
                     w_down_fp16,
                     h_mid.data(),
@@ -1279,6 +1396,9 @@ print_stats("down_fp8_avx2_tile8_single", down_avx2_tile8_f32_ms_list);
 print_stats("down_fp16_f16c_single", down_fp16_resident_f16c_ms_list);
 print_stats("down_fp16_f16c_avx2_single_cold", down_fp16_resident_f16c_avx2_ms_list);
 print_stats("down_fp16_f16c_avx2_unroll2_single_cold", down_fp16_resident_f16c_avx2_unroll2_ms_list);
+print_stats(
+    "down_fp16_f16c_avx2_unroll2_acc2_single_cold",
+    down_fp16_f16c_avx2_unroll2_acc2_single_cold_ms_list);
 print_stats("down_fp16_f16c_avx2_omp_cold", down_fp16_resident_f16c_avx2_omp_ms_list);
 
     CleanupTestContext(&ctx);
