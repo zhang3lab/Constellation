@@ -34,7 +34,7 @@ struct Fp16ResidentMatrixLocalV2 {
     std::vector<std::uint16_t> data;  // fp16 payload
 };
 
-bool RunDownCpuFp16ResidentF16cAvx2LocalUnrool2V2(
+bool RunDownCpuFp16ResidentF16cAvx2LocalUnroll2V2(
     const Fp16ResidentMatrixLocalV2& w_down_fp16,
     const float* h,
     float* y) {
@@ -1082,13 +1082,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    FixedRangeThreadPoolV2 pool;
-if (!pool.init(/*num_threads=*/4)) {
-    std::printf("FixedRangeThreadPoolV2 init failed\n");
-    CleanupTestContext(&ctx);
-    return 1;
-}
-
     std::vector<float> h_mid(static_cast<std::size_t>(ctx.cfg.inter_dim), 0.0f);
     std::vector<std::uint16_t> y_u16(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0);
     std::vector<float> y_f32(static_cast<std::size_t>(ctx.cfg.hidden_dim), 0.0f);
@@ -1109,17 +1102,13 @@ down_u16_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_avx2_tile8_f32_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_fp16_resident_f16c_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_fp16_resident_f16c_avx2_ms_list.reserve(static_cast<std::size_t>(args.iters));
-    down_fp16_resident_f16c_avx2_ms_unroll2_list.reserve(static_cast<std::size_t>(args.iters));
+    down_fp16_resident_f16c_avx2_unroll2_ms_list.reserve(static_cast<std::size_t>(args.iters));
     down_fp16_resident_f16c_avx2_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
 
     std::vector<float> down_u16_basic_simple_ms_list;
 down_u16_basic_simple_ms_list.reserve(static_cast<std::size_t>(args.iters));
 std::vector<float> down_u16_basic_simple_omp_ms_list;
 down_u16_basic_simple_omp_ms_list.reserve(static_cast<std::size_t>(args.iters));
-
-std::vector<float> down_fp16_resident_f16c_avx2_threadpool_cold_ms_list;
-down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.reserve(
-    static_cast<std::size_t>(args.iters));
 
     // OMP warmup to avoid first-use thread pool skew.
     if (!RunDownCpuFp16ResidentF16cAvx2OmpLocalV2(
@@ -1277,26 +1266,6 @@ down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.reserve(
         std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
 
-{
-    FlushCpuCachesOmpLocalV2();
-
-    const auto t0 = std::chrono::steady_clock::now();
-    if (!RunDownCpuFp16ResidentF16cAvx2ThreadPoolV2(
-            &pool,
-            w_down_fp16,
-            h_mid.data(),
-            y_f32.data())) {
-        std::printf(
-            "RunDownCpuFp16ResidentF16cAvx2ThreadPoolV2 failed at iter=%d\n", i);
-        pool.shutdown();
-        CleanupTestContext(&ctx);
-        return 1;
-    }
-    const auto t1 = std::chrono::steady_clock::now();
-    down_fp16_resident_f16c_avx2_threadpool_cold_ms_list.push_back(
-        std::chrono::duration<double, std::milli>(t1 - t0).count());
-        pool.print_last_worker_ranges("down_fp16_f16c_avx2_threadpool_cold");
-}
     }
 
 print_stats("up_gate_basic_omp", up_gate_ms_list);
