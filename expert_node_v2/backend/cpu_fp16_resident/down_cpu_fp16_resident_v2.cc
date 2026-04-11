@@ -147,7 +147,6 @@ bool RunDownCpuFp16ResidentKernelV2(
     }
 
     return true;
-#endif
 }
 
 }  // namespace
