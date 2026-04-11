@@ -210,4 +210,10 @@ void FlushCpuCachesOmpLocalV2() {
     for (std::size_t i = 0; i < buf.size(); ++i) {
         buf[i] += 1;
     }
+
+    volatile std::uint64_t sink = 0;
+    for (std::size_t i = 0; i < buf.size(); i += 4096 / sizeof(std::uint64_t)) {
+        sink += buf[i];
+    }
+    (void)sink;
 }
