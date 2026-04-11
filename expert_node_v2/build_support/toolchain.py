@@ -48,6 +48,7 @@ def compile_cpp(
         cxx,
         f"-std={cxx_std}",
         opt,
+        "-fopenmp",
         "-c",
         str(src),
         "-o",
@@ -136,7 +137,7 @@ def link_exe(
     if enable_cuda:
         cmd += cuda_backend.get_cuda_link_flags()
 
-    cmd += ["-lpthread"]
+    cmd += ["-lpthread", "-fopenmp"]
     run(cmd)
 
 
