@@ -9,4 +9,4 @@ bool RunFusedUpGateCpuV2(
     const void* x,
     common::ActivationDType input_dtype,
     float* h,
-    int omp_threads);
+    int omp_threads = 1);
