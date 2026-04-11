@@ -185,6 +185,24 @@ TEST_TARGETS = {
     ],
 },
 
+    # cpu fp16 resident backend
+    "test_profile_cpu_fp16_resident_v2": {
+        "src": [
+            "backend/cpu_fp16_resident/tests/test_profile_cpu_fp16_resident_v2.cc",
+            "backend/cpu/tests/cpu_benchmark_support_v2.cc",
+            "backend/cpu/down_cpu_v2.cc",
+            "backend/cpu/fused_up_gate_cpu_v2.cc",
+            "backend/cpu/backend_cpu_v2.cc",
+            "backend/cpu_fp16_resident/down_cpu_fp16_resident_v2.cc",
+            "backend/cpu_fp16_resident/fused_up_gate_cpu_fp16_resident_v2.cc",
+            "backend/cpu_fp16_resident/backend_cpu_fp16_resident_v2.cc",
+            "expert_format_v2.cc",
+            "backend/expert_reference_v2.cc",
+            "backend/dummy_expert_data_v2.cc",
+            "backend/fp8_lut_v2.cc",
+        ],
+    },
+
     # cuda backend
     "test_gpu_info_cuda_v2": {
         "src": [
