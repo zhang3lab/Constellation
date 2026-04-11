@@ -1,5 +1,6 @@
 #include "expert_node_v2/backend/cpu/down_cpu_v2.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
@@ -10,7 +11,8 @@ bool RunDownCpuV2(
     const MatrixBlockScaleViewV2& w_down,
     const float* h,
     void* y,
-    common::ActivationDType output_dtype) {
+    common::ActivationDType output_dtype,
+    int omp_threads) {
     if (h == nullptr || y == nullptr) return false;
 
     const int rows = w_down.matrix.rows;
@@ -36,7 +38,9 @@ bool RunDownCpuV2(
     const int col_block = w_down.scale_meta.col_block;
     const int num_col_blocks = w_down.scale_meta.num_col_blocks;
 
-#pragma omp parallel for schedule(static)
+    if (omp_threads <= 0) omp_threads = 1;
+
+#pragma omp parallel for schedule(static) num_threads(omp_threads)
     for (int row = 0; row < rows; ++row) {
         const int rb = row / row_block;
         const std::size_t row_base =

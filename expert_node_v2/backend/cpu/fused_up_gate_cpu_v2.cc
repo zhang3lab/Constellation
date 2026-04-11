@@ -1,8 +1,10 @@
 #include "expert_node_v2/backend/cpu/fused_up_gate_cpu_v2.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "expert_node_v2/backend/activation_codec_v2.h"
 #include "expert_node_v2/backend/fp8_lut_v2.h"
@@ -12,7 +14,8 @@ bool RunFusedUpGateCpuV2(
     const MatrixBlockScaleViewV2& w_gate,
     const void* x,
     common::ActivationDType input_dtype,
-    float* h) {
+    float* h,
+    int omp_threads) {
     if (x == nullptr || h == nullptr) return false;
 
     const int rows = w_up.matrix.rows;
@@ -59,7 +62,9 @@ bool RunFusedUpGateCpuV2(
             DecodeActivationToFloatV2(input_dtype, x_u16[k]);
     }
 
-#pragma omp parallel for schedule(static)
+    if (omp_threads <= 0) omp_threads = 1;
+
+#pragma omp parallel for schedule(static) num_threads(omp_threads)
     for (int row = 0; row < rows; ++row) {
         const int rb_up = row / up_row_block;
         const int rb_gate = row / gate_row_block;
