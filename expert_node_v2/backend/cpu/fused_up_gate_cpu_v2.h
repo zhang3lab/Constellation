@@ -8,4 +8,5 @@ bool RunFusedUpGateCpuV2(
     const MatrixBlockScaleViewV2& w_gate,
     const void* x,
     common::ActivationDType input_dtype,
-    float* h);
+    float* h,
+    int omp_threads);
