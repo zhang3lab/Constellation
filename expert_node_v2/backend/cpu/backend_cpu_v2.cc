@@ -242,8 +242,8 @@ bool RunExpertCpuV2(
             return false;
     }
 
-    constexpr int kCpuUpGateOmpThreads = 16;
-    constexpr int kCpuDownOmpThreads = 16;
+    constexpr int kCpuUpGateOmpThreads = 12;
+    constexpr int kCpuDownOmpThreads = 12;
     if (!RunFusedUpGateCpuV2(
             expert_device_view.w_up,
             expert_device_view.w_gate,
