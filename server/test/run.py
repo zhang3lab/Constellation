@@ -22,7 +22,9 @@ def list_tests() -> list[Path]:
 def select_tests(kind: str, pattern: str | None) -> list[Path]:
     tests = list_tests()
 
-    if kind == "smoke":
+    if kind == "control":
+        tests = [p for p in tests if p.name.startswith("0_")]
+    elif kind == "smoke":
         tests = [p for p in tests if p.name.startswith("1_")]
     elif kind == "regress":
         tests = [p for p in tests if p.name.startswith("2_")]
@@ -45,7 +47,7 @@ def main():
         "--kind",
         type=str,
         default="all",
-        choices=["smoke", "regress", "e2e", "all"],
+        choices=["control", "smoke", "regress", "e2e", "all"],
     )
     ap.add_argument("--pattern", type=str, default=None)
     ap.add_argument("--config", type=str, default=DEFAULT_TEST_CONFIG)
