@@ -79,6 +79,7 @@ BACKENDS = {
             "backend/cpu_fp16_resident/backend_cpu_fp16_resident_v2.cc",
             "backend/cpu_fp16_resident/fused_up_gate_cpu_fp16_resident_v2.cc",
             "backend/cpu_fp16_resident/down_cpu_fp16_resident_v2.cc",
+            "backend/cpu_fp16_resident/gpu_info_cpu_fp16_resident_v2.cc",
         ],
         "cflags": [
             "-mavx2",

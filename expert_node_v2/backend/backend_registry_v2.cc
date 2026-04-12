@@ -9,7 +9,7 @@
 
 #if EXPERT_NODE_V2_ENABLE_CPU_FP16_RESIDENT
 #include "expert_node_v2/backend/cpu_fp16_resident/backend_cpu_fp16_resident_v2.h"
-#include "expert_node_v2/backend/cpu/gpu_info_cpu_v2.h"
+#include "expert_node_v2/backend/cpu_fp16_resident/gpu_info_cpu_fp16_resident_v2.h"
 #endif
 
 #if EXPERT_NODE_V2_ENABLE_CUDA
@@ -52,8 +52,8 @@ GetBackendRegistryV2() {
 #if EXPERT_NODE_V2_ENABLE_CPU_FP16_RESIDENT
             reg[static_cast<std::size_t>(common::GpuVendor::CpuFp16Resident)] = {
                 .vendor = common::GpuVendor::CpuFp16Resident,
-                .build_static = BuildLocalCpuGpuInfosV2,
-                .build_dynamic = BuildLocalCpuDynamicGpuInfosV2,
+                .build_static = BuildLocalCpuFp16ResidentGpuInfosV2,
+                .build_dynamic = BuildLocalCpuFp16ResidentDynamicGpuInfosV2,
                 .upload_expert = UploadExpertCpuFp16ResidentV2,
                 .free_expert_weights = FreeExpertWeightsCpuFp16ResidentV2,
             };
