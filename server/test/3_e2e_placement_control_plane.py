@@ -7,7 +7,7 @@ from server.control_plane import build_restricted_global_expert_ids
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, required=True)
+    ap.add_argument("--config", type=str, default="server/config.json")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
