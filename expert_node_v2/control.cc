@@ -19,6 +19,7 @@
 #include "common/inventory_codec.h"
 #include "common/placement_codec.h"
 #include "common/protocol.h"
+#include "common/resident_inventory_codec.h"
 #include "common/socket_utils.h"
 #include "common/types.h"
 #include "common/weight_codec.h"
