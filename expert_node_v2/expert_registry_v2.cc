@@ -158,36 +158,121 @@ bool ExpertRegistryV2::Update(
     int worker_id,
     common::GpuVendor vendor,
     const std::array<common::VendorWorkerSpan, common::kGpuVendorCount>& vendor_spans) {
-    if (expert_id < 0 || worker_id < 0) return false;
+    if (expert_id < 0 || worker_id < 0) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update invalid ids "
+                     "expert=%d worker=%d vendor=%u(%s)\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
+        return false;
+    }
 
     const expert_node_v2::BackendRegistryEntryV2* backend =
         expert_node_v2::FindBackendRegistryEntryV2(vendor);
     if (backend == nullptr) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update backend not found "
+                     "expert=%d worker=%d vendor=%u(%s)\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
         return false;
     }
     if (backend->upload_expert == nullptr ||
         backend->free_expert_weights == nullptr) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update backend missing callbacks "
+                     "expert=%d worker=%d vendor=%u(%s) "
+                     "upload_expert=%p free_expert_weights=%p\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor),
+                     reinterpret_cast<const void*>(backend->upload_expert),
+                     reinterpret_cast<const void*>(backend->free_expert_weights));
         return false;
     }
 
     const common::VendorWorkerSpan& vendor_span =
         vendor_spans[static_cast<std::size_t>(vendor)];
 
-    if (worker_id < vendor_span.worker_id_begin) return false;
+    if (worker_id < vendor_span.worker_id_begin) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update worker below vendor span "
+                     "expert=%d worker=%d vendor=%u(%s) "
+                     "span_begin=%d span_count=%d\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor),
+                     vendor_span.worker_id_begin,
+                     vendor_span.worker_count);
+        return false;
+    }
     if (worker_id >= vendor_span.worker_id_begin + vendor_span.worker_count) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update worker above vendor span "
+                     "expert=%d worker=%d vendor=%u(%s) "
+                     "span_begin=%d span_count=%d\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor),
+                     vendor_span.worker_id_begin,
+                     vendor_span.worker_count);
         return false;
     }
 
     const int local_gpu_id = worker_id - vendor_span.worker_id_begin;
 
     ExpertEntryV2* entry = FindOrCreateEntry_(expert_id);
-    if (entry == nullptr) return false;
-    if (!entry->incoming_ready) return false;
+    if (entry == nullptr) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update FindOrCreateEntry_ failed "
+                     "expert=%d worker=%d vendor=%u(%s)\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
+        return false;
+    }
+    if (!entry->incoming_ready) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update incoming not ready "
+                     "expert=%d worker=%d vendor=%u(%s)\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
+        return false;
+    }
 
     ExpertResidentSlotV2* slot = FindOrCreateResident_(expert_id, worker_id);
-    if (slot == nullptr) return false;
+    if (slot == nullptr) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update FindOrCreateResident_ failed "
+                     "expert=%d worker=%d vendor=%u(%s)\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
+        return false;
+    }
 
     if (slot->resident_ready) {
+        std::fprintf(stderr,
+                     "[expert_registry_v2] Update replacing existing resident "
+                     "expert=%d worker=%d old_vendor=%u(%s) new_vendor=%u(%s)\n",
+                     expert_id,
+                     worker_id,
+                     static_cast<unsigned>(slot->vendor),
+                     common::gpu_vendor_name(slot->vendor),
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
+
         backend->free_expert_weights(&slot->storage);
         slot->resident_ready = false;
         slot->vendor = common::GpuVendor::Unknown;
@@ -198,10 +283,13 @@ bool ExpertRegistryV2::Update(
 
     if (!ok) {
         std::fprintf(stderr,
-                     "[expert_registry_v2] upload failed expert=%d worker=%d vendor=%u\n",
+                     "[expert_registry_v2] Update upload failed "
+                     "expert=%d worker=%d local_gpu_id=%d vendor=%u(%s)\n",
                      expert_id,
                      worker_id,
-                     static_cast<unsigned>(vendor));
+                     local_gpu_id,
+                     static_cast<unsigned>(vendor),
+                     common::gpu_vendor_name(vendor));
         slot->resident_ready = false;
         slot->vendor = common::GpuVendor::Unknown;
         return false;
@@ -209,6 +297,7 @@ bool ExpertRegistryV2::Update(
 
     slot->resident_ready = true;
     slot->vendor = vendor;
+
     return true;
 }
 
