@@ -12,8 +12,11 @@ def _pack_f32_list(xs: List[float]) -> bytes:
 
 
 def _make_dummy_expert_tensors() -> List[dict]:
-    # Keep shapes tiny so the test stays fast.
-    # Relation must satisfy:
+    # This test only validates real control-plane + weight-upload plumbing.
+    # The tensors here are intentionally tiny synthetic payloads rather than
+    # real DeepSeek expert weights, so the test stays fast and deterministic.
+    #
+    # The shapes only need to satisfy the backend structural constraints:
     #   w_up.rows == w_gate.rows
     #   w_up.cols == w_gate.cols
     #   w_down.rows == w_up.cols
@@ -251,13 +254,25 @@ def main():
 
     coord.discover_nodes()
 
-    for (node_instance_id, worker_id), old_expert_id in zip(target_keys, expert_ids_round1):
+    for (node_instance_id, worker_id), old_expert_id, new_expert_id in zip(
+        target_keys,
+        expert_ids_round1,
+        expert_ids_round2,
+    ):
         resident = _resident_set(coord, node_instance_id, worker_id)
+
         if int(old_expert_id) not in resident:
             raise RuntimeError(
                 f"round2 keep-path failed: "
                 f"old expert disappeared with drop_non_target_residents=0 "
                 f"node={node_instance_id} worker={worker_id} expert={old_expert_id}"
+            )
+
+        if int(new_expert_id) in resident:
+            raise RuntimeError(
+                f"round2 unexpected resident hit: "
+                f"new target expert appeared before upload "
+                f"node={node_instance_id} worker={worker_id} expert={new_expert_id}"
             )
 
     print("[e2e-placement] keep-path verified: old residents preserved")
