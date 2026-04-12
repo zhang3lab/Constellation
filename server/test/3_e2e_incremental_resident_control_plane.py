@@ -275,7 +275,7 @@ def main():
                 f"node={node_instance_id} worker={worker_id} expert={new_expert_id}"
             )
 
-    print("[e2e-placement] keep-path verified: old residents preserved")
+    print("[e2e-placement] keep-path verified: old residents preserved and new targets not auto-loaded")
 
     #
     # Round 3: place B again, but now DROP non-target residents.
