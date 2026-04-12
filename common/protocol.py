@@ -66,6 +66,22 @@ class ActivationDType(enum.IntEnum):
     BF16 = 2
 
 
+class GpuVendor(enum.IntEnum):
+    UNKNOWN = 0
+    CPU = 1
+    NVIDIA = 2
+    AMD = 3
+    INTEL = 4
+    CPU_FP16_RESIDENT = 5
+
+
+def decode_gpu_vendor(raw: int) -> GpuVendor:
+    try:
+        return GpuVendor(raw)
+    except ValueError:
+        return GpuVendor.UNKNOWN
+
+
 class HeaderDict(TypedDict):
     magic: int
     version: int
@@ -194,7 +210,8 @@ def decode_inventory_reply(body: bytes):
         worker_port, offset = unpack_u32(body, offset)
         gpu_status, offset = unpack_u32(body, offset)
 
-        gpu_vendor, offset = unpack_u32(body, offset)
+        gpu_vendor_raw, offset = unpack_u32(body, offset)
+        gpu_vendor = decode_gpu_vendor(gpu_vendor_raw)
         capability_flags, offset = unpack_u32(body, offset)
         arch_name, offset = unpack_string(body, offset)
 

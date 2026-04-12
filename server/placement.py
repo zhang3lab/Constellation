@@ -1,5 +1,7 @@
 from typing import Any, Dict, List
 
+from common.protocol import GpuVendor
+
 
 class PlacementError(RuntimeError):
     pass
@@ -22,12 +24,18 @@ def build_balanced_placement(
 
     gpus = []
     for gpu in gpu_inventory:
+        if gpu.get("gpu_vendor") == GpuVendor.CPU_FP16_RESIDENT:
+            continue
+
         capacity_bytes = int(gpu["free_mem_bytes"] * memory_utilization)
         g = dict(gpu)
         g["capacity_bytes"] = capacity_bytes
         g["remaining_mem_bytes"] = capacity_bytes
         g["assigned_slot_ids"] = []
         gpus.append(g)
+
+    if not gpus:
+        raise PlacementError("no eligible workers found for placement")
 
     placements: List[Dict[str, Any]] = []
 
@@ -54,7 +62,7 @@ def build_balanced_placement(
             raise PlacementError(
                 f"unable to place slot {placement_index}: "
                 f"need {expert_mem_bytes} bytes, "
-                f"max remaining across GPUs is {max_remaining} bytes"
+                f"max remaining across eligible workers is {max_remaining} bytes"
             )
 
         chosen["remaining_mem_bytes"] -= expert_mem_bytes
