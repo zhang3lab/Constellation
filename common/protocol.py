@@ -30,6 +30,8 @@ class ProtocolError(RuntimeError):
 class MsgType(enum.IntEnum):
     InventoryRequest = 1
     InventoryReply = 2
+    ResidentInventoryRequest = 3
+    ResidentInventoryReply = 4
 
     PlacementPlan = 10
     PlacementAck = 11
@@ -242,8 +244,43 @@ def decode_inventory_reply(body: bytes):
     }
 
 
-def encode_placement_plan(assignments):
+def decode_resident_inventory_reply(body: bytes):
+    offset = 0
+
+    num_workers, offset = unpack_u32(body, offset)
+
+    workers = []
+    for _ in range(num_workers):
+        worker_id, offset = unpack_i32(body, offset)
+        num_experts, offset = unpack_u32(body, offset)
+
+        expert_ids = []
+        for _ in range(num_experts):
+            expert_id, offset = unpack_i32(body, offset)
+            expert_ids.append(expert_id)
+
+        workers.append(
+            {
+                "worker_id": worker_id,
+                "num_experts": num_experts,
+                "expert_ids": expert_ids,
+            }
+        )
+
+    if offset != len(body):
+        raise ProtocolError(
+            f"resident inventory reply has trailing bytes: parsed {offset}, total {len(body)}"
+        )
+
+    return {
+        "num_workers": num_workers,
+        "workers": workers,
+    }
+
+
+def encode_placement_plan(assignments, drop_non_target_residents: bool = False):
     body = bytearray()
+    body += pack_u32(1 if drop_non_target_residents else 0)
     body += pack_u32(len(assignments))
     for a in assignments:
         expert_id = int(a["expert_id"])
@@ -255,6 +292,7 @@ def encode_placement_plan(assignments):
 
 def decode_placement_plan(body: bytes):
     offset = 0
+    drop_non_target_residents_u32, offset = unpack_u32(body, offset)
     num_assignments, offset = unpack_u32(body, offset)
 
     assignments = []
@@ -273,7 +311,10 @@ def decode_placement_plan(body: bytes):
             f"placement plan has trailing bytes: parsed {offset}, total {len(body)}"
         )
 
-    return assignments
+    return {
+        "drop_non_target_residents": (drop_non_target_residents_u32 != 0),
+        "assignments": assignments,
+    }
 
 
 def decode_placement_ack(body: bytes) -> dict:
@@ -281,14 +322,14 @@ def decode_placement_ack(body: bytes) -> dict:
         raise ValueError(f"bad PlacementAck body size: {len(body)}")
 
     status_code = int.from_bytes(body[0:4], "little")
-    needs_reload = int.from_bytes(body[4:6], "little") != 0
+    needs_load = int.from_bytes(body[4:6], "little") != 0
     all_ready = int.from_bytes(body[6:8], "little") != 0
     num_target_experts = int.from_bytes(body[8:12], "little")
     num_ready_experts = int.from_bytes(body[12:16], "little")
 
     return {
         "status_code": status_code,
-        "needs_reload": needs_reload,
+        "needs_load": needs_load,
         "all_ready": all_ready,
         "num_target_experts": num_target_experts,
         "num_ready_experts": num_ready_experts,

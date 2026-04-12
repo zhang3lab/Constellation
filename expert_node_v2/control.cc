@@ -84,11 +84,11 @@ bool SendEmptyAck(
 
 common::PlacementAck BuildPlacementAck(
     const ControlState& state,
-    const std::vector<common::PlacementAssignment>& assignments) {
+    const common::PlacementPlan& plan) {
     common::PlacementAck ack{};
     ack.status_code = 0;
 
-    for (const auto& a : assignments) {
+    for (const auto& a : plan.assignments) {
         ++ack.num_target_experts;
 
         if (state.registry.FindDeviceStorage(
@@ -99,7 +99,7 @@ common::PlacementAck BuildPlacementAck(
     }
 
     ack.all_ready = (ack.num_ready_experts == ack.num_target_experts);
-    ack.needs_reload = !ack.all_ready;
+    ack.needs_load = !ack.all_ready;
     return ack;
 }
 
@@ -128,7 +128,7 @@ bool SendPlacementAckError(
     std::uint32_t status_code = 1) {
     common::PlacementAck ack{};
     ack.status_code = status_code;
-    ack.needs_reload = true;
+    ack.needs_load = true;
     ack.all_ready = false;
     ack.num_target_experts = 0;
     ack.num_ready_experts = 0;
@@ -190,6 +190,65 @@ bool HandleInventoryRequest(
     return ok;
 }
 
+bool HandleResidentInventoryRequest(
+    int fd,
+    ControlState* state,
+    const common::MsgHeader& req,
+    const std::string& req_body) {
+    if (state == nullptr) {
+        std::fprintf(stderr, "HandleResidentInventoryRequest: state is null\n");
+        return false;
+    }
+
+    if (!req_body.empty()) {
+        std::fprintf(stderr, "ResidentInventoryRequest body must be empty\n");
+        return false;
+    }
+
+    std::printf("[%s] received ResidentInventoryRequest rid=%u\n",
+                state->static_info.node_id.c_str(), req.request_id);
+
+    std::vector<common::ResidentInventoryWorkerInfo> workers =
+        state->registry.BuildResidentInventory(state->static_info);
+
+    std::size_t total_resident_experts = 0;
+    for (const auto& worker : workers) {
+        total_resident_experts += worker.expert_ids.size();
+    }
+
+    std::printf("[%s] ResidentInventoryRequest rid=%u workers=%zu total_resident_experts=%zu\n",
+                state->static_info.node_id.c_str(),
+                req.request_id,
+                workers.size(),
+                total_resident_experts);
+
+    std::string body;
+    if (!common::EncodeResidentInventoryReplyBody(workers, &body)) {
+        std::fprintf(stderr, "[%s] EncodeResidentInventoryReplyBody failed\n",
+                     state->static_info.node_id.c_str());
+        return false;
+    }
+
+    common::MsgHeader resp{};
+    resp.magic = common::kMagic;
+    resp.version = common::kVersion;
+    resp.msg_type =
+        static_cast<std::uint16_t>(common::MsgType::ResidentInventoryReply);
+    resp.request_id = req.request_id;
+    resp.body_len = static_cast<std::uint32_t>(body.size());
+
+    const bool ok = common::SendMessage(fd, resp, body);
+    if (ok) {
+        std::printf("[%s] sent ResidentInventoryReply rid=%u body_len=%u workers=%zu total_resident_experts=%zu\n",
+                    state->static_info.node_id.c_str(),
+                    resp.request_id,
+                    resp.body_len,
+                    workers.size(),
+                    total_resident_experts);
+    }
+    return ok;
+}
+
 bool HandleHeartbeatRequest(
     int fd,
     ControlState* state,
@@ -229,15 +288,15 @@ bool HandlePlacementPlan(
         return false;
     }
 
-    std::vector<common::PlacementAssignment> assignments;
-    if (!common::DecodePlacementPlanBody(req_body, &assignments)) {
+    common::PlacementPlan plan;
+    if (!common::DecodePlacementPlanBody(req_body, &plan)) {
         std::fprintf(stderr,
                      "[%s] failed to decode PlacementPlan\n",
                      state->static_info.node_id.c_str());
         return SendPlacementAckError(fd, req.request_id);
     }
 
-    for (const auto& a : assignments) {
+    for (const auto& a : plan.assignments) {
         if (a.expert_id < 0) {
             std::fprintf(stderr,
                          "[%s] invalid expert_id=%d in PlacementPlan\n",
@@ -257,28 +316,36 @@ bool HandlePlacementPlan(
         }
     }
 
-    std::printf("[%s] received PlacementPlan rid=%u assignments=%zu\n",
+    std::printf("[%s] received PlacementPlan rid=%u assignments=%zu drop_non_target_residents=%d\n",
                 state->static_info.node_id.c_str(),
                 req.request_id,
-                assignments.size());
+                plan.assignments.size(),
+                static_cast<int>(plan.drop_non_target_residents));
 
     common::PlacementAck ack{};
+    std::size_t num_dropped = 0;
     {
         std::unique_lock<std::shared_mutex> lock(state->mu);
-        ack = BuildPlacementAck(*state, assignments);
 
-        if (ack.needs_reload) {
-            state->registry.Reset();
-            state->active_load = ActiveLoad{};
+        if (plan.drop_non_target_residents) {
+            num_dropped = state->registry.DropNonTargetResidents(plan.assignments);
         }
+
+        ack = BuildPlacementAck(*state, plan);
+
+        // Keep resident experts unless explicitly dropped above.
+        // Always clear partial in-flight upload state.
+        state->active_load = ActiveLoad{};
     }
 
     const bool ok = SendPlacementAck(fd, req.request_id, ack);
     if (ok) {
-        std::printf("[%s] sent PlacementAck rid=%u needs_reload=%d all_ready=%d target=%u ready=%u\n",
+        std::printf("[%s] sent PlacementAck rid=%u drop_non_target_residents=%d dropped=%zu needs_load=%d all_ready=%d target=%u ready=%u\n",
                     state->static_info.node_id.c_str(),
                     req.request_id,
-                    static_cast<int>(ack.needs_reload),
+                    static_cast<int>(plan.drop_non_target_residents),
+                    num_dropped,
+                    static_cast<int>(ack.needs_load),
                     static_cast<int>(ack.all_ready),
                     ack.num_target_experts,
                     ack.num_ready_experts);
@@ -679,6 +746,8 @@ bool DispatchRequest(
     switch (msg_type) {
         case common::MsgType::InventoryRequest:
             return HandleInventoryRequest(fd, state, req, req_body);
+        case common::MsgType::ResidentInventoryRequest:
+            return HandleResidentInventoryRequest(fd, state, req, req_body);
         case common::MsgType::HeartbeatRequest:
             return HandleHeartbeatRequest(fd, state, req, req_body);
         case common::MsgType::PlacementPlan:

@@ -8,12 +8,11 @@
 
 namespace common {
 
-std::string EncodePlacementPlanBody(
-    const std::vector<PlacementAssignment>& assignments);
+std::string EncodePlacementPlanBody(const PlacementPlan& plan);
 
 bool DecodePlacementPlanBody(
     const std::string& body,
-    std::vector<PlacementAssignment>* out);
+    PlacementPlan* out);
 
 bool EncodePlacementAck(const PlacementAck& msg, std::string* out);
 

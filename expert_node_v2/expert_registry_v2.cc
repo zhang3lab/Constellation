@@ -1,6 +1,8 @@
 #include "expert_node_v2/expert_registry_v2.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <unordered_set>
 #include <utility>
 
 #include "expert_node_v2/backend/backend_registry_v2.h"
@@ -299,6 +301,131 @@ bool ExpertRegistryV2::Update(
     slot->vendor = vendor;
 
     return true;
+}
+
+std::vector<common::ResidentInventoryWorkerInfo>
+ExpertRegistryV2::BuildResidentInventory(
+    const common::StaticNodeInfo& static_info) const {
+    std::vector<common::ResidentInventoryWorkerInfo> workers;
+    workers.reserve(static_info.gpus.size());
+
+    std::unordered_map<int, std::size_t> worker_index;
+    worker_index.reserve(static_info.gpus.size());
+
+    for (const auto& gpu : static_info.gpus) {
+        const std::size_t idx = workers.size();
+        workers.push_back(common::ResidentInventoryWorkerInfo{
+            .worker_id = gpu.worker_id,
+            .expert_ids = {},
+        });
+        worker_index.emplace(gpu.worker_id, idx);
+    }
+
+    for (const auto& [expert_id, entry] : entries_) {
+        (void)expert_id;
+        for (const auto& [worker_id, slot] : entry.residents) {
+            if (!slot.resident_ready) {
+                continue;
+            }
+
+            auto it = worker_index.find(worker_id);
+            if (it == worker_index.end()) {
+                continue;
+            }
+
+            workers[it->second].expert_ids.push_back(entry.expert_id);
+        }
+    }
+
+    std::sort(
+        workers.begin(),
+        workers.end(),
+        [](const common::ResidentInventoryWorkerInfo& a,
+           const common::ResidentInventoryWorkerInfo& b) {
+            return a.worker_id < b.worker_id;
+        });
+
+    for (auto& worker : workers) {
+        std::sort(worker.expert_ids.begin(), worker.expert_ids.end());
+    }
+
+    return workers;
+}
+
+std::size_t ExpertRegistryV2::DropNonTargetResidents(
+    const std::vector<common::PlacementAssignment>& assignments) {
+    auto make_key = [](int expert_id, int worker_id) -> std::uint64_t {
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(expert_id)) << 32) |
+               static_cast<std::uint32_t>(worker_id);
+    };
+
+    std::unordered_set<std::uint64_t> keep;
+    keep.reserve(assignments.size());
+
+    for (const auto& a : assignments) {
+        if (a.expert_id < 0 || a.worker_id < 0) {
+            continue;
+        }
+        keep.insert(make_key(static_cast<int>(a.expert_id),
+                             static_cast<int>(a.worker_id)));
+    }
+
+    std::size_t num_dropped = 0;
+
+    for (auto& [expert_id, entry] : entries_) {
+        (void)expert_id;
+
+        for (auto it = entry.residents.begin(); it != entry.residents.end();) {
+            const int worker_id = it->first;
+            ExpertResidentSlotV2& slot = it->second;
+
+            if (!slot.resident_ready) {
+                it = entry.residents.erase(it);
+                continue;
+            }
+
+            const std::uint64_t key = make_key(entry.expert_id, worker_id);
+            if (keep.find(key) != keep.end()) {
+                ++it;
+                continue;
+            }
+
+            const expert_node_v2::BackendRegistryEntryV2* backend =
+                expert_node_v2::FindBackendRegistryEntryV2(slot.vendor);
+
+            if (backend == nullptr || backend->free_expert_weights == nullptr) {
+                std::fprintf(stderr,
+                             "[expert_registry_v2] DropNonTargetResidents missing backend "
+                             "expert=%d worker=%d vendor=%u(%s)\n",
+                             entry.expert_id,
+                             worker_id,
+                             static_cast<unsigned>(slot.vendor),
+                             common::gpu_vendor_name(slot.vendor));
+                slot.resident_ready = false;
+                slot.vendor = common::GpuVendor::Unknown;
+                it = entry.residents.erase(it);
+                ++num_dropped;
+                continue;
+            }
+
+            std::fprintf(stderr,
+                         "[expert_registry_v2] DropNonTargetResidents dropping "
+                         "expert=%d worker=%d vendor=%u(%s)\n",
+                         entry.expert_id,
+                         worker_id,
+                         static_cast<unsigned>(slot.vendor),
+                         common::gpu_vendor_name(slot.vendor));
+
+            backend->free_expert_weights(&slot.storage);
+            slot.resident_ready = false;
+            slot.vendor = common::GpuVendor::Unknown;
+
+            it = entry.residents.erase(it);
+            ++num_dropped;
+        }
+    }
+
+    return num_dropped;
 }
 
 const ExpertEntryV2* ExpertRegistryV2::FindEntry(int expert_id) const {

@@ -20,22 +20,57 @@ class Coordinator:
         self.node_inventories: List[Dict[str, Any]] = []
         self.gpu_inventory: List[Dict[str, Any]] = []
         self.placements: List[Dict[str, Any]] = []
+        self.node_resident_inventories: Dict[str, Dict[int, set[int]]] = {}
 
 
     def discover_nodes(self) -> None:
         self.node_inventories = []
         self.gpu_inventory = []
-
+        self.node_resident_inventories = {}
+     
         for node_cfg in self.nodes:
             host = node_cfg["host"]
             control_port = node_cfg["control_port"]
-
+     
             node_instance_id = f"{host}:{control_port}"
-
+     
             client = NodeClient(host, control_port)
             with client:
                 inv = client.request_inventory()
-
+                resident = client.request_resident_inventory()
+     
+            if int(resident["num_workers"]) != len(resident["workers"]):
+                raise RuntimeError(
+                    f"resident inventory num_workers mismatch "
+                    f"for node_instance_id={node_instance_id}: "
+                    f"header={resident['num_workers']} "
+                    f"decoded={len(resident['workers'])}"
+                )
+     
+            inventory_worker_ids = {int(g["worker_id"]) for g in inv["gpus"]}
+     
+            resident_by_worker: Dict[int, set[int]] = {}
+            for worker in resident["workers"]:
+                wid = int(worker["worker_id"])
+     
+                if wid not in inventory_worker_ids:
+                    raise RuntimeError(
+                        f"resident inventory returned unknown worker_id={wid} "
+                        f"for node_instance_id={node_instance_id}"
+                    )
+     
+                if wid in resident_by_worker:
+                    raise RuntimeError(
+                        f"resident inventory returned duplicate worker_id={wid} "
+                        f"for node_instance_id={node_instance_id}"
+                    )
+     
+                resident_by_worker[wid] = {
+                    int(expert_id) for expert_id in worker["expert_ids"]
+                }
+     
+            self.node_resident_inventories[node_instance_id] = resident_by_worker
+     
             node_row = {
                 "node_instance_id": node_instance_id,
                 "reported_node_id": inv["node_id"],
@@ -44,23 +79,22 @@ class Coordinator:
                 "node_status": inv["node_status"],
                 "num_gpus": inv["num_gpus"],
                 "gpus": inv["gpus"],
+                "resident_inventory": resident,
             }
             self.node_inventories.append(node_row)
-
+     
             for gpu in inv["gpus"]:
                 worker_id = gpu["worker_id"]
                 gpu_uid_global = f"{node_instance_id}/worker{worker_id}"
                 gpu_uid_reported = f"{inv['node_id']}/worker{worker_id}"
-
+     
                 row = {
                     "node_instance_id": node_instance_id,
                     "reported_node_id": inv["node_id"],
                     "host": host,
                     "control_port": control_port,
-
                     "gpu_uid_global": gpu_uid_global,
                     "gpu_uid_reported": gpu_uid_reported,
-
                     "worker_id": worker_id,
                     "gpu_name": gpu["gpu_name"],
                     "total_mem_bytes": gpu["total_mem_bytes"],
@@ -70,6 +104,9 @@ class Coordinator:
                     "gpu_vendor": gpu["gpu_vendor"],
                     "capability_flags": gpu["capability_flags"],
                     "arch_name": gpu["arch_name"],
+                    "resident_expert_ids": sorted(
+                        resident_by_worker.get(int(worker_id), set())
+                    ),
                 }
                 self.gpu_inventory.append(row)
 
@@ -99,6 +136,14 @@ class Coordinator:
                 f"free={free_gib:.2f}GiB/{total_gib:.2f}GiB "
                 f"worker_port={gpu['worker_port']} "
                 f"status={gpu['gpu_status']}"
+            )
+
+        for node_instance_id, resident_by_worker in self.node_resident_inventories.items():
+            total_resident = sum(len(x) for x in resident_by_worker.values())
+            print(
+                f"resident node_instance_id={node_instance_id} "
+                f"workers={len(resident_by_worker)} "
+                f"total_resident_experts={total_resident}"
             )
 
 
@@ -151,7 +196,7 @@ class Coordinator:
         return grouped
 
 
-    def send_placement_plan(self) -> list[dict]:
+    def send_placement_plan(self, drop_non_target_residents: bool = False) -> list[dict]:
         grouped = self.group_placements_by_node()
         acks = []
      
@@ -164,7 +209,10 @@ class Coordinator:
      
             client = NodeClient(host, control_port)
             with client:
-                ack = client.send_placement_plan(assignments)
+                ack = client.send_placement_plan(
+                    assignments,
+                    drop_non_target_residents=drop_non_target_residents,
+                )
      
             ack = dict(ack)
             ack["node_instance_id"] = node_instance_id
@@ -172,13 +220,15 @@ class Coordinator:
             ack["host"] = host
             ack["control_port"] = control_port
             ack["num_assignments_sent"] = len(assignments)
+            ack["drop_non_target_residents"] = bool(drop_non_target_residents)
             acks.append(ack)
      
             print(
                 f"sent placement to {node_instance_id} "
                 f"reported_node_id={node['reported_node_id']} "
                 f"assignments={len(assignments)} "
-                f"needs_reload={ack['needs_reload']} "
+                f"drop_non_target_residents={int(drop_non_target_residents)} "
+                f"needs_load={ack['needs_load']} "
                 f"all_ready={ack['all_ready']} "
                 f"target={ack['num_target_experts']} "
                 f"ready={ack['num_ready_experts']}"
@@ -453,6 +503,14 @@ class Coordinator:
                 client.__exit__(None, None, None)
 
 
+    def _placement_is_already_resident(self, placement: Dict[str, Any]) -> bool:
+        node_instance_id = str(placement["node_instance_id"])
+        worker_id = int(placement["worker_id"])
+        expert_id = int(placement["expert_id"])
+
+        resident_by_worker = self.node_resident_inventories.get(node_instance_id, {})
+        return expert_id in resident_by_worker.get(worker_id, set())
+
     def preload_all_placed_experts(
         self,
         model_loader,
@@ -463,14 +521,14 @@ class Coordinator:
         placements_for_preload = self.placements
      
         if placement_acks is not None:
-            reload_nodes = {
+            load_nodes = {
                 str(ack["node_instance_id"])
                 for ack in placement_acks
-                if bool(ack["needs_reload"])
+                if bool(ack["needs_load"])
             }
      
             for ack in placement_acks:
-                if not bool(ack["needs_reload"]) and bool(ack["all_ready"]):
+                if not bool(ack["needs_load"]) and bool(ack["all_ready"]):
                     print(
                         f"[preload] skip node={ack['node_instance_id']} "
                         f"target={ack['num_target_experts']} "
@@ -479,13 +537,34 @@ class Coordinator:
      
             placements_for_preload = [
                 p for p in self.placements
-                if str(p["node_instance_id"]) in reload_nodes
+                if str(p["node_instance_id"]) in load_nodes
             ]
      
         all_expert_ids = sorted({int(p["expert_id"]) for p in self.placements})
      
         if not placements_for_preload:
             print("[preload] nothing to load")
+            return all_expert_ids
+     
+        already_resident = []
+        missing_resident = []
+     
+        for p in placements_for_preload:
+            if self._placement_is_already_resident(p):
+                already_resident.append(p)
+            else:
+                missing_resident.append(p)
+     
+        if already_resident:
+            print(
+                f"[preload] already resident placements={len(already_resident)} "
+                f"missing placements={len(missing_resident)}"
+            )
+     
+        placements_for_preload = missing_resident
+     
+        if not placements_for_preload:
+            print("[preload] everything already resident")
             return all_expert_ids
      
         manifest = self.build_preload_manifest(

@@ -13,6 +13,7 @@ from common.protocol import (
     encode_placement_plan,
     decode_infer_response,
     decode_inventory_reply,
+    decode_resident_inventory_reply,
     decode_placement_ack,
     pack_header,
     unpack_header,
@@ -141,6 +142,15 @@ class NodeClient:
         )
         return decode_inventory_reply(body)
 
+    def request_resident_inventory(self, request_id: Optional[int] = None):
+        body = self.request(
+            req_type=MsgType.ResidentInventoryRequest,
+            resp_type=MsgType.ResidentInventoryReply,
+            body=b"",
+            request_id=request_id,
+        )
+        return decode_resident_inventory_reply(body)
+
     def send_heartbeat(self, request_id: Optional[int] = None) -> bytes:
         return self.request(
             req_type=MsgType.HeartbeatRequest,
@@ -149,8 +159,16 @@ class NodeClient:
             request_id=request_id,
         )
 
-    def send_placement_plan(self, assignments, request_id=None) -> bytes:
-        body = encode_placement_plan(assignments)
+    def send_placement_plan(
+        self,
+        assignments,
+        drop_non_target_residents: bool = False,
+        request_id=None,
+    ) -> bytes:
+        body = encode_placement_plan(
+            assignments,
+            drop_non_target_residents=drop_non_target_residents,
+        )
         resp_body = self.request(
             req_type=MsgType.PlacementPlan,
             resp_type=MsgType.PlacementAck,

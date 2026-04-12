@@ -46,6 +46,11 @@ public:
         common::GpuVendor vendor,
         const std::array<common::VendorWorkerSpan, common::kGpuVendorCount>& vendor_spans);
 
+    std::vector<common::ResidentInventoryWorkerInfo> BuildResidentInventory(
+        const common::StaticNodeInfo& static_info) const;
+    std::size_t DropNonTargetResidents(
+        const std::vector<common::PlacementAssignment>& assignments);
+
     const ExpertEntryV2* FindEntry(int expert_id) const;
     const ExpertDeviceStorageV2* FindDeviceStorage(
         int expert_id,

@@ -40,6 +40,7 @@ COMMON_CPP = [
     "../common/infer_codec.cc",
     "../common/inventory_codec.cc",
     "../common/placement_codec.cc",
+    "../common/resident_inventory_codec.cc",
     "../common/weight_codec.cc",
     "../common/socket_utils.cc",
 ]

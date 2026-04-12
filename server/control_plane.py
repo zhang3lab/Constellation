@@ -1,4 +1,4 @@
-from server.expert_placement import make_global_expert_id, split_global_expert_id
+from server.expert_placement import make_global_expert_id
 from server.deepseek_model_loader import DeepseekModelLoader
 
 
@@ -61,6 +61,8 @@ def setup_control_plane(coord, cfg):
     else:
         num_experts = int(run_cfg["num_experts"])
 
+    # Discover current inventory first. This now also fetches resident inventory,
+    # which will be used for incremental preload diffing later.
     coord.discover_nodes()
     coord.print_summary()
 
@@ -81,7 +83,11 @@ def setup_control_plane(coord, cfg):
 
     if cfg["verbose"]:
         coord.print_placement()
-    placement_acks = coord.send_placement_plan()
+
+    drop_non_target_residents = bool(run_cfg.get("drop_non_target_residents", False))
+    placement_acks = coord.send_placement_plan(
+        drop_non_target_residents=drop_non_target_residents
+    )
 
     model_loader = DeepseekModelLoader(model_root)
     coord.preload_all_placed_experts(

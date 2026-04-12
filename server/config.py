@@ -15,6 +15,7 @@ DEFAULT_RUN = {
     "experts_per_layer": 256,
     "sparse_layer_start": 3,
     "sparse_layer_end": 60,
+    "drop_non_target_residents": False,
 }
 
 DEFAULT_KV_CACHE = {
@@ -156,6 +157,10 @@ def load_config(path: str) -> Dict[str, Any]:
     collect_per_layer = run_cfg.get("collect_per_layer")
     if not isinstance(collect_per_layer, bool):
         raise ValueError("run.collect_per_layer must be a boolean")
+
+    drop_non_target_residents = run_cfg.get("drop_non_target_residents")
+    if not isinstance(drop_non_target_residents, bool):
+        raise ValueError("run.drop_non_target_residents must be a boolean")
 
     kv_cache = _merge_defaults(obj, "kv_cache", DEFAULT_KV_CACHE)
     max_batch_size = _require_int(kv_cache, "max_batch_size", where="kv_cache")

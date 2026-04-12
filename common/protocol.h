@@ -13,6 +13,8 @@ static constexpr std::uint16_t kVersion = 1;
 enum class MsgType : std::uint16_t {
     InventoryRequest = 1,
     InventoryReply = 2,
+    ResidentInventoryRequest = 3,
+    ResidentInventoryReply = 4,
 
     PlacementPlan = 10,
     PlacementAck = 11,
