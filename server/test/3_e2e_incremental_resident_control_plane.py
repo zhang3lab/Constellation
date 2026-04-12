@@ -166,7 +166,7 @@ def _assign_expert_ids(placements: List[dict], expert_ids: List[int]) -> None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, default="server/config.json")
+    ap.add_argument("--config", type=str, default="server/test/config.json")
     args = ap.parse_args()
 
     cfg = load_config(args.config)

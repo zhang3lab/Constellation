@@ -233,7 +233,7 @@ def run_reference_attention(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, default="server/config.json")
+    ap.add_argument("--config", type=str, default="server/test/config.json")
     ap.add_argument("--prompt", type=str, default="Hello world")
     ap.add_argument("--layer-id", type=int, default=3)
     ap.add_argument("--position-id", type=int, default=0)
