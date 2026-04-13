@@ -1,6 +1,8 @@
 import socket
 from typing import Optional
 
+import time
+
 from common.protocol import (
     MAGIC,
     VERSION,
@@ -116,22 +118,53 @@ class NodeClient:
     ) -> bytes:
         if request_id is None:
             request_id = self.next_request_id()
-
+     
+        t0 = time.perf_counter()
         self.send_message(req_type, request_id=request_id, body=body)
-        msg = self.recv_message()
-
-        msg_type = msg["header"]["msg_type"]
+        t1 = time.perf_counter()
+     
+        header_bytes = self._recv_exact(HEADER_SIZE)
+        t2 = time.perf_counter()
+     
+        header = unpack_header(header_bytes)
+     
+        if header["magic"] != MAGIC:
+            raise ProtocolError(f"bad magic: got {header['magic']:#x}, expected {MAGIC:#x}")
+        if header["version"] != VERSION:
+            raise ProtocolError(
+                f"bad version: got {header['version']}, expected {VERSION}"
+            )
+     
+        body_len = header["body_len"]
+        resp_body = self._recv_exact(body_len) if body_len > 0 else b""
+        t3 = time.perf_counter()
+     
+        msg_type = header["msg_type"]
         if msg_type != resp_type:
             raise ProtocolError(
                 f"expected {resp_type.name}, got {msg_type.name} ({int(msg_type)})"
             )
-
-        if msg["header"]["request_id"] != request_id:
+     
+        if header["request_id"] != request_id:
             raise ProtocolError(
-                f"request_id mismatch: got {msg['header']['request_id']}, expected {request_id}"
+                f"request_id mismatch: got {header['request_id']}, expected {request_id}"
             )
-
-        return msg["body"]
+     
+        if req_type in (
+            MsgType.LoadWeightsBegin,
+            MsgType.LoadWeightsChunk,
+            MsgType.LoadWeightsEnd,
+        ):
+            print(
+                f"[client-request-profile] "
+                f"req={req_type.name} rid={request_id} req_body_len={len(body)} resp_body_len={body_len} "
+                f"send_ms={(t1-t0)*1000:.3f} "
+                f"recv_header_ms={(t2-t1)*1000:.3f} "
+                f"recv_body_ms={(t3-t2)*1000:.3f} "
+                f"total_ms={(t3-t0)*1000:.3f}"
+            )
+     
+        return resp_body
 
     def request_inventory(self, request_id: Optional[int] = None):
         body = self.request(
