@@ -179,20 +179,6 @@ def names_to_target_layer(cfg, resident_expert_ids: list[int] | None, target_lay
                     f"{prefix}.mlp.gate.e_score_correction_bias",
                 ]
             )
-
-            if resident_expert_ids is None:
-                expert_ids = range(int(getattr(cfg, "n_routed_experts")))
-            else:
-                expert_ids = resident_expert_ids
-
-            for expert_id in expert_ids:
-                names.extend(
-                    [
-                        f"{prefix}.mlp.experts.{expert_id}.gate_proj.weight",
-                        f"{prefix}.mlp.experts.{expert_id}.up_proj.weight",
-                        f"{prefix}.mlp.experts.{expert_id}.down_proj.weight",
-                    ]
-                )
         else:
             names.extend(
                 [
@@ -277,9 +263,27 @@ def main() -> None:
     backbone_dtype = torch.bfloat16
 
     try:
-        model.model.to_empty(device=backbone_device)
+        needed_module_names = module_names_to_target_layer(cfg, target_layer)
+        materialize_modules_to_device(
+            model,
+            needed_module_names,
+            device=backbone_device,
+        )
+
         if target_layer == int(getattr(cfg, "num_hidden_layers")) - 1:
             model.lm_head.to_empty(device=backbone_device)
+
+        needed_names = names_to_target_layer(cfg, resident_expert_ids, target_layer)
+
+        for name in needed_names:
+            print(f"[hf-single-layer] copy {name}")
+            copy_named_tensor_into_model(
+                model,
+                loader=loader,
+                tensor_name=name,
+                device=backbone_device,
+                dtype=backbone_dtype,
+            )
 
         assert_named_tensors_materialized(model, needed_names)
 

@@ -659,6 +659,96 @@ class DeepseekV3MoE(nn.Module):
         self.last_debug = {}
         self.last_moe_infer_debug = {}
 
+        # Manual lazy-loading hooks for full-mode routed experts.
+        self.layer_id = None
+        self._manual_loader = None
+        self._manual_device = None
+        self._manual_dtype = None
+        self._loaded_expert_ids = set()
+
+    def _manual_lazy_loading_enabled(self) -> bool:
+        return (
+            self._manual_loader is not None
+            and self._manual_device is not None
+            and self._manual_dtype is not None
+            and self.layer_id is not None
+        )
+
+    def _materialize_single_expert_module(self, expert_id: int) -> None:
+        if self.ep_size != 1:
+            raise NotImplementedError(
+                "manual lazy loading for full-mode routed experts currently supports ep_size == 1 only"
+            )
+
+        expert = self.experts[int(expert_id)]
+        if not isinstance(expert, nn.Module):
+            raise RuntimeError(f"expert {expert_id} is not a valid module")
+
+        expert.to_empty(device=self._manual_device)
+
+    def _ensure_full_expert_loaded(self, expert_id: int) -> None:
+        expert_id = int(expert_id)
+        if expert_id in self._loaded_expert_ids:
+            return
+
+        if not self._manual_lazy_loading_enabled():
+            raise RuntimeError(
+                "full-mode routed expert lazy loading requires "
+                "layer_id/_manual_loader/_manual_device/_manual_dtype to be set"
+            )
+
+        self._materialize_single_expert_module(expert_id)
+        expert = self.experts[expert_id]
+
+        for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+            tensor_name = (
+                f"model.layers.{int(self.layer_id)}.mlp.experts.{expert_id}.{proj_name}.weight"
+            )
+            loaded = self._manual_loader.load_tensor_fp32_by_name(tensor_name).to(
+                device=self._manual_device,
+                dtype=self._manual_dtype,
+            ).contiguous()
+
+            proj = getattr(expert, proj_name)
+            weight = proj.weight
+            if getattr(weight, "is_meta", False):
+                raise RuntimeError(
+                    f"{tensor_name}: weight is still meta after materializing expert module"
+                )
+
+            if tuple(weight.shape) != tuple(loaded.shape):
+                raise RuntimeError(
+                    f"{tensor_name}: shape mismatch "
+                    f"target={tuple(weight.shape)} loaded={tuple(loaded.shape)}"
+                )
+
+            with torch.no_grad():
+                weight.copy_(loaded)
+
+        self._loaded_expert_ids.add(expert_id)
+
+    def _evict_loaded_full_experts(self) -> None:
+        if self.ep_size != 1:
+            return
+        if not self._loaded_expert_ids:
+            return
+
+        for expert_id in list(self._loaded_expert_ids):
+            expert = self.experts[int(expert_id)]
+            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+                proj = getattr(expert, proj_name)
+                weight = proj.weight
+                meta_weight = torch.nn.Parameter(
+                    torch.empty_like(weight, device="meta"),
+                    requires_grad=weight.requires_grad,
+                )
+                proj._parameters["weight"] = meta_weight
+
+        self._loaded_expert_ids.clear()
+
+        if str(self._manual_device).startswith("cuda"):
+            torch.cuda.empty_cache()
+
     def forward(self, hidden_states):
         self.last_debug = {}
 
@@ -686,6 +776,10 @@ class DeepseekV3MoE(nn.Module):
             y = routed_output
 
         self.last_debug["final_out"] = y.detach().cpu().clone()
+
+        if not self.partial_resident_mode and self._manual_lazy_loading_enabled():
+            self._evict_loaded_full_experts()
+
         return y
 
     @torch.no_grad()
@@ -755,6 +849,11 @@ class DeepseekV3MoE(nn.Module):
             gatherd_idxs = None
             tokens_per_expert_local = tokens_per_expert.cpu().numpy()
 
+            if self._manual_lazy_loading_enabled():
+                active_expert_ids = torch.nonzero(tokens_per_expert > 0, as_tuple=False).view(-1).tolist()
+                for expert_id in active_expert_ids:
+                    self._ensure_full_expert_loaded(int(expert_id))
+
         outputs = []
         start_idx = 0
 
@@ -817,7 +916,6 @@ class DeepseekV3MoE(nn.Module):
             }
             return final_out
 
-        # EP full-path: gathered_tokens_back is in sorted-by-flat-route order
         inv_idxs = torch.empty_like(idxs)
         inv_idxs[idxs] = torch.arange(idxs.numel(), device=idxs.device)
 
