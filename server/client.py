@@ -220,15 +220,15 @@ class NodeClient:
             request_id=request_id,
         )
 
-    def send_load_weights_chunk(self, msg, request_id=None) -> bytes:
+    def send_load_weights_chunk_oneway(self, msg, request_id=None) -> None:
+        if request_id is None:
+            request_id = self.next_request_id()
         body = encode_load_weights_chunk(msg)
-        return self.request(
-            req_type=MsgType.LoadWeightsChunk,
-            resp_type=MsgType.LoadWeightsAck,
-            body=body,
+        self.send_message(
+            msg_type=MsgType.LoadWeightsChunk,
             request_id=request_id,
+            body=body,
         )
-
 
     def send_load_weights_end(self, msg, request_id=None) -> bytes:
         body = encode_load_weights_end(msg)

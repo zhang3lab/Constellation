@@ -71,6 +71,198 @@ const char* TensorKindName(common::TensorKind k) {
     }
 }
 
+std::uint64_t MakeExpertWorkerKey(int expert_id, int worker_id) {
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(expert_id)) << 32) |
+           static_cast<std::uint32_t>(worker_id);
+
+bool EnqueueResidentBuild(
+    ControlState* state,
+    int expert_id,
+    int worker_id,
+    common::GpuVendor vendor,
+    bool* out_enqueued,
+    std::size_t* out_queue_size) {
+    if (out_enqueued != nullptr) {
+        *out_enqueued = false;
+    }
+    if (out_queue_size != nullptr) {
+        *out_queue_size = 0;
+    }
+
+    if (state == nullptr) return false;
+    if (expert_id < 0 || worker_id < 0) return false;
+    if (vendor == common::GpuVendor::Unknown) return false;
+
+    const std::uint64_t key = MakeExpertWorkerKey(expert_id, worker_id);
+
+    {
+        std::lock_guard<std::mutex> lock(state->resident_build.mu);
+
+        if (state->resident_build.pending_build_keys.find(key) !=
+            state->resident_build.pending_build_keys.end()) {
+            if (out_queue_size != nullptr) {
+                *out_queue_size = state->resident_build.pending_builds.size();
+            }
+            return true;
+        }
+
+        state->resident_build.pending_builds.push_back(PendingResidentBuild{
+            .expert_id = expert_id,
+            .worker_id = worker_id,
+            .vendor = vendor,
+        });
+        state->resident_build.pending_build_keys.insert(key);
+
+        if (out_enqueued != nullptr) {
+            *out_enqueued = true;
+        }
+        if (out_queue_size != nullptr) {
+            *out_queue_size = state->resident_build.pending_builds.size();
+        }
+    }
+
+    state->resident_build.cv.notify_one();
+    return true;
+}
+
+void RunResidentBuildWorker(ControlState* state) {
+    if (state == nullptr) return;
+
+    for (;;) {
+        PendingResidentBuild task;
+        bool have_task = false;
+        std::size_t queue_size_after_pop = 0;
+
+        {
+            std::unique_lock<std::mutex> lock(state->resident_build.mu);
+            state->resident_build.cv.wait(lock, [&] {
+                return state->resident_build.stop_worker ||
+                       !state->resident_build.pending_builds.empty();
+            });
+
+            if (state->resident_build.stop_worker &&
+                state->resident_build.pending_builds.empty()) {
+                return;
+            }
+
+            task = state->resident_build.pending_builds.front();
+            state->resident_build.pending_builds.erase(
+                state->resident_build.pending_builds.begin());
+            queue_size_after_pop = state->resident_build.pending_builds.size();
+            have_task = true;
+        }
+
+        if (!have_task) {
+            continue;
+        }
+
+        const auto t0 = std::chrono::steady_clock::now();
+
+        bool update_ok = false;
+        bool cleared = false;
+        bool incoming_ready_before = false;
+        bool incoming_ready_after = false;
+        bool resident_ready_after = false;
+
+        {
+            std::unique_lock<std::shared_mutex> lock(state->mu);
+
+            const expert_node_v2::ExpertEntryV2* entry =
+                state->registry.FindEntry(task.expert_id);
+            if (entry == nullptr) {
+                std::fprintf(stderr,
+                             "[%s] background build missing entry "
+                             "expert=%d worker=%d vendor=%u(%s)\n",
+                             state->static_info.node_id.c_str(),
+                             task.expert_id,
+                             task.worker_id,
+                             static_cast<unsigned>(task.vendor),
+                             common::gpu_vendor_name(task.vendor));
+            } else {
+                incoming_ready_before = entry->incoming_ready;
+
+                if (!entry->incoming_ready) {
+                    std::fprintf(stderr,
+                                 "[%s] background build skipped: incoming not ready "
+                                 "expert=%d worker=%d vendor=%u(%s)\n",
+                                 state->static_info.node_id.c_str(),
+                                 task.expert_id,
+                                 task.worker_id,
+                                 static_cast<unsigned>(task.vendor),
+                                 common::gpu_vendor_name(task.vendor));
+                } else {
+                    update_ok = state->registry.Update(
+                        task.expert_id,
+                        task.worker_id,
+                        task.vendor,
+                        state->static_info.vendor_spans);
+
+                    if (!update_ok) {
+                        std::fprintf(stderr,
+                                     "[%s] background Update failed "
+                                     "expert=%d worker=%d vendor=%u(%s)\n",
+                                     state->static_info.node_id.c_str(),
+                                     task.expert_id,
+                                     task.worker_id,
+                                     static_cast<unsigned>(task.vendor),
+                                     common::gpu_vendor_name(task.vendor));
+                    } else {
+                        cleared = state->registry.ClearIncoming(task.expert_id);
+                        if (!cleared) {
+                            std::fprintf(stderr,
+                                         "[%s] background ClearIncoming failed "
+                                         "expert=%d worker=%d vendor=%u(%s)\n",
+                                         state->static_info.node_id.c_str(),
+                                         task.expert_id,
+                                         task.worker_id,
+                                         static_cast<unsigned>(task.vendor),
+                                         common::gpu_vendor_name(task.vendor));
+                        }
+                    }
+
+                    entry = state->registry.FindEntry(task.expert_id);
+                    if (entry != nullptr) {
+                        incoming_ready_after = entry->incoming_ready;
+                    }
+
+                    const ExpertDeviceStorageV2* storage =
+                        state->registry.FindDeviceStorage(
+                            task.expert_id, task.worker_id);
+                    resident_ready_after = (storage != nullptr);
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state->resident_build.mu);
+            state->resident_build.pending_build_keys.erase(
+                MakeExpertWorkerKey(task.expert_id, task.worker_id));
+        }
+
+        const auto t1 = std::chrono::steady_clock::now();
+        const double ms =
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        std::printf("[%s] background resident build "
+                    "expert=%d worker=%d vendor=%u(%s) "
+                    "incoming_ready_before=%d update_ok=%d cleared=%d "
+                    "incoming_ready_after=%d resident_ready_after=%d "
+                    "queue_size_after_pop=%zu ms=%.3f\n",
+                    state->static_info.node_id.c_str(),
+                    task.expert_id,
+                    task.worker_id,
+                    static_cast<unsigned>(task.vendor),
+                    common::gpu_vendor_name(task.vendor),
+                    static_cast<int>(incoming_ready_before),
+                    static_cast<int>(update_ok),
+                    static_cast<int>(cleared),
+                    static_cast<int>(incoming_ready_after),
+                    static_cast<int>(resident_ready_after),
+                    queue_size_after_pop,
+                    ms);
+    }
+}
+
 bool SendEmptyAck(
     int fd,
     common::MsgType ack_type,
@@ -326,8 +518,12 @@ bool HandlePlacementPlan(
 
     common::PlacementAck ack{};
     std::size_t num_dropped = 0;
+    bool had_active_load = false;
+    bool cleared_active_load = false;
     {
         std::unique_lock<std::shared_mutex> lock(state->mu);
+
+        had_active_load = state->active_load.active;
 
         if (plan.drop_non_target_residents) {
             num_dropped = state->registry.DropNonTargetResidents(plan.assignments);
@@ -338,15 +534,20 @@ bool HandlePlacementPlan(
         // Keep resident experts unless explicitly dropped above.
         // Always clear partial in-flight upload state.
         state->active_load = ActiveLoad{};
+        cleared_active_load = had_active_load;
     }
 
     const bool ok = SendPlacementAck(fd, req.request_id, ack);
     if (ok) {
-        std::printf("[%s] sent PlacementAck rid=%u drop_non_target_residents=%d dropped=%zu needs_load=%d all_ready=%d target=%u ready=%u\n",
+	std::printf("[%s] sent PlacementAck rid=%u drop_non_target_residents=%d dropped=%zu "
+                    "had_active_load=%d cleared_active_load=%d "
+                    "needs_load=%d all_ready=%d target=%u ready=%u\n",
                     state->static_info.node_id.c_str(),
                     req.request_id,
                     static_cast<int>(plan.drop_non_target_residents),
                     num_dropped,
+                    static_cast<int>(had_active_load),
+                    static_cast<int>(cleared_active_load),
                     static_cast<int>(ack.needs_load),
                     static_cast<int>(ack.all_ready),
                     ack.num_target_experts,
@@ -439,6 +640,8 @@ bool HandleLoadWeightsChunk(
     ControlState* state,
     const common::MsgHeader& req,
     const std::string& req_body) {
+    (void)fd;
+
     if (state == nullptr) {
         std::fprintf(stderr, "HandleLoadWeightsChunk: state is null\n");
         return false;
@@ -525,14 +728,7 @@ bool HandleLoadWeightsChunk(
                 static_cast<unsigned long long>(state->active_load.received_bytes),
                 static_cast<unsigned long long>(state->active_load.total_bytes));
 
-    const bool ok =
-        SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
-    if (ok) {
-        std::printf("[%s] sent LoadWeightsAck rid=%u\n",
-                    state->static_info.node_id.c_str(),
-                    req.request_id);
-    }
-    return ok;
+    return true;
 }
 
 bool HandleLoadWeightsEnd(
@@ -554,11 +750,12 @@ bool HandleLoadWeightsEnd(
 
     std::uint64_t total_bytes = 0;
     std::size_t final_buffer_size = 0;
-    common::GpuVendor vendor = static_cast<common::GpuVendor>(0);
-    bool incoming_ready_before_update = false;
-    bool incoming_cleared_after_update = false;
-    bool incoming_ready_after_update = false;
-    bool resident_ready = false;
+    common::GpuVendor vendor = common::GpuVendor::Unknown;
+    bool incoming_ready_before_enqueue = false;
+    bool incoming_ready_after_enqueue = false;
+    bool incoming_cleared_before_ack = false;
+    bool resident_ready_before_ack = false;
+    bool enqueued_background_build = false;
 
     {
         std::unique_lock<std::shared_mutex> lock(state->mu);
@@ -629,8 +826,8 @@ bool HandleLoadWeightsEnd(
             state->static_info.gpus[static_cast<std::size_t>(msg.worker_id)];
         vendor = gpu.gpu_vendor;
 
-        final_buffer_size = state->active_load.buffer.size();
         total_bytes = state->active_load.total_bytes;
+        final_buffer_size = state->active_load.buffer.size();
 
         if (!state->registry.StoreIncomingTensor(
                 msg.expert_id,
@@ -656,42 +853,25 @@ bool HandleLoadWeightsEnd(
             return false;
         }
 
-        incoming_ready_before_update = entry->incoming_ready;
+        incoming_ready_before_enqueue = entry->incoming_ready;
+
+	std::size_t pending_build_queue_size = 0;
 
         if (entry->incoming_ready) {
-            if (!state->registry.Update(
+            if (!EnqueueResidentBuild(
+                    state,
                     msg.expert_id,
                     msg.worker_id,
                     vendor,
-                    state->static_info.vendor_spans)) {
+                    &enqueued_background_build,
+                    &pending_build_queue_size)) {
                 std::fprintf(stderr,
-                             "[%s] failed to update resident storage for expert=%d worker=%d vendor=%u\n",
+                             "[%s] failed to enqueue resident build for expert=%d worker=%d vendor=%u(%s)\n",
                              state->static_info.node_id.c_str(),
                              msg.expert_id,
                              msg.worker_id,
-                             static_cast<unsigned>(vendor));
-                return false;
-            }
-
-            if (!state->registry.ClearIncoming(msg.expert_id)) {
-                std::fprintf(stderr,
-                             "[%s] failed to clear incoming tensors after upload "
-                             "for expert=%d worker=%d vendor=%u\n",
-                             state->static_info.node_id.c_str(),
-                             msg.expert_id,
-                             msg.worker_id,
-                             static_cast<unsigned>(vendor));
-                return false;
-            }
-
-            incoming_cleared_after_update = true;
-
-            entry = state->registry.FindEntry(msg.expert_id);
-            if (entry == nullptr) {
-                std::fprintf(stderr,
-                             "[%s] missing entry after ClearIncoming for expert=%d\n",
-                             state->static_info.node_id.c_str(),
-                             msg.expert_id);
+                             static_cast<unsigned>(vendor),
+                             common::gpu_vendor_name(vendor));
                 return false;
             }
         }
@@ -699,8 +879,18 @@ bool HandleLoadWeightsEnd(
         const ExpertDeviceStorageV2* storage =
             state->registry.FindDeviceStorage(msg.expert_id, msg.worker_id);
 
-	incoming_ready_after_update = entry->incoming_ready;
-        resident_ready = (storage != nullptr);
+        entry = state->registry.FindEntry(msg.expert_id);
+        if (entry == nullptr) {
+            std::fprintf(stderr,
+                         "[%s] missing entry before ack for expert=%d\n",
+                         state->static_info.node_id.c_str(),
+                         msg.expert_id);
+            return false;
+        }
+
+        incoming_ready_after_enqueue = entry->incoming_ready;
+        incoming_cleared_before_ack = false;
+        resident_ready_before_ack = (storage != nullptr);
 
         state->registry.DebugPrint();
         state->active_load = ActiveLoad{};
@@ -708,8 +898,9 @@ bool HandleLoadWeightsEnd(
 
     std::printf("[%s] received LoadWeightsEnd rid=%u "
                 "expert=%d worker_id=%d vendor=%u tensor_kind=%s total_bytes=%llu buffer_size=%zu "
-                "incoming_ready_before_update=%d incoming_ready_after_update=%d "
-                "incoming_cleared_after_update=%d resident_ready=%d\n",
+                "incoming_ready_before_enqueue=%d incoming_ready_after_enqueue=%d "
+                "incoming_cleared_before_ack=%d resident_ready_before_ack=%d "
+		"enqueued_background_build=%d pending_build_queue_size=%zu\n",
                 state->static_info.node_id.c_str(),
                 req.request_id,
                 msg.expert_id,
@@ -718,10 +909,12 @@ bool HandleLoadWeightsEnd(
                 TensorKindName(msg.tensor_kind),
                 static_cast<unsigned long long>(total_bytes),
                 final_buffer_size,
-                static_cast<int>(incoming_ready_before_update),
-                static_cast<int>(incoming_ready_after_update),
-                static_cast<int>(incoming_cleared_after_update),
-                static_cast<int>(resident_ready));
+                static_cast<int>(incoming_ready_before_enqueue),
+                static_cast<int>(incoming_ready_after_enqueue),
+                static_cast<int>(incoming_cleared_before_ack),
+                static_cast<int>(resident_ready_before_ack),
+                static_cast<int>(enqueued_background_build),
+                pending_build_queue_size);
 
     const bool ok =
         SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
@@ -851,9 +1044,20 @@ void RunControlLoop(ControlState* state) {
         return;
     }
 
+    state->resident_build.stop_worker = false;
+    state->resident_build.worker = std::thread(RunResidentBuildWorker, state);
+
     int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         std::perror("socket");
+        {
+            std::lock_guard<std::mutex> lock(state->resident_build.mu);
+            state->resident_build.stop_worker = true;
+        }
+        state->resident_build.cv.notify_all();
+        if (state->resident_build.worker.joinable()) {
+            state->resident_build.worker.join();
+        }
         return;
     }
 
@@ -861,6 +1065,14 @@ void RunControlLoop(ControlState* state) {
     if (::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0) {
         std::perror("setsockopt(SO_REUSEADDR)");
         ::close(listen_fd);
+        {
+            std::lock_guard<std::mutex> lock(state->resident_build.mu);
+            state->resident_build.stop_worker = true;
+        }
+        state->resident_build.cv.notify_all();
+        if (state->resident_build.worker.joinable()) {
+            state->resident_build.worker.join();
+        }
         return;
     }
 
@@ -872,12 +1084,28 @@ void RunControlLoop(ControlState* state) {
     if (::bind(listen_fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
         std::perror("bind");
         ::close(listen_fd);
+        {
+            std::lock_guard<std::mutex> lock(state->resident_build.mu);
+            state->resident_build.stop_worker = true;
+        }
+        state->resident_build.cv.notify_all();
+        if (state->resident_build.worker.joinable()) {
+            state->resident_build.worker.join();
+        }
         return;
     }
 
     if (::listen(listen_fd, 128) != 0) {
         std::perror("listen");
         ::close(listen_fd);
+        {
+            std::lock_guard<std::mutex> lock(state->resident_build.mu);
+            state->resident_build.stop_worker = true;
+        }
+        state->resident_build.cv.notify_all();
+        if (state->resident_build.worker.joinable()) {
+            state->resident_build.worker.join();
+        }
         return;
     }
 
@@ -906,4 +1134,13 @@ void RunControlLoop(ControlState* state) {
     }
 
     ::close(listen_fd);
+
+    {
+        std::lock_guard<std::mutex> lock(state->resident_build.mu);
+        state->resident_build.stop_worker = true;
+    }
+    state->resident_build.cv.notify_all();
+    if (state->resident_build.worker.joinable()) {
+        state->resident_build.worker.join();
+    }
 }

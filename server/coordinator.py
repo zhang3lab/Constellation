@@ -313,7 +313,7 @@ class Coordinator:
                 "chunk_offset": offset,
                 "chunk_data": chunk,
             }
-            client.send_load_weights_chunk(chunk_msg)
+            client.send_load_weights_chunk_oneway(chunk_msg)
             offset += len(chunk)
             chunk_count += 1
      
