@@ -26,6 +26,24 @@ def get_attr_by_dotted_name(obj, dotted_name: str):
     return cur
 
 
+def assert_named_tensors_materialized(
+    model,
+    tensor_names: list[str],
+) -> None:
+    bad = []
+    for name in tensor_names:
+        x = get_attr_by_dotted_name(model, name)
+        if getattr(x, "is_meta", False):
+            bad.append(name)
+
+    if bad:
+        preview = bad[:20]
+        raise RuntimeError(
+            "Some required tensors are still on meta after copy:\n"
+            + "\n".join(preview)
+            + (f"\n... and {len(bad) - len(preview)} more" if len(bad) > len(preview) else "")
+        )
+
 def copy_named_tensor_into_model(
     model,
     *,
@@ -34,7 +52,7 @@ def copy_named_tensor_into_model(
     device: str,
     dtype: torch.dtype,
 ) -> None:
-    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(device=device, dtype=dtype)
+    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(device=device, dtype=dtype).contiguous()
 
     parent_name, leaf_name = tensor_name.rsplit(".", 1)
     parent = get_attr_by_dotted_name(model, parent_name)
@@ -44,15 +62,22 @@ def copy_named_tensor_into_model(
         if isinstance(target, torch.nn.Parameter):
             if getattr(target, "is_meta", False):
                 new_param = torch.nn.Parameter(
-                    loaded.contiguous(),
-                    requires_grad=False,
+                    loaded,
+                    requires_grad=target.requires_grad,
                 )
-                setattr(parent, leaf_name, new_param)
+                if not hasattr(parent, "_parameters") or leaf_name not in parent._parameters:
+                    raise RuntimeError(
+                        f"{tensor_name}: expected parameter leaf '{leaf_name}' under {parent_name}"
+                    )
+                parent._parameters[leaf_name] = new_param
             else:
                 target.copy_(loaded.to(device=target.device, dtype=target.dtype))
         else:
             if getattr(target, "is_meta", False):
-                setattr(parent, leaf_name, loaded.contiguous())
+                if hasattr(parent, "_buffers") and leaf_name in parent._buffers:
+                    parent._buffers[leaf_name] = loaded
+                else:
+                    setattr(parent, leaf_name, loaded)
             else:
                 target.copy_(loaded.to(device=target.device, dtype=target.dtype))
 
@@ -248,11 +273,11 @@ def main() -> None:
     backbone_dtype = torch.bfloat16
 
     try:
-        for name in names_to_target_layer(cfg, resident_expert_ids, target_layer):
+        needed_names = names_to_target_layer(cfg, resident_expert_ids, target_layer)
+
+        for name in needed_names:
             print(f"[hf-single-layer] copy {name}")
          
-            # 当前版本先统一把 backbone + shared experts + 当前需要的 routed experts
-            # 都放到同一张 CUDA 上，先把 layer-3 full-256 compare 跑通。
             target_device = backbone_device
             target_dtype = backbone_dtype
          
@@ -263,6 +288,8 @@ def main() -> None:
                 device=target_device,
                 dtype=target_dtype,
             )
+
+        assert_named_tensors_materialized(model, needed_names)
 
         ids_t = torch.tensor([ids], dtype=torch.long, device=backbone_device)
 
