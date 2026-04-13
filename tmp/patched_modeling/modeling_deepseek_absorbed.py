@@ -1,4 +1,10 @@
 # coding=utf-8
+# This is a manual comparison reference for Constellation runtime.
+# It is NOT the original Hugging Face DeepSeek implementation.
+# Main differences:
+# 1) eager attention is replaced by an absorbed-latent no-cache reference path
+# 2) routed experts can be restricted to config.resident_expert_ids
+# 3) extra debug tensors are stored for manual comparison
 # Copyright 2023 DeepSeek-AI and The HuggingFace Inc. team. All rights reserved.
 #
 # This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
@@ -428,10 +434,12 @@ class MoEGate(nn.Module):
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
      
-        ### compute gating score
+        # compute gating score
         hidden_states = hidden_states.view(-1, h)
         logits = F.linear(
-            hidden_states.type(torch.float32), self.weight.type(torch.float32), None
+            hidden_states.type(torch.float32),
+            self.weight.type(torch.float32),
+            None,
         )
         if self.scoring_func == "sigmoid":
             scores = logits.sigmoid()
@@ -440,29 +448,9 @@ class MoEGate(nn.Module):
                 f"insupportable scoring function for MoE gating: {self.scoring_func}"
             )
      
-        ### optionally restrict to resident experts
-        if self.resident_expert_ids is None:
-            resident_mask = torch.ones(
-                self.n_routed_experts,
-                dtype=torch.bool,
-                device=scores.device,
-            )
-        else:
-            resident_mask = torch.zeros(
-                self.n_routed_experts,
-                dtype=torch.bool,
-                device=scores.device,
-            )
-            for eid in self.resident_expert_ids:
-                eid = int(eid)
-                if 0 <= eid < self.n_routed_experts:
-                    resident_mask[eid] = True
+        resident_mask = None
      
-            allowed = int(resident_mask.sum().item())
-            if allowed == 0:
-                raise RuntimeError("resident_expert_ids produced an empty resident mask")
-     
-        ### select top-k experts
+        # select top-k experts
         if self.topk_method == "noaux_tc":
             assert not self.training
      
@@ -471,14 +459,32 @@ class MoEGate(nn.Module):
                 + self.e_score_correction_bias.unsqueeze(0)
             )
      
-            scores_for_choice = scores_for_choice.masked_fill(
-                ~resident_mask.unsqueeze(0),
-                float("-inf"),
-            )
-            scores = scores.masked_fill(
-                ~resident_mask.unsqueeze(0),
-                0.0,
-            )
+            if self.resident_expert_ids is not None:
+                resident_mask = torch.zeros(
+                    self.n_routed_experts,
+                    dtype=torch.bool,
+                    device=scores.device,
+                )
+                for eid in self.resident_expert_ids:
+                    eid = int(eid)
+                    if 0 <= eid < self.n_routed_experts:
+                        resident_mask[eid] = True
+     
+                allowed = int(resident_mask.sum().item())
+                if allowed == 0:
+                    raise RuntimeError("resident_expert_ids produced an empty resident mask")
+     
+                scores_for_choice = scores_for_choice.masked_fill(
+                    ~resident_mask.unsqueeze(0),
+                    float("-inf"),
+                )
+                scores = scores.masked_fill(
+                    ~resident_mask.unsqueeze(0),
+                    0.0,
+                )
+                effective_top_k = min(self.top_k, allowed)
+            else:
+                effective_top_k = self.top_k
      
             group_scores = (
                 scores_for_choice.view(bsz * seq_len, self.n_group, -1)
@@ -511,7 +517,6 @@ class MoEGate(nn.Module):
                 float("-inf"),
             )  # [n, e]
      
-            effective_top_k = min(self.top_k, int(resident_mask.sum().item()))
             topk_choice_vals, topk_idx = torch.topk(
                 tmp_scores,
                 k=effective_top_k,
@@ -524,7 +529,7 @@ class MoEGate(nn.Module):
                 f"insupportable TopK function for MoE gating: {self.topk_method}"
             )
      
-        ### norm gate to sum 1
+        # norm gate to sum 1
         if effective_top_k > 1 and self.norm_topk_prob:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
@@ -541,15 +546,21 @@ class MoEGate(nn.Module):
             "topk_choice_vals": topk_choice_vals.detach().cpu(),
             "topk_idx": topk_idx.detach().cpu(),
             "topk_weight": topk_weight.detach().cpu(),
-            "resident_mask": resident_mask.detach().cpu(),
             "effective_top_k": int(effective_top_k),
         }
+        if resident_mask is not None:
+            self.last_router_debug["resident_mask"] = resident_mask.detach().cpu()
      
         return topk_idx, topk_weight
+
 
 class DeepseekV3MoE(nn.Module):
     """
     A mixed expert module containing shared experts.
+
+    Modes:
+      - full mode: config.resident_expert_ids is absent
+      - partial mode: config.resident_expert_ids is present and non-empty
     """
 
     def __init__(self, config):
@@ -558,123 +569,156 @@ class DeepseekV3MoE(nn.Module):
         self.num_experts_per_tok = config.num_experts_per_tok
 
         resident_ids = getattr(config, "resident_expert_ids", None)
-        if resident_ids is None:
-            resident_ids = list(range(config.n_routed_experts))
-        resident_ids = sorted({int(x) for x in resident_ids})
-
-        if not resident_ids:
-            raise ValueError("config.resident_expert_ids must be non-empty")
-
-        for eid in resident_ids:
-            if eid < 0 or eid >= int(config.n_routed_experts):
-                raise ValueError(
-                    f"resident expert id out of range: {eid} for n_routed_experts={config.n_routed_experts}"
-                )
+        if resident_ids is not None:
+            resident_ids = sorted({int(x) for x in resident_ids})
+            if not resident_ids:
+                raise ValueError("config.resident_expert_ids must be non-empty when provided")
+            for eid in resident_ids:
+                if eid < 0 or eid >= int(config.n_routed_experts):
+                    raise ValueError(
+                        f"resident expert id out of range: {eid} "
+                        f"for n_routed_experts={config.n_routed_experts}"
+                    )
 
         self.resident_expert_ids = resident_ids
+        self.partial_resident_mode = resident_ids is not None
 
         if hasattr(config, "ep_size") and config.ep_size > 1:
             assert config.ep_size == dist.get_world_size()
             self.ep_size = config.ep_size
             self.experts_per_rank = config.n_routed_experts // config.ep_size
             self.ep_rank = dist.get_rank()
-
-            local_resident_ids = [
-                i
-                for i in resident_ids
-                if i >= self.ep_rank * self.experts_per_rank
-                and i < (self.ep_rank + 1) * self.experts_per_rank
-            ]
         else:
             self.ep_size = 1
             self.experts_per_rank = config.n_routed_experts
             self.ep_rank = 0
-            local_resident_ids = resident_ids
 
-        self.local_resident_expert_ids = local_resident_ids
-        self.local_expert_id_to_key = {int(i): str(i) for i in local_resident_ids}
+        if self.partial_resident_mode:
+            if self.ep_size > 1:
+                local_resident_ids = [
+                    i
+                    for i in self.resident_expert_ids
+                    if i >= self.ep_rank * self.experts_per_rank
+                    and i < (self.ep_rank + 1) * self.experts_per_rank
+                ]
+            else:
+                local_resident_ids = list(self.resident_expert_ids)
 
-        self.experts = nn.ModuleDict(
-            {
-                str(i): DeepseekV3MLP(
-                    config,
-                    intermediate_size=config.moe_intermediate_size,
+            self.local_resident_expert_ids = local_resident_ids
+            self.local_expert_id_to_key = {int(i): str(i) for i in local_resident_ids}
+
+            self.experts = nn.ModuleDict(
+                {
+                    str(i): DeepseekV3MLP(
+                        config,
+                        intermediate_size=config.moe_intermediate_size,
+                    )
+                    for i in local_resident_ids
+                }
+            )
+        else:
+            self.local_resident_expert_ids = None
+            self.local_expert_id_to_key = None
+
+            if self.ep_size > 1:
+                self.experts = nn.ModuleList(
+                    [
+                        (
+                            DeepseekV3MLP(
+                                config,
+                                intermediate_size=config.moe_intermediate_size,
+                            )
+                            if i >= self.ep_rank * self.experts_per_rank
+                            and i < (self.ep_rank + 1) * self.experts_per_rank
+                            else None
+                        )
+                        for i in range(config.n_routed_experts)
+                    ]
                 )
-                for i in local_resident_ids
-            }
-        )
+            else:
+                self.experts = nn.ModuleList(
+                    [
+                        DeepseekV3MLP(
+                            config,
+                            intermediate_size=config.moe_intermediate_size,
+                        )
+                        for _ in range(config.n_routed_experts)
+                    ]
+                )
 
         self.gate = MoEGate(config)
-        self.gate.resident_expert_ids = resident_ids
+        self.gate.resident_expert_ids = self.resident_expert_ids
 
         if config.n_shared_experts is not None:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
             self.shared_experts = DeepseekV3MLP(
-                config=config, intermediate_size=intermediate_size
+                config=config,
+                intermediate_size=intermediate_size,
             )
+
+        self.last_debug = {}
+        self.last_moe_infer_debug = {}
 
     def forward(self, hidden_states):
         self.last_debug = {}
-     
+
         identity = hidden_states
         orig_shape = hidden_states.shape
-     
+
         topk_idx, topk_weight = self.gate(hidden_states)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-     
+
         if self.training:
             raise NotImplementedError("DeepseekV3MoE training path is not implemented")
-     
+
         routed_output = self.moe_infer(hidden_states, topk_idx, topk_weight).view(*orig_shape)
         self.last_debug["routed_output"] = routed_output.detach().cpu().clone()
-     
+
         moe_infer_dbg = getattr(self, "last_moe_infer_debug", None)
         if isinstance(moe_infer_dbg, dict):
             self.last_debug.update(moe_infer_dbg)
-     
+
         if self.config.n_shared_experts is not None:
             shared_output = self.shared_experts(identity)
             self.last_debug["shared_expert_output"] = shared_output.detach().cpu().clone()
             y = routed_output + shared_output
         else:
             y = routed_output
-     
-        return y
 
+        self.last_debug["final_out"] = y.detach().cpu().clone()
+        return y
 
     @torch.no_grad()
     def moe_infer(self, x, topk_ids, topk_weight):
+        if self.partial_resident_mode:
+            return self._moe_infer_partial_resident(x, topk_ids, topk_weight)
+        return self._moe_infer_full(x, topk_ids, topk_weight)
+
+    @torch.no_grad()
+    def _moe_infer_full(self, x, topk_ids, topk_weight):
         """
-        x:         [num_tokens, hidden]
-        topk_ids:  [num_tokens, top_k] global expert ids
+        x:          [num_tokens, hidden]
+        topk_ids:   [num_tokens, top_k]
         topk_weight:[num_tokens, top_k]
         """
         num_tokens, hidden_dim = x.shape
         top_k = int(topk_ids.shape[1])
         num_total_experts = int(self.config.n_routed_experts)
-     
-        # Count tokens per global expert id.
+
         cnts = topk_ids.new_zeros((topk_ids.shape[0], num_total_experts))
         cnts.scatter_(1, topk_ids, 1)
-        tokens_per_expert_global = cnts.sum(dim=0)  # [n_routed_experts]
-     
-        # Flatten routes and sort by global expert id so tokens for the same expert are contiguous.
-        flat_topk_ids = topk_ids.view(-1)  # [num_tokens * top_k]
+        tokens_per_expert = cnts.sum(dim=0)
+
+        flat_topk_ids = topk_ids.view(-1)
         idxs = flat_topk_ids.argsort()
         sorted_tokens = x[idxs // top_k]
         sorted_tokens_shape = sorted_tokens.shape
-     
-        # Helper: global -> local rank range
-        rank_begin = self.ep_rank * self.experts_per_rank
-        rank_end = (self.ep_rank + 1) * self.experts_per_rank
-     
+
         if self.ep_size > 1:
-            tokens_per_ep_rank = tokens_per_expert_global.view(self.ep_size, -1).sum(dim=1)
-            tokens_per_expert_group = tokens_per_expert_global.new_empty(
-                tokens_per_expert_global.shape[0]
-            )
-            dist.all_to_all_single(tokens_per_expert_group, tokens_per_expert_global)
-     
+            tokens_per_ep_rank = tokens_per_expert.view(self.ep_size, -1).sum(dim=1)
+            tokens_per_expert_group = tokens_per_expert.new_empty(tokens_per_expert.shape[0])
+            dist.all_to_all_single(tokens_per_expert_group, tokens_per_expert)
+
             output_splits = (
                 tokens_per_expert_group.view(self.ep_size, -1)
                 .sum(1)
@@ -683,7 +727,7 @@ class DeepseekV3MoE(nn.Module):
                 .tolist()
             )
             input_split_sizes = tokens_per_ep_rank.cpu().numpy().tolist()
-     
+
             gathered_tokens = sorted_tokens.new_empty(
                 int(tokens_per_expert_group.sum().cpu().item()),
                 sorted_tokens.shape[1],
@@ -692,9 +736,165 @@ class DeepseekV3MoE(nn.Module):
                 list(gathered_tokens.split(output_splits)),
                 list(sorted_tokens.split(input_split_sizes)),
             )
-     
-            # Build the global expert id for each gathered token segment.
-            # tokens_per_expert_group is still indexed by global expert id.
+
+            tokens_per_expert_post_gather = tokens_per_expert_group.view(
+                self.ep_size,
+                self.experts_per_rank,
+            ).sum(dim=0)
+
+            gatherd_idxs = np.zeros(shape=(gathered_tokens.shape[0],), dtype=np.int32)
+            s = 0
+            for i, k in enumerate(tokens_per_expert_group.cpu().numpy()):
+                gatherd_idxs[s : s + int(k)] = i % self.experts_per_rank
+                s += int(k)
+            gatherd_idxs = gatherd_idxs.argsort()
+
+            sorted_tokens = gathered_tokens[gatherd_idxs]
+            tokens_per_expert_local = tokens_per_expert_post_gather.cpu().numpy()
+        else:
+            gatherd_idxs = None
+            tokens_per_expert_local = tokens_per_expert.cpu().numpy()
+
+        outputs = []
+        start_idx = 0
+
+        for i, num_tokens_for_expert in enumerate(tokens_per_expert_local.tolist()):
+            end_idx = start_idx + int(num_tokens_for_expert)
+            if num_tokens_for_expert == 0:
+                continue
+
+            if self.ep_size > 1:
+                expert = self.experts[i + self.ep_rank * self.experts_per_rank]
+                if expert is None:
+                    raise RuntimeError(
+                        f"expert {i + self.ep_rank * self.experts_per_rank} is None on rank {self.ep_rank}"
+                    )
+            else:
+                expert = self.experts[i]
+
+            tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
+            expert_out = expert(tokens_for_this_expert)
+            outputs.append(expert_out)
+            start_idx = end_idx
+
+        outs = (
+            torch.cat(outputs, dim=0)
+            if len(outputs)
+            else sorted_tokens.new_empty((0, hidden_dim))
+        )
+
+        if self.ep_size > 1:
+            new_x = torch.empty_like(outs)
+            new_x[torch.as_tensor(gatherd_idxs, device=new_x.device)] = outs
+
+            gathered_tokens_back = x.new_empty(*sorted_tokens_shape)
+            dist.all_to_all(
+                list(gathered_tokens_back.split(input_split_sizes)),
+                list(new_x.split(output_splits)),
+            )
+            restored_sorted = gathered_tokens_back
+        else:
+            restored_sorted = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
+            restored_sorted[idxs] = outs
+
+            restored_by_token = restored_sorted.view(*topk_ids.shape, -1)
+            weighted_by_token = (
+                restored_by_token.type(topk_weight.dtype)
+                * topk_weight.unsqueeze(dim=-1)
+            )
+            final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
+
+            self.last_moe_infer_debug = {
+                "topk_ids": topk_ids.detach().cpu().clone(),
+                "topk_weight": topk_weight.detach().cpu().clone(),
+                "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
+                "idxs": idxs.detach().cpu().clone(),
+                "outs": outs.detach().cpu().clone(),
+                "restored_flat": restored_sorted.detach().cpu().clone(),
+                "restored_by_token": restored_by_token.detach().cpu().clone(),
+                "weighted_by_token": weighted_by_token.detach().cpu().clone(),
+                "final_out": final_out.detach().cpu().clone(),
+            }
+            return final_out
+
+        # EP full-path: gathered_tokens_back is in sorted-by-flat-route order
+        inv_idxs = torch.empty_like(idxs)
+        inv_idxs[idxs] = torch.arange(idxs.numel(), device=idxs.device)
+
+        restored_flat = restored_sorted[inv_idxs]
+        restored_by_token = restored_flat.view(*topk_ids.shape, -1)
+
+        weighted_by_token = (
+            restored_by_token.type(topk_weight.dtype)
+            * topk_weight.unsqueeze(dim=-1)
+        )
+        final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
+
+        self.last_moe_infer_debug = {
+            "topk_ids": topk_ids.detach().cpu().clone(),
+            "topk_weight": topk_weight.detach().cpu().clone(),
+            "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
+            "idxs": idxs.detach().cpu().clone(),
+            "gatherd_idxs": torch.as_tensor(gatherd_idxs).detach().cpu().clone(),
+            "outs": outs.detach().cpu().clone(),
+            "restored_sorted": restored_sorted.detach().cpu().clone(),
+            "inv_idxs": inv_idxs.detach().cpu().clone(),
+            "restored_flat": restored_flat.detach().cpu().clone(),
+            "restored_by_token": restored_by_token.detach().cpu().clone(),
+            "weighted_by_token": weighted_by_token.detach().cpu().clone(),
+            "final_out": final_out.detach().cpu().clone(),
+        }
+
+        return final_out
+
+    @torch.no_grad()
+    def _moe_infer_partial_resident(self, x, topk_ids, topk_weight):
+        """
+        x:          [num_tokens, hidden]
+        topk_ids:   [num_tokens, top_k] global expert ids
+        topk_weight:[num_tokens, top_k]
+        """
+        num_tokens, hidden_dim = x.shape
+        top_k = int(topk_ids.shape[1])
+        num_total_experts = int(self.config.n_routed_experts)
+
+        cnts = topk_ids.new_zeros((topk_ids.shape[0], num_total_experts))
+        cnts.scatter_(1, topk_ids, 1)
+        tokens_per_expert_global = cnts.sum(dim=0)
+
+        flat_topk_ids = topk_ids.view(-1)
+        idxs = flat_topk_ids.argsort()
+        sorted_tokens = x[idxs // top_k]
+        sorted_tokens_shape = sorted_tokens.shape
+
+        rank_begin = self.ep_rank * self.experts_per_rank
+        rank_end = (self.ep_rank + 1) * self.experts_per_rank
+
+        if self.ep_size > 1:
+            tokens_per_ep_rank = tokens_per_expert_global.view(self.ep_size, -1).sum(dim=1)
+            tokens_per_expert_group = tokens_per_expert_global.new_empty(
+                tokens_per_expert_global.shape[0]
+            )
+            dist.all_to_all_single(tokens_per_expert_group, tokens_per_expert_global)
+
+            output_splits = (
+                tokens_per_expert_group.view(self.ep_size, -1)
+                .sum(1)
+                .cpu()
+                .numpy()
+                .tolist()
+            )
+            input_split_sizes = tokens_per_ep_rank.cpu().numpy().tolist()
+
+            gathered_tokens = sorted_tokens.new_empty(
+                int(tokens_per_expert_group.sum().cpu().item()),
+                sorted_tokens.shape[1],
+            )
+            dist.all_to_all(
+                list(gathered_tokens.split(output_splits)),
+                list(sorted_tokens.split(input_split_sizes)),
+            )
+
             gathered_global_expert_ids = np.zeros(
                 shape=(gathered_tokens.shape[0],),
                 dtype=np.int32,
@@ -704,9 +904,7 @@ class DeepseekV3MoE(nn.Module):
                 if k > 0:
                     gathered_global_expert_ids[s : s + k] = int(expert_id)
                     s += int(k)
-     
-            # Reorder gathered tokens so that local resident experts are contiguous in the order
-            # of self.local_resident_expert_ids, and drop non-resident experts entirely.
+
             local_keep_mask = np.array(
                 [
                     (rank_begin <= eid < rank_end) and (int(eid) in self.local_expert_id_to_key)
@@ -714,95 +912,104 @@ class DeepseekV3MoE(nn.Module):
                 ],
                 dtype=bool,
             )
-     
+
             kept_positions = np.nonzero(local_keep_mask)[0]
-            kept_tokens = gathered_tokens[torch.as_tensor(kept_positions, device=gathered_tokens.device)]
-     
+            kept_tokens = gathered_tokens[
+                torch.as_tensor(kept_positions, device=gathered_tokens.device)
+            ]
+
             kept_global_ids = gathered_global_expert_ids[local_keep_mask]
-     
+
             order_map = {
                 int(expert_id): dense_idx
                 for dense_idx, expert_id in enumerate(self.local_resident_expert_ids)
             }
-            kept_dense_local_ids = np.array([order_map[int(eid)] for eid in kept_global_ids], dtype=np.int32)
+            kept_dense_local_ids = np.array(
+                [order_map[int(eid)] for eid in kept_global_ids],
+                dtype=np.int32,
+            )
             local_sort_order = np.argsort(kept_dense_local_ids, kind="stable")
-     
-            sorted_tokens = kept_tokens[torch.as_tensor(local_sort_order, device=kept_tokens.device)]
+
+            sorted_tokens = kept_tokens[
+                torch.as_tensor(local_sort_order, device=kept_tokens.device)
+            ]
             gatherd_idxs = kept_positions[local_sort_order]
-     
+
             tokens_per_expert_local = np.zeros(
                 shape=(len(self.local_resident_expert_ids),),
                 dtype=np.int64,
             )
             for dense_local_id in kept_dense_local_ids[local_sort_order]:
                 tokens_per_expert_local[int(dense_local_id)] += 1
-     
+
             tokens_per_expert = tokens_per_expert_local
         else:
-            # Non-EP: keep only resident experts, ordered by self.local_resident_expert_ids.
             flat_sorted_global_ids = flat_topk_ids[idxs].detach().cpu().numpy()
-     
+
             keep_mask = np.array(
                 [int(eid) in self.local_expert_id_to_key for eid in flat_sorted_global_ids],
                 dtype=bool,
             )
             kept_positions = np.nonzero(keep_mask)[0]
-            kept_tokens = sorted_tokens[torch.as_tensor(kept_positions, device=sorted_tokens.device)]
-     
+            kept_tokens = sorted_tokens[
+                torch.as_tensor(kept_positions, device=sorted_tokens.device)
+            ]
+
             kept_global_ids = flat_sorted_global_ids[keep_mask]
-     
+
             order_map = {
                 int(expert_id): dense_idx
                 for dense_idx, expert_id in enumerate(self.local_resident_expert_ids)
             }
-            kept_dense_local_ids = np.array([order_map[int(eid)] for eid in kept_global_ids], dtype=np.int32)
+            kept_dense_local_ids = np.array(
+                [order_map[int(eid)] for eid in kept_global_ids],
+                dtype=np.int32,
+            )
             local_sort_order = np.argsort(kept_dense_local_ids, kind="stable")
-     
-            sorted_tokens = kept_tokens[torch.as_tensor(local_sort_order, device=kept_tokens.device)]
+
+            sorted_tokens = kept_tokens[
+                torch.as_tensor(local_sort_order, device=kept_tokens.device)
+            ]
             gatherd_idxs = kept_positions[local_sort_order]
-     
+
             tokens_per_expert_local = np.zeros(
                 shape=(len(self.local_resident_expert_ids),),
                 dtype=np.int64,
             )
             for dense_local_id in kept_dense_local_ids[local_sort_order]:
                 tokens_per_expert_local[int(dense_local_id)] += 1
-     
+
             tokens_per_expert = tokens_per_expert_local
-     
+
         outputs = []
         start_idx = 0
-     
+
         for dense_local_idx, num_tokens_for_expert in enumerate(tokens_per_expert.tolist()):
             end_idx = start_idx + int(num_tokens_for_expert)
             if num_tokens_for_expert == 0:
                 continue
-     
+
             expert_id = int(self.local_resident_expert_ids[dense_local_idx])
             expert_key = self.local_expert_id_to_key[expert_id]
             if expert_key not in self.experts:
-                raise RuntimeError(
-                    f"expert {expert_id} is not resident on this model/rank"
-                )
-     
+                raise RuntimeError(f"expert {expert_id} is not resident on this model/rank")
+
             expert = self.experts[expert_key]
             tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
             expert_out = expert(tokens_for_this_expert)
             outputs.append(expert_out)
             start_idx = end_idx
-     
+
         outs = (
             torch.cat(outputs, dim=0)
             if len(outputs)
             else sorted_tokens.new_empty((0, hidden_dim))
         )
-     
+
         if self.ep_size > 1:
-            new_x = gathered_tokens.new_empty(
-                (int(len(kept_positions)), hidden_dim)
-            )
+            new_x = gathered_tokens.new_empty((int(len(kept_positions)), hidden_dim))
             new_x[torch.as_tensor(gatherd_idxs, device=new_x.device)] = outs
-     
+
             gathered_tokens_back = x.new_empty(*sorted_tokens_shape)
             dist.all_to_all(
                 list(gathered_tokens_back.split(input_split_sizes)),
@@ -813,14 +1020,11 @@ class DeepseekV3MoE(nn.Module):
             new_x = x.new_empty((int(len(kept_positions)), hidden_dim))
             new_x[torch.as_tensor(gatherd_idxs, device=new_x.device)] = outs
             outs = new_x
-     
-        # Scatter expert outputs back to flattened route order, then reduce by top-k weights.
+
         restored_sorted = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
         kept_positions_t = torch.as_tensor(kept_positions, device=restored_sorted.device)
         restored_sorted[kept_positions_t] = outs
 
-        # idxs maps original flat route order -> sorted-by-expert order.
-        # We need the inverse permutation to recover original (token, slot) flat order.
         inv_idxs = torch.empty_like(idxs)
         inv_idxs[idxs] = torch.arange(idxs.numel(), device=idxs.device)
 
@@ -828,8 +1032,8 @@ class DeepseekV3MoE(nn.Module):
         restored_by_token = restored_flat.view(*topk_ids.shape, -1)
 
         weighted_by_token = (
-            restored_by_token.type(topk_weight.dtype) *
-            topk_weight.unsqueeze(dim=-1)
+            restored_by_token.type(topk_weight.dtype)
+            * topk_weight.unsqueeze(dim=-1)
         )
 
         final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
@@ -840,7 +1044,10 @@ class DeepseekV3MoE(nn.Module):
             "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
             "idxs": idxs.detach().cpu().clone(),
             "kept_positions": kept_positions_t.detach().cpu().clone(),
-            "gatherd_idxs": torch.as_tensor(gatherd_idxs, device=restored_sorted.device).detach().cpu().clone(),
+            "gatherd_idxs": torch.as_tensor(
+                gatherd_idxs,
+                device=restored_sorted.device,
+            ).detach().cpu().clone(),
             "outs": outs.detach().cpu().clone(),
             "restored_sorted": restored_sorted.detach().cpu().clone(),
             "inv_idxs": inv_idxs.detach().cpu().clone(),

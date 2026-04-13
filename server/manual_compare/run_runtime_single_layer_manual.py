@@ -234,6 +234,7 @@ def main() -> None:
 
     prompt = inp.get("prompt")
     input_ids = inp.get("input_ids")
+
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -242,12 +243,23 @@ def main() -> None:
     setup_control_plane(coord, cfg)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
-    if prompt is None:
-        if input_ids is None:
-            raise RuntimeError("input_json must contain either prompt or input_ids")
-        prompt = tokenizer.decode(input_ids)
 
-    ids = tokenizer(prompt, add_special_tokens=True)["input_ids"]
+    if input_ids is not None:
+        if not isinstance(input_ids, list):
+            raise TypeError(f"input_ids must be a list, got {type(input_ids).__name__}")
+        ids = [int(x) for x in input_ids]
+        if len(ids) == 0:
+            raise RuntimeError("input_ids must not be empty")
+
+        if prompt is None:
+            prompt = tokenizer.decode(ids)
+
+    else:
+        if prompt is None:
+            raise RuntimeError("input_json must contain either prompt or input_ids")
+
+        ids = tokenizer(prompt, add_special_tokens=True)["input_ids"]
+
     decoded = tokenizer.decode(ids)
     target_layer = int(args.layer_id)
 
@@ -361,7 +373,7 @@ def main() -> None:
             if not isinstance(lm_head_w, torch.Tensor):
                 raise TypeError(f"lm_head expected torch.Tensor, got {type(lm_head_w).__name__}")
          
-            final_hidden_in = result["output"]
+            frms_norminal_hidden_in = result["output"]
             if not isinstance(final_hidden_in, torch.Tensor):
                 final_hidden_in = torch.as_tensor(final_hidden_in)
          
@@ -374,11 +386,12 @@ def main() -> None:
             was_1d = (final_hidden_in.ndim == 1)
             x = final_hidden_in.unsqueeze(0) if was_1d else final_hidden_in
          
+            eps = float(getattr(model_cfg, "rms_norm_eps", 1e-6))
             final_hidden = torch.nn.functional.rms_norm(
                 x,
                 (x.shape[-1],),
                 norm_w,
-                1e-6,
+                eps,
             )
             logits = torch.matmul(final_hidden, lm_head_w.t())
          

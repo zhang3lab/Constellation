@@ -153,6 +153,9 @@ def main() -> None:
     for name in tail_names:
         maybe_compare(out, hf_dir, rt_dir, name)
 
+    for i in range(layer_id + 1):
+        maybe_compare(out, hf_dir, rt_dir, f"layer_{i}_output")
+
     output_path = Path(args.output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:

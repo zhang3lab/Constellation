@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -70,10 +69,15 @@ def rewrite_config_json(
     src_config_path: Path,
     dst_config_path: Path,
     *,
-    resident_expert_ids: list[int],
+    resident_expert_ids: list[int] | None,
 ) -> None:
     cfg = load_json(src_config_path)
-    cfg["resident_expert_ids"] = list(resident_expert_ids)
+
+    if resident_expert_ids is None:
+        cfg.pop("resident_expert_ids", None)
+    else:
+        cfg["resident_expert_ids"] = list(resident_expert_ids)
+
     cfg.pop("quantization_config", None)
     dump_json(dst_config_path, cfg)
 
@@ -82,7 +86,7 @@ def rewrite_weight_index_json(
     src_index_path: Path,
     dst_index_path: Path,
     *,
-    resident_expert_ids: list[int],
+    resident_expert_ids: list[int] | None,
 ) -> dict[str, Any]:
     index_obj = load_json(src_index_path)
 
@@ -91,17 +95,21 @@ def rewrite_weight_index_json(
     if not isinstance(weight_map, dict):
         raise ValueError(f"{src_index_path}: missing object field weight_map")
 
-    resident_set = {int(x) for x in resident_expert_ids}
-
     old_count = len(weight_map)
-    new_weight_map = {
-        key: shard
-        for key, shard in weight_map.items()
-        if should_keep_weight_key(
-            key,
-            resident_expert_ids=resident_set,
-        )
-    }
+
+    if resident_expert_ids is None:
+        new_weight_map = dict(weight_map)
+    else:
+        resident_set = {int(x) for x in resident_expert_ids}
+        new_weight_map = {
+            key: shard
+            for key, shard in weight_map.items()
+            if should_keep_weight_key(
+                key,
+                resident_expert_ids=resident_set,
+            )
+        }
+
     new_count = len(new_weight_map)
 
     out: dict[str, Any] = {"weight_map": new_weight_map}
@@ -129,17 +137,23 @@ def copy_patched_modeling_file(
 def write_patch_info(
     dst_dir: Path,
     *,
+    mode: str,
     src_model_dir: Path,
     config_path: Path,
-    resident_expert_ids: list[int],
+    resident_expert_ids: list[int] | None,
     stats: dict[str, Any],
     patched_modeling_path: Path,
 ) -> None:
     lines = [
+        f"mode={mode}",
         f"source_model_dir={src_model_dir}",
         f"source_config={config_path}",
         f"patched_modeling={patched_modeling_path}",
-        f"resident_expert_ids={resident_expert_ids}",
+        (
+            f"resident_expert_ids={resident_expert_ids}"
+            if resident_expert_ids is not None
+            else "resident_expert_ids=<all experts>"
+        ),
         f"old_weight_count={stats['old_weight_count']}",
         f"new_weight_count={stats['new_weight_count']}",
         f"removed_weight_count={stats['removed_weight_count']}",
@@ -166,6 +180,13 @@ def main() -> int:
         type=str,
         required=True,
         help="Path to patched modeling_deepseek.py",
+    )
+    ap.add_argument(
+        "--mode",
+        type=str,
+        choices=["full", "partial"],
+        default="partial",
+        help="full: keep all experts; partial: restrict to resident experts",
     )
     ap.add_argument(
         "--resident-experts",
@@ -198,20 +219,25 @@ def main() -> int:
     if not isinstance(model_root, str) or not model_root:
         raise ValueError(f"{config_path}: model.root must be a non-empty string")
 
-    if args.resident_experts is not None:
-        resident_expert_ids = [
-            int(x.strip()) for x in args.resident_experts.split(",") if x.strip()
-        ]
+    if args.mode == "full":
+        resident_expert_ids = None
     else:
-        restricted = run_cfg.get("restricted_expert_ids")
-        if not isinstance(restricted, list) or not restricted:
-            raise ValueError(
-                f"{config_path}: run.restricted_expert_ids must be a non-empty list "
-                f"unless --resident-experts is provided"
-            )
-        resident_expert_ids = [int(x) for x in restricted]
+        if args.resident_experts is not None:
+            resident_expert_ids = [
+                int(x.strip()) for x in args.resident_experts.split(",") if x.strip()
+            ]
+        else:
+            restricted = run_cfg.get("restricted_expert_ids")
+            if not isinstance(restricted, list) or not restricted:
+                raise ValueError(
+                    f"{config_path}: run.restricted_expert_ids must be a non-empty list "
+                    f"unless --resident-experts is provided"
+                )
+            resident_expert_ids = [int(x) for x in restricted]
 
-    resident_expert_ids = sorted(set(resident_expert_ids))
+        resident_expert_ids = sorted(set(resident_expert_ids))
+        if not resident_expert_ids:
+            raise ValueError("resident expert set must be non-empty in partial mode")
 
     src_model_dir = Path(model_root).resolve()
     if not src_model_dir.is_dir():
@@ -230,7 +256,6 @@ def main() -> int:
 
     ensure_empty_or_create_dir(dst_dir, force=bool(args.force))
 
-    # Symlink everything first, except files we explicitly rewrite/copy.
     skip_names = {
         "config.json",
         "model.safetensors.index.json",
@@ -243,29 +268,26 @@ def main() -> int:
         skip_names=skip_names,
     )
 
-    # Rewrite config.json in the patched model dir.
     rewrite_config_json(
         src_config_json,
         dst_dir / "config.json",
         resident_expert_ids=resident_expert_ids,
     )
 
-    # Rewrite index to drop non-resident experts.
     stats = rewrite_weight_index_json(
         src_index_path,
         dst_dir / "model.safetensors.index.json",
         resident_expert_ids=resident_expert_ids,
     )
 
-    # Copy patched modeling file in.
     copy_patched_modeling_file(
         patched_modeling_path,
         dst_dir,
     )
 
-    # Write patch metadata.
     write_patch_info(
         dst_dir,
+        mode=args.mode,
         src_model_dir=src_model_dir,
         config_path=config_path,
         resident_expert_ids=resident_expert_ids,
@@ -274,9 +296,13 @@ def main() -> int:
     )
 
     print("[partial-ref] done")
+    print(f"[partial-ref] mode          = {args.mode}")
     print(f"[partial-ref] src_model_dir = {src_model_dir}")
     print(f"[partial-ref] dst_dir       = {dst_dir}")
-    print(f"[partial-ref] resident_expert_ids = {resident_expert_ids}")
+    if resident_expert_ids is None:
+        print("[partial-ref] resident_expert_ids = <all experts>")
+    else:
+        print(f"[partial-ref] resident_expert_ids = {resident_expert_ids}")
     print(f"[partial-ref] old_weight_count    = {stats['old_weight_count']}")
     print(f"[partial-ref] new_weight_count    = {stats['new_weight_count']}")
     print(f"[partial-ref] removed_weight_count= {stats['removed_weight_count']}")

@@ -45,7 +45,7 @@ def load_hf_model(model_dir: str, device: str):
         model_dir,
         config=config,
         trust_remote_code=True,
-        torch_dtype="auto",
+        torch_dtype=torch.bfloat16,
         device_map=device,
     )
     model.eval()
@@ -165,12 +165,22 @@ def main() -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
     tok = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
-    if prompt is None:
-        if input_ids is None:
-            raise RuntimeError("input_json must contain either prompt or input_ids")
-        prompt = tok.decode(input_ids)
 
-    ids = tok(prompt, add_special_tokens=True, return_tensors="pt")["input_ids"][0].tolist()
+    if input_ids is not None:
+        if not isinstance(input_ids, list):
+            raise TypeError(f"input_ids must be a list, got {type(input_ids).__name__}")
+        ids = [int(x) for x in input_ids]
+        if len(ids) == 0:
+            raise RuntimeError("input_ids must not be empty")
+
+        if prompt is None:
+            prompt = tok.decode(ids)
+    else:
+        if prompt is None:
+            raise RuntimeError("input_json must contain either prompt or input_ids")
+
+        ids = tok(prompt, add_special_tokens=True)["input_ids"][0].tolist()
+
     decoded = tok.decode(ids)
 
     target_layer = int(args.layer_id)
