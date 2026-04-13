@@ -431,6 +431,9 @@ def main() -> None:
                     outputs.logits = logits_manual
                 else:
                     outputs.logits = None
+        finally:
+            for h in hooks:
+                h.remove()
 
         dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
         router_dbg = {}
