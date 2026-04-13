@@ -128,7 +128,7 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    coord = Coordinator(cfg["nodes"])
+    coord = Coordinator(cfg["nodes"], log_level=cfg["log_level"])
 
     model = cfg["model"]
     expert_mem_bytes = int(model["expert_mem_bytes"])
@@ -165,13 +165,13 @@ def main():
     node_instance_id = str(target["node_instance_id"])
 
     # First full upload: this should enqueue the background build on the final tensor.
-    with NodeClient(host, control_port) as client:
+    with NodeClient(host, control_port, log_level=cfg["log_level"]) as client:
         for tensor in tensors:
             _upload_one_tensor(client, expert_id, worker_id, tensor)
 
     # Immediately do a second full upload for the same (expert, worker).
     # This is the edge case: pending_build_key may still be present.
-    with NodeClient(host, control_port) as client:
+    with NodeClient(host, control_port, log_level=cfg["log_level"]) as client:
         for tensor in tensors:
             _upload_one_tensor(client, expert_id, worker_id, tensor)
 

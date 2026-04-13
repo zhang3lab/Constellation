@@ -238,7 +238,7 @@ def main() -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
     cfg = load_config(args.config)
-    coord = Coordinator(cfg["nodes"])
+    coord = Coordinator(cfg["nodes"], log_level=cfg["log_level"])
     setup_control_plane(coord, cfg)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)

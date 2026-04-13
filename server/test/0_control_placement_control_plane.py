@@ -11,7 +11,7 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    coord = Coordinator(cfg["nodes"])
+    coord = Coordinator(cfg["nodes"], log_level=cfg["log_level"])
 
     model = cfg["model"]
     run_cfg = cfg["run"]

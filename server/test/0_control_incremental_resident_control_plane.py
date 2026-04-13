@@ -96,7 +96,11 @@ def _upload_dummy_expert(
 ) -> None:
     tensors = _make_dummy_expert_tensors()
 
-    client = NodeClient(str(target["host"]), int(target["control_port"]))
+    client = NodeClient(
+        str(target["host"]),
+        int(target["control_port"]),
+        log_level=cfg["log_level"],
+    )
     with client:
         for t in tensors:
             begin_msg = {
@@ -173,7 +177,7 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    coord = Coordinator(cfg["nodes"])
+    coord = Coordinator(cfg["nodes"], log_level=cfg["log_level"])
 
     model = cfg["model"]
     chunk_size = int(model["chunk_size"])

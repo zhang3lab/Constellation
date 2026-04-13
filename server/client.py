@@ -20,6 +20,7 @@ from common.protocol import (
     pack_header,
     unpack_header,
 )
+from server.logging_utils import log2
 
 
 class ProtocolError(RuntimeError):
@@ -27,10 +28,17 @@ class ProtocolError(RuntimeError):
 
 
 class NodeClient:
-    def __init__(self, host: str, control_port: int, timeout_sec: float = 5.0):
+    def __init__(
+        self,
+        host: str,
+        control_port: int,
+        timeout_sec: float = 5.0,
+        log_level: int = 0,
+    ):
         self.host = host
         self.control_port = control_port
         self.timeout_sec = timeout_sec
+        self.log_level = int(log_level)
         self.sock: Optional[socket.socket] = None
         self._next_request_id = 1
 
@@ -156,7 +164,8 @@ class NodeClient:
             MsgType.LoadWeightsChunk,
             MsgType.LoadWeightsEnd,
         ):
-            print(
+            log2(
+                self.log_level,
                 f"[client-request-profile] "
                 f"req={req_type.name} rid={request_id} req_body_len={len(body)} resp_body_len={body_len} "
                 f"send_ms={(t1-t0)*1000:.3f} "

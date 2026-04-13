@@ -240,7 +240,7 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    coord = Coordinator(cfg["nodes"])
+    coord = Coordinator(cfg["nodes"], log_level=cfg["log_level"])
     setup_control_plane(coord, cfg)
 
     with InferenceSession(coord, cfg) as prefill_sess:

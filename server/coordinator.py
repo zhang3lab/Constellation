@@ -13,12 +13,14 @@ from server.expert_placement import (
     find_expert_placement,
     group_placements_by_control_endpoint,
 )
+from server.logging_utils import log1, log2
 from server.placement import build_balanced_placement
 
 
 class Coordinator:
-    def __init__(self, nodes: List[Dict[str, Any]]):
+    def __init__(self, nodes: List[Dict[str, Any]], log_level: int = 0):
         self.nodes = nodes
+        self.log_level = int(log_level)
         self.node_inventories: List[Dict[str, Any]] = []
         self.gpu_inventory: List[Dict[str, Any]] = []
         self.placements: List[Dict[str, Any]] = []
@@ -36,7 +38,7 @@ class Coordinator:
      
             node_instance_id = f"{host}:{control_port}"
      
-            client = NodeClient(host, control_port)
+            client = NodeClient(host, control_port, log_level=self.log_level)
             with client:
                 inv = client.request_inventory()
                 resident = client.request_resident_inventory()
@@ -209,7 +211,7 @@ class Coordinator:
      
             assignments = grouped.get(node_instance_id, [])
      
-            client = NodeClient(host, control_port)
+            client = NodeClient(host, control_port, log_level=self.log_level)
             with client:
                 ack = client.send_placement_plan(
                     assignments,
@@ -225,7 +227,8 @@ class Coordinator:
             ack["drop_non_target_residents"] = bool(drop_non_target_residents)
             acks.append(ack)
      
-            print(
+            log1(
+                self.log_level,
                 f"sent placement to {node_instance_id} "
                 f"reported_node_id={node['reported_node_id']} "
                 f"assignments={len(assignments)} "
@@ -252,7 +255,6 @@ class Coordinator:
         *,
         client,
         target,
-        verbose: bool = False,
     ) -> None:
         if client is None:
             raise ValueError("client must not be None")
@@ -333,12 +335,16 @@ class Coordinator:
         total_ms = (t3 - t0) * 1000.0
         chunk_avg_ms = (chunk_total_ms / chunk_count) if chunk_count > 0 else 0.0
      
-        print(
+        log2(
+            self.log_level,
             f"[server-send-profile] "
+            f"node={target['node_instance_id']} "
             f"expert={expert_id} "
             f"worker={target['worker_id']} "
             f"kind={tensor_kind.name} "
             f"bytes={len(tensor_bytes)} "
+            f"shape={tuple(shape_list)} "
+            f"dtype={dtype} "
             f"chunk_size={chunk_size} "
             f"chunks={chunk_count} "
             f"begin_ms={begin_ms:.3f} "
@@ -347,14 +353,6 @@ class Coordinator:
             f"end_ms={end_ms:.3f} "
             f"total_ms={total_ms:.3f}"
         )
-     
-        if verbose:
-            print(
-                f"sent tensor bytes to {target['node_instance_id']} "
-                f"expert={expert_id} worker_id={target['worker_id']} "
-                f"tensor_kind={tensor_kind.name} total_bytes={len(tensor_bytes)} "
-                f"shape={tuple(shape_list)} dtype={dtype}"
-            )
 
 
     def build_preload_manifest(
@@ -463,7 +461,6 @@ class Coordinator:
             col_block=col_block,
             client=client,
             target=target,
-            verbose=False,
         )
         t2 = time.perf_counter()
      
@@ -471,8 +468,10 @@ class Coordinator:
         send_ms = (t2 - t1) * 1000.0
         total_ms = (t2 - t0) * 1000.0
      
-        print(
+        log2(
+            self.log_level,
             f"[server-upload-profile] "
+            f"node={target['node_instance_id']} "
             f"expert={expert_id} "
             f"worker={target['worker_id']} "
             f"tensor={tensor_name} "
@@ -506,10 +505,11 @@ class Coordinator:
         total_entries = len(manifest_items)
      
         try:
-            client = NodeClient(host, control_port)
+            client = NodeClient(host, control_port, log_level=self.log_level)
             client.__enter__()
      
-            print(
+            log2(
+                self.log_level,
                 f"{progress_prefix} open control "
                 f"node={node_instance_id} host={host} port={control_port}"
             )
@@ -526,7 +526,8 @@ class Coordinator:
                     shard_file.__enter__()
                     current_shard_path = shard_path
      
-                    print(
+                    log2(
+                        self.log_level,
                         f"{progress_prefix} open shard "
                         f"node={node_instance_id} path={shard_path}"
                     )
@@ -540,7 +541,8 @@ class Coordinator:
      
                 done_entries += 1
                 if done_entries == 1 or done_entries % 32 == 0 or done_entries == total_entries:
-                    print(
+                    log2(
+                        self.log_level,
                         f"{progress_prefix} {done_entries}/{total_entries} "
                         f"expert={item['expert_id']} tensor={item['tensor_kind_name']}"
                     )
@@ -578,7 +580,8 @@ class Coordinator:
      
             for ack in placement_acks:
                 if not bool(ack["needs_load"]) and bool(ack["all_ready"]):
-                    print(
+                    log1(
+                        self.log_level,
                         f"[preload] skip node={ack['node_instance_id']} "
                         f"target={ack['num_target_experts']} "
                         f"ready={ack['num_ready_experts']}"
@@ -592,7 +595,7 @@ class Coordinator:
         all_expert_ids = sorted({int(p["expert_id"]) for p in self.placements})
      
         if not placements_for_preload:
-            print("[preload] nothing to load")
+            log1(self.log_level, "[preload] nothing to load")
             return all_expert_ids
      
         already_resident = []
@@ -605,7 +608,8 @@ class Coordinator:
                 missing_resident.append(p)
      
         if already_resident:
-            print(
+            log1(
+                self.log_level,
                 f"[preload] already resident placements={len(already_resident)} "
                 f"missing placements={len(missing_resident)}"
             )
@@ -613,7 +617,7 @@ class Coordinator:
         placements_for_preload = missing_resident
      
         if not placements_for_preload:
-            print("[preload] everything already resident")
+            log1(self.log_level, "[preload] everything already resident")
             return all_expert_ids
      
         manifest = self.build_preload_manifest(
@@ -624,16 +628,17 @@ class Coordinator:
         manifest = self.sort_preload_manifest(manifest)
      
         total_entries = len(manifest)
-        total_experts = len({int(x["expert_id"]) for x in manifest})
-        preloaded_expert_ids = sorted({int(x["expert_id"]) for x in manifest})
-     
-        print(
-            f"preloading all placed experts: experts={total_experts} "
+        experts_to_preload = len({int(x["expert_id"]) for x in manifest})
+
+        log1(
+            self.log_level,
+            f"preloading all placed experts: experts={experts_to_preload} "
             f"tensor_entries={total_entries}"
         )
-        print(
+        log1(
+            self.log_level,
             f"[preload] target_experts={len(all_expert_ids)} "
-            f"experts_to_preload={len(preloaded_expert_ids)}"
+            f"experts_to_preload={experts_to_preload}"
         )
      
         jobs_by_node = {}
@@ -641,7 +646,7 @@ class Coordinator:
             node_instance_id = str(item["target"]["node_instance_id"])
             jobs_by_node.setdefault(node_instance_id, []).append(item)
      
-        print(f"[preload] parallel nodes={len(jobs_by_node)}")
+        log1(self.log_level, f"[preload] parallel nodes={len(jobs_by_node)}")
      
         errors = []
         err_lock = threading.Lock()

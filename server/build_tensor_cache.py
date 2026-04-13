@@ -53,7 +53,7 @@ def main():
         names,
         max_seq_len=max_seq_len,
         overwrite=args.overwrite,
-        num_workers=4,
+        num_workers=8,
         prefetch=8,
     )
 

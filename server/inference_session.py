@@ -20,9 +20,10 @@ from server.tensor_cache import FREQ_CIS_TENSOR_NAME, MappedTensorStore
 
 
 class SessionClientPool:
-    def __init__(self):
+    def __init__(self, log_level: int = 0):
         self._lock = threading.Lock()
         self._clients: Dict[Tuple[str, int], NodeClient] = {}
+        self._log_level = int(log_level)
 
     def get(self, host: str, port: int) -> NodeClient:
         key = (host, int(port))
@@ -31,7 +32,7 @@ class SessionClientPool:
             if client is not None:
                 return client
 
-            client = NodeClient(host, int(port))
+            client = NodeClient(host, int(port), log_level=self._log_level)
             client.__enter__()
             self._clients[key] = client
             return client
@@ -63,7 +64,9 @@ class InferenceSession:
     def __init__(self, coord, cfg):
         self.coord = coord
         self.cfg = cfg
-        self.client_pool = SessionClientPool()
+        self.client_pool = SessionClientPool(
+            log_level=int(self.cfg["log_level"])
+        )
 
         model_cfg = self.cfg.get("model")
         if not isinstance(model_cfg, dict):

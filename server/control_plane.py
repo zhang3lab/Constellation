@@ -81,7 +81,7 @@ def setup_control_plane(coord, cfg):
         for p, eid in zip(coord.placements, preload_expert_ids):
             p["expert_id"] = int(eid)
 
-    if cfg["verbose"]:
+    if cfg["log_level"] >= 2:
         coord.print_placement()
 
     drop_non_target_residents = bool(run_cfg.get("drop_non_target_residents", False))

@@ -29,7 +29,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    coord = Coordinator(cfg["nodes"])
+    coord = Coordinator(cfg["nodes"], log_level=cfg["log_level"])
     setup_control_plane(coord, cfg)
 
     kv_cache_cfg = cfg["kv_cache"]

@@ -111,8 +111,6 @@ def dispatch_topk_experts(session, hidden: np.ndarray, routes, *, return_aux: bo
     validate_routes(routes)
     routes = [(int(eid), float(w)) for eid, w in routes]
 
-    verbose = bool(session.cfg["verbose"])
-
     weighted_outputs = []
     expert_outputs = [] if return_aux else None
 
@@ -133,13 +131,13 @@ def dispatch_topk_experts(session, hidden: np.ndarray, routes, *, return_aux: bo
                 }
             )
 
-        if verbose:
-            print(
-                f"[dispatch] expert={expert_id} weight={weight:.6f} "
-                f"finite={np.isfinite(y).sum()}/{y.size} "
-                f"min={np.nanmin(y):.6e} max={np.nanmax(y):.6e} "
-                f"mean={np.nanmean(y):.6e}"
-            )
+        log2(
+            int(session.cfg["log_level"]),
+            f"[dispatch] expert={expert_id} weight={weight:.6f} "
+            f"finite={np.isfinite(y).sum()}/{y.size} "
+            f"min={np.nanmin(y):.6e} max={np.nanmax(y):.6e} "
+            f"mean={np.nanmean(y):.6e}"
+        )
 
     if return_aux:
         return weighted_outputs, expert_outputs

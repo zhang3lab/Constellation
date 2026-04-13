@@ -1,5 +1,5 @@
 {
-  "verbose": false,
+  "log_level": 0,
   "nodes": [
     { "host": "192.168.0.10", "control_port": 40000 }
   ],

@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 
 DEFAULT_ROOT = {
-    "verbose": False,
+    "log_level": 0,
 }
 
 DEFAULT_RUN = {
@@ -86,8 +86,11 @@ def load_config(path: str) -> Dict[str, Any]:
     merged_root.update(obj)
     obj = merged_root
 
-    if not isinstance(obj["verbose"], bool):
-        raise ValueError("verbose must be a boolean")
+    log_level = obj.get("log_level")
+    if not isinstance(log_level, int):
+        raise ValueError("log_level must be an integer")
+    if log_level < 0 or log_level > 2:
+        raise ValueError("log_level must be in [0, 2]")
 
     nodes = _require_list(obj, "nodes")
     for i, node in enumerate(nodes):
