@@ -892,7 +892,7 @@ bool HandleLoadWeightsEnd(
         incoming_cleared_before_ack = false;
         resident_ready_before_ack = (storage != nullptr);
 
-        state->registry.DebugPrint();
+        //state->registry.DebugPrint();
         state->active_load = ActiveLoad{};
     }
 
