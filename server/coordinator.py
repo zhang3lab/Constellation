@@ -260,14 +260,14 @@ class Coordinator:
             raise ValueError("target must not be None")
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
-
+     
         expert_id = int(expert_id)
-
+     
         shape_list = [int(x) for x in shape]
         for d in shape_list:
             if d < 0:
                 raise ValueError(f"shape dim must be >= 0, got {d}")
-
+     
         dtype_map = {
             "torch.float32": "float32",
             "torch.float16": "float16",
@@ -277,14 +277,14 @@ class Coordinator:
         dtype = dtype_map.get(str(dtype), str(dtype))
         if not dtype:
             raise ValueError("dtype must be non-empty")
-
+     
         row_block = int(row_block)
         col_block = int(col_block)
         if row_block <= 0 or col_block <= 0:
             raise ValueError(
                 f"row_block/col_block must be > 0, got {row_block}/{col_block}"
             )
-
+     
         begin_msg = {
             "expert_id": expert_id,
             "worker_id": int(target["worker_id"]),
@@ -297,9 +297,12 @@ class Coordinator:
                 "col_block": col_block,
             },
         }
-
+     
+        t0 = time.perf_counter()
         client.send_load_weights_begin(begin_msg)
-
+        t1 = time.perf_counter()
+     
+        chunk_count = 0
         offset = 0
         while offset < len(tensor_bytes):
             chunk = tensor_bytes[offset : offset + chunk_size]
@@ -312,14 +315,39 @@ class Coordinator:
             }
             client.send_load_weights_chunk(chunk_msg)
             offset += len(chunk)
-
+            chunk_count += 1
+     
+        t2 = time.perf_counter()
+     
         end_msg = {
             "expert_id": expert_id,
             "worker_id": int(target["worker_id"]),
             "tensor_kind": tensor_kind,
         }
         client.send_load_weights_end(end_msg)
-
+        t3 = time.perf_counter()
+     
+        begin_ms = (t1 - t0) * 1000.0
+        chunk_total_ms = (t2 - t1) * 1000.0
+        end_ms = (t3 - t2) * 1000.0
+        total_ms = (t3 - t0) * 1000.0
+        chunk_avg_ms = (chunk_total_ms / chunk_count) if chunk_count > 0 else 0.0
+     
+        print(
+            f"[server-send-profile] "
+            f"expert={expert_id} "
+            f"worker={target['worker_id']} "
+            f"kind={tensor_kind.name} "
+            f"bytes={len(tensor_bytes)} "
+            f"chunk_size={chunk_size} "
+            f"chunks={chunk_count} "
+            f"begin_ms={begin_ms:.3f} "
+            f"chunk_total_ms={chunk_total_ms:.3f} "
+            f"chunk_avg_ms={chunk_avg_ms:.3f} "
+            f"end_ms={end_ms:.3f} "
+            f"total_ms={total_ms:.3f}"
+        )
+     
         if verbose:
             print(
                 f"sent tensor bytes to {target['node_instance_id']} "
