@@ -271,6 +271,16 @@ def main() -> None:
     ap.add_argument("--layer-id", type=int, required=True)
     args = ap.parse_args()
 
+    if args.device == "cuda":
+        backbone_device = "cuda:0"
+    else:
+        backbone_device = str(args.device)
+
+    if str(backbone_device).startswith("cuda"):
+        torch.cuda.set_device(backbone_device)
+        _ = torch.empty(1, device=backbone_device)
+        torch.cuda.empty_cache()
+
     with open(args.input_json, "r", encoding="utf-8") as f:
         inp = json.load(f)
 
@@ -309,15 +319,6 @@ def main() -> None:
     cfg = model.config
     num_layers = int(getattr(cfg, "num_hidden_layers"))
     is_last_layer = (target_layer == num_layers - 1)
-    if args.device == "cuda":
-        backbone_device = "cuda:0"
-    else:
-        backbone_device = str(args.device)
-
-    if str(backbone_device).startswith("cuda"):
-        torch.cuda.set_device(backbone_device)
-        _ = torch.empty(1, device=backbone_device)
-        torch.cuda.empty_cache()
 
     backbone_dtype = torch.bfloat16
 
