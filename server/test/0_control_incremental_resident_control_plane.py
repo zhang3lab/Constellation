@@ -93,13 +93,14 @@ def _upload_dummy_expert(
     target: dict,
     expert_id: int,
     chunk_size: int,
+    log_level: int = 0,
 ) -> None:
     tensors = _make_dummy_expert_tensors()
 
     client = NodeClient(
         str(target["host"]),
         int(target["control_port"]),
-        log_level=cfg["log_level"],
+        log_level=log_level,
     )
     with client:
         for t in tensors:
@@ -230,6 +231,7 @@ def main():
             target=target,
             expert_id=int(target["expert_id"]),
             chunk_size=chunk_size,
+            log_level=cfg["log_level"],
         )
 
     coord.discover_nodes()
