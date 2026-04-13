@@ -269,7 +269,11 @@ def main() -> None:
     cfg = model.config
     num_layers = int(getattr(cfg, "num_hidden_layers"))
     is_last_layer = (target_layer == num_layers - 1)
-    backbone_device = "cuda"
+    if args.device == "cuda":
+        backbone_device = "cuda:0"
+    else:
+        backbone_device = str(args.device)
+
     backbone_dtype = torch.bfloat16
 
     try:
@@ -332,6 +336,21 @@ def main() -> None:
                         make_misc_hook("final_hidden")
                     )
                 )
+
+            probe = "model.layers.0.input_layernorm.weight"
+            probe_t = get_attr_by_dotted_name(model, probe)
+            print(
+                "[hf-single-layer] probe",
+                probe,
+                "is_meta=",
+                bool(getattr(probe_t, "is_meta", False)),
+                "device=",
+                getattr(probe_t, "device", None),
+                "dtype=",
+                getattr(probe_t, "dtype", None),
+            )
+            print("[hf-single-layer] backbone_device =", backbone_device)
+            print("[hf-single-layer] ids_t.device =", ids_t.device)
 
             with torch.no_grad():
                 outputs = model(
