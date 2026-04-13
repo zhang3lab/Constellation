@@ -86,23 +86,10 @@ def load_hf_model_skeleton(model_dir: str):
     config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
     config._attn_implementation = "eager"
 
-    try:
-        from accelerate import init_empty_weights
-    except ImportError:
-        init_empty_weights = None
-
-    if init_empty_weights is not None:
-        with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(
-                config,
-                trust_remote_code=True,
-            )
-    else:
-        model = AutoModelForCausalLM.from_config(
-            config,
-            trust_remote_code=True,
-        )
-
+    model = AutoModelForCausalLM.from_config(
+        config,
+        trust_remote_code=True,
+    )
     model.eval()
     return model
 
@@ -410,6 +397,41 @@ def main() -> None:
                 )
 
             with torch.no_grad():
+                embed_w = model.model.embed_tokens.weight
+                print(
+                    "[hf-single-layer] embed weight:",
+                    "is_meta=", bool(getattr(embed_w, "is_meta", False)),
+                    "device=", getattr(embed_w, "device", None),
+                    "dtype=", getattr(embed_w, "dtype", None),
+                    "shape=", tuple(embed_w.shape),
+                )
+                
+                hidden0 = model.model.embed_tokens(ids_t)
+                print(
+                    "[hf-single-layer] hidden0 after embed:",
+                    "is_meta=", bool(getattr(hidden0, "is_meta", False)),
+                    "device=", getattr(hidden0, "device", None),
+                    "dtype=", getattr(hidden0, "dtype", None),
+                    "shape=", tuple(hidden0.shape),
+                )
+                
+                ln0_w = model.model.layers[0].input_layernorm.weight
+                print(
+                    "[hf-single-layer] layer0 ln weight:",
+                    "is_meta=", bool(getattr(ln0_w, "is_meta", False)),
+                    "device=", getattr(ln0_w, "device", None),
+                    "dtype=", getattr(ln0_w, "dtype", None),
+                    "shape=", tuple(ln0_w.shape),
+                )
+                
+                hidden1 = model.model.layers[0].input_layernorm(hidden0)
+                print(
+                    "[hf-single-layer] hidden1 after layer0 input_layernorm:",
+                    "is_meta=", bool(getattr(hidden1, "is_meta", False)),
+                    "device=", getattr(hidden1, "device", None),
+                    "dtype=", getattr(hidden1, "dtype", None),
+                    "shape=", tuple(hidden1.shape),
+                )
                 outputs = model(
                     input_ids=ids_t,
                     use_cache=False,
