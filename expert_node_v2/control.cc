@@ -244,23 +244,28 @@ void RunResidentBuildWorker(ControlState* state) {
         const double ms =
             std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-        std::printf("[%s] background resident build "
-                    "expert=%d worker=%d vendor=%u(%s) "
-                    "incoming_ready_before=%d update_ok=%d cleared=%d "
-                    "incoming_ready_after=%d resident_ready_after=%d "
-                    "queue_size_after_pop=%zu ms=%.3f\n",
-                    state->static_info.node_id.c_str(),
-                    task.expert_id,
-                    task.worker_id,
-                    static_cast<unsigned>(task.vendor),
-                    common::gpu_vendor_name(task.vendor),
-                    static_cast<int>(incoming_ready_before),
-                    static_cast<int>(update_ok),
-                    static_cast<int>(cleared),
-                    static_cast<int>(incoming_ready_after),
-                    static_cast<int>(resident_ready_after),
-                    queue_size_after_pop,
-                    ms);
+        const bool should_log =
+            state->verbose || !update_ok || !cleared || ms >= 20.0;
+
+        if (should_log) {
+            std::printf("[%s] background resident build "
+                        "expert=%d worker=%d vendor=%u(%s) "
+                        "incoming_ready_before=%d update_ok=%d cleared=%d "
+                        "incoming_ready_after=%d resident_ready_after=%d "
+                        "queue_size_after_pop=%zu ms=%.3f\n",
+                        state->static_info.node_id.c_str(),
+                        task.expert_id,
+                        task.worker_id,
+                        static_cast<unsigned>(task.vendor),
+                        common::gpu_vendor_name(task.vendor),
+                        static_cast<int>(incoming_ready_before),
+                        static_cast<int>(update_ok),
+                        static_cast<int>(cleared),
+                        static_cast<int>(incoming_ready_after),
+                        static_cast<int>(resident_ready_after),
+                        queue_size_after_pop,
+                        ms);
+        }
     }
 }
 
@@ -548,7 +553,7 @@ bool HandlePlacementPlan(
 
     const bool ok = SendPlacementAck(fd, req.request_id, ack);
     if (ok) {
-	std::printf("[%s] sent PlacementAck rid=%u drop_non_target_residents=%d dropped=%zu "
+        std::printf("[%s] sent PlacementAck rid=%u drop_non_target_residents=%d dropped=%zu "
                     "had_active_load=%d cleared_active_load=%d "
                     "needs_load=%d all_ready=%d target=%u ready=%u\n",
                     state->static_info.node_id.c_str(),
@@ -910,7 +915,6 @@ bool HandleLoadWeightsEnd(
         incoming_cleared_before_ack = false;
         resident_ready_before_ack = (storage != nullptr);
 
-        //state->registry.DebugPrint();
         state->active_load = ActiveLoad{};
     }
 
