@@ -355,8 +355,10 @@ bool HandleInventoryRequest(
         return false;
     }
 
-    std::printf("[%s] received InventoryRequest rid=%u\n",
-                state->static_info.node_id.c_str(), req.request_id);
+    if (state->verbose) {
+        std::printf("[%s] received InventoryRequest rid=%u\n",
+                    state->static_info.node_id.c_str(), req.request_id);
+    }
 
     std::string body;
     if (!common::EncodeInventoryReplyBody(
@@ -376,7 +378,7 @@ bool HandleInventoryRequest(
     resp.body_len = static_cast<std::uint32_t>(body.size());
 
     bool ok = common::SendMessage(fd, resp, body);
-    if (ok) {
+    if (ok && state->verbose) {
         std::printf("[%s] sent InventoryReply rid=%u body_len=%u\n",
                     state->static_info.node_id.c_str(),
                     resp.request_id,
@@ -400,8 +402,10 @@ bool HandleResidentInventoryRequest(
         return false;
     }
 
-    std::printf("[%s] received ResidentInventoryRequest rid=%u\n",
-                state->static_info.node_id.c_str(), req.request_id);
+    if (state->verbose) {
+        std::printf("[%s] received ResidentInventoryRequest rid=%u\n",
+                    state->static_info.node_id.c_str(), req.request_id);
+    }
 
     std::vector<common::ResidentInventoryWorkerInfo> workers =
         state->registry.BuildResidentInventory(state->static_info);
@@ -411,11 +415,13 @@ bool HandleResidentInventoryRequest(
         total_resident_experts += worker.expert_ids.size();
     }
 
-    std::printf("[%s] ResidentInventoryRequest rid=%u workers=%zu total_resident_experts=%zu\n",
-                state->static_info.node_id.c_str(),
-                req.request_id,
-                workers.size(),
-                total_resident_experts);
+    if (state->verbose) {
+        std::printf("[%s] ResidentInventoryRequest rid=%u workers=%zu total_resident_experts=%zu\n",
+                    state->static_info.node_id.c_str(),
+                    req.request_id,
+                    workers.size(),
+                    total_resident_experts);
+    }
 
     std::string body;
     if (!common::EncodeResidentInventoryReplyBody(workers, &body)) {
@@ -433,7 +439,7 @@ bool HandleResidentInventoryRequest(
     resp.body_len = static_cast<std::uint32_t>(body.size());
 
     const bool ok = common::SendMessage(fd, resp, body);
-    if (ok) {
+    if (ok && state->verbose) {
         std::printf("[%s] sent ResidentInventoryReply rid=%u body_len=%u workers=%zu total_resident_experts=%zu\n",
                     state->static_info.node_id.c_str(),
                     resp.request_id,
@@ -511,11 +517,13 @@ bool HandlePlacementPlan(
         }
     }
 
-    std::printf("[%s] received PlacementPlan rid=%u assignments=%zu drop_non_target_residents=%d\n",
-                state->static_info.node_id.c_str(),
-                req.request_id,
-                plan.assignments.size(),
-                static_cast<int>(plan.drop_non_target_residents));
+    if (state->verbose) {
+        std::printf("[%s] received PlacementPlan rid=%u assignments=%zu drop_non_target_residents=%d\n",
+                    state->static_info.node_id.c_str(),
+                    req.request_id,
+                    plan.assignments.size(),
+                    static_cast<int>(plan.drop_non_target_residents));
+    }
 
     common::PlacementAck ack{};
     std::size_t num_dropped = 0;
@@ -613,22 +621,24 @@ bool HandleLoadWeightsBegin(
     state->active_load.buffer.reserve(static_cast<std::size_t>(msg.total_bytes));
     state->active_load.meta = msg.meta;
 
-    std::printf("[%s] received LoadWeightsBegin rid=%u "
-                "expert=%d worker_id=%d tensor_kind=%s total_bytes=%llu "
-                "shape=[%llu,%llu] dtype=%s\n",
-                state->static_info.node_id.c_str(),
-                req.request_id,
-                msg.expert_id,
-                msg.worker_id,
-                TensorKindName(msg.tensor_kind),
-                static_cast<unsigned long long>(msg.total_bytes),
-                msg.meta.shape.size() > 0 ? static_cast<unsigned long long>(msg.meta.shape[0]) : 0ULL,
-                msg.meta.shape.size() > 1 ? static_cast<unsigned long long>(msg.meta.shape[1]) : 0ULL,
-                msg.meta.dtype.c_str());
+    if (state->verbose) {
+        std::printf("[%s] received LoadWeightsBegin rid=%u "
+                    "expert=%d worker_id=%d tensor_kind=%s total_bytes=%llu "
+                    "shape=[%llu,%llu] dtype=%s\n",
+                    state->static_info.node_id.c_str(),
+                    req.request_id,
+                    msg.expert_id,
+                    msg.worker_id,
+                    TensorKindName(msg.tensor_kind),
+                    static_cast<unsigned long long>(msg.total_bytes),
+                    msg.meta.shape.size() > 0 ? static_cast<unsigned long long>(msg.meta.shape[0]) : 0ULL,
+                    msg.meta.shape.size() > 1 ? static_cast<unsigned long long>(msg.meta.shape[1]) : 0ULL,
+                    msg.meta.dtype.c_str());
+    }
 
     const bool ok =
         SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
-    if (ok) {
+    if (ok && state->verbose) {
         std::printf("[%s] sent LoadWeightsAck rid=%u\n",
                     state->static_info.node_id.c_str(),
                     req.request_id);
@@ -636,6 +646,8 @@ bool HandleLoadWeightsBegin(
     return ok;
 }
 
+// LoadWeightsChunk is one-way: no ack is sent.
+// Integrity is validated at LoadWeightsEnd.
 bool HandleLoadWeightsChunk(
     int fd,
     ControlState* state,
@@ -716,22 +728,28 @@ bool HandleLoadWeightsChunk(
     state->active_load.received_bytes =
         static_cast<std::uint64_t>(state->active_load.buffer.size());
 
-    std::printf("[%s] received LoadWeightsChunk rid=%u "
-                "expert=%d worker_id=%d tensor_kind=%s chunk_offset=%llu chunk_size=%zu "
-                "received=%llu/%llu\n",
-                state->static_info.node_id.c_str(),
-                req.request_id,
-                msg.expert_id,
-                msg.worker_id,
-                TensorKindName(msg.tensor_kind),
-                static_cast<unsigned long long>(msg.chunk_offset),
-                msg.chunk_data.size(),
-                static_cast<unsigned long long>(state->active_load.received_bytes),
-                static_cast<unsigned long long>(state->active_load.total_bytes));
+    if (state->verbose) {
+        std::printf("[%s] received LoadWeightsChunk rid=%u "
+                    "expert=%d worker_id=%d tensor_kind=%s chunk_offset=%llu chunk_size=%zu "
+                    "received=%llu/%llu\n",
+                    state->static_info.node_id.c_str(),
+                    req.request_id,
+                    msg.expert_id,
+                    msg.worker_id,
+                    TensorKindName(msg.tensor_kind),
+                    static_cast<unsigned long long>(msg.chunk_offset),
+                    msg.chunk_data.size(),
+                    static_cast<unsigned long long>(state->active_load.received_bytes),
+                    static_cast<unsigned long long>(state->active_load.total_bytes));
+    }
 
     return true;
 }
 
+// LoadWeightsEnd ack means:
+// 1) this tensor upload is complete and stored as incoming;
+// 2) if the expert becomes complete, resident build may be enqueued;
+// 3) resident readiness is eventual and should be observed via resident inventory.
 bool HandleLoadWeightsEnd(
     int fd,
     ControlState* state,
@@ -896,29 +914,31 @@ bool HandleLoadWeightsEnd(
         state->active_load = ActiveLoad{};
     }
 
-    std::printf("[%s] received LoadWeightsEnd rid=%u "
-                "expert=%d worker_id=%d vendor=%u tensor_kind=%s total_bytes=%llu buffer_size=%zu "
-                "incoming_ready_before_enqueue=%d incoming_ready_after_enqueue=%d "
-                "incoming_cleared_before_ack=%d resident_ready_before_ack=%d "
-		"enqueued_background_build=%d pending_build_queue_size=%zu\n",
-                state->static_info.node_id.c_str(),
-                req.request_id,
-                msg.expert_id,
-                msg.worker_id,
-                static_cast<unsigned>(vendor),
-                TensorKindName(msg.tensor_kind),
-                static_cast<unsigned long long>(total_bytes),
-                final_buffer_size,
-                static_cast<int>(incoming_ready_before_enqueue),
-                static_cast<int>(incoming_ready_after_enqueue),
-                static_cast<int>(incoming_cleared_before_ack),
-                static_cast<int>(resident_ready_before_ack),
-                static_cast<int>(enqueued_background_build),
-                pending_build_queue_size);
+    if (state->verbose) {
+        std::printf("[%s] received LoadWeightsEnd rid=%u "
+                    "expert=%d worker_id=%d vendor=%u tensor_kind=%s total_bytes=%llu buffer_size=%zu "
+                    "incoming_ready_before_enqueue=%d incoming_ready_after_enqueue=%d "
+                    "incoming_cleared_before_ack=%d resident_ready_before_ack=%d "
+                    "enqueued_background_build=%d pending_build_queue_size=%zu\n",
+                    state->static_info.node_id.c_str(),
+                    req.request_id,
+                    msg.expert_id,
+                    msg.worker_id,
+                    static_cast<unsigned>(vendor),
+                    TensorKindName(msg.tensor_kind),
+                    static_cast<unsigned long long>(total_bytes),
+                    final_buffer_size,
+                    static_cast<int>(incoming_ready_before_enqueue),
+                    static_cast<int>(incoming_ready_after_enqueue),
+                    static_cast<int>(incoming_cleared_before_ack),
+                    static_cast<int>(resident_ready_before_ack),
+                    static_cast<int>(enqueued_background_build),
+                    pending_build_queue_size);
+    }
 
     const bool ok =
         SendEmptyAck(fd, common::MsgType::LoadWeightsAck, req.request_id);
-    if (ok) {
+    if (ok && state->verbose) {
         std::printf("[%s] sent LoadWeightsAck rid=%u\n",
                     state->static_info.node_id.c_str(),
                     req.request_id);
@@ -983,7 +1003,7 @@ bool DispatchRequest(
             break;
     }
 
-    if (profile_load_path) {
+    if (profile_load_path && state->verbose) {
         const auto t1 = std::chrono::steady_clock::now();
         const double ms =
             std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -1120,9 +1140,11 @@ void RunControlLoop(ControlState* state) {
             continue;
         }
 
-        std::printf("[%s] control accepted client fd=%d\n",
-                    state->static_info.node_id.c_str(),
-                    fd);
+        if (state->verbose) {
+            std::printf("[%s] control accepted client fd=%d\n",
+                        state->static_info.node_id.c_str(),
+                        fd);
+        }
 
         while (true) {
             if (!HandleOneRequest(fd, state)) {

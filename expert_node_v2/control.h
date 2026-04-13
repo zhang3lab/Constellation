@@ -40,6 +40,7 @@ struct ResidentBuildState {
 };
 
 struct ControlState {
+    bool verbose = false;
     common::NodeStatus node_status = common::NodeStatus::Booting;
     common::StaticNodeInfo static_info;
     ActiveLoad active_load;

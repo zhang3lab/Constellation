@@ -18,6 +18,7 @@ struct MainOptions {
     std::string host = "127.0.0.1";
     int control_port = 40000;
     int worker_base_port = 50000;
+    bool verbose = false;
 };
 
 bool ParseIntArg(const char* s, int* out) {
@@ -40,6 +41,7 @@ void PrintUsage(const char* prog) {
         "  --host <str>              Advertised host (default: 127.0.0.1)\n"
         "  --control-port <int>      Control port (default: 40000)\n"
         "  --worker-base-port <int>  Worker base port (default: 50000)\n"
+        "  --verbose                 Enable verbose control/protocol logs (default: off)\n"
         "  --help                    Show this message\n",
         prog);
 }
@@ -76,6 +78,8 @@ bool ParseMainOptions(int argc, char** argv, MainOptions* opt) {
                 return false;
             }
             ++i;
+        } else if (std::strcmp(a, "--verbose") == 0) {
+            opt->verbose = true;
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", a);
             return false;
@@ -95,6 +99,8 @@ int main(int argc, char** argv) {
     }
 
     ControlState state;
+    state.verbose = opt.verbose;
+
     if (!BuildStaticNodeInfo(
             opt.node_id,
             opt.host,
@@ -105,12 +111,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::printf("[main] node_id=%s host=%s control_port=%d worker_base_port=%d num_gpus=%zu\n",
+    std::printf("[main] node_id=%s host=%s control_port=%d worker_base_port=%d num_gpus=%zu verbose=%d\n",
                 state.static_info.node_id.c_str(),
                 opt.host.c_str(),
                 state.static_info.control_port,
                 opt.worker_base_port,
-                state.static_info.gpus.size());
+                state.static_info.gpus.size(),
+                static_cast<int>(state.verbose));
 
     std::thread control_thread([&state]() {
         RunControlLoop(&state);
