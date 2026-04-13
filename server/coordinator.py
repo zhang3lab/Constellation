@@ -540,8 +540,8 @@ class Coordinator:
                 )
      
                 done_entries += 1
-                if done_entries == 1 or done_entries % 32 == 0 or done_entries == total_entries:
-                    log2(
+                if done_entries == 1 or done_entries % 128 == 0 or done_entries == total_entries:
+                    log1(
                         self.log_level,
                         f"{progress_prefix} {done_entries}/{total_entries} "
                         f"expert={item['expert_id']} tensor={item['tensor_kind_name']}"
