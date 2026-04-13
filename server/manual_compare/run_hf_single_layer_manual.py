@@ -200,6 +200,59 @@ def names_to_target_layer(cfg, resident_expert_ids: list[int] | None, target_lay
     return names
 
 
+def module_names_to_target_layer(cfg, target_layer: int) -> list[str]:
+    names = ["model.embed_tokens"]
+
+    for layer_id in range(target_layer + 1):
+        prefix = f"model.layers.{layer_id}"
+        names.extend(
+            [
+                f"{prefix}.input_layernorm",
+                f"{prefix}.self_attn",
+                f"{prefix}.post_attention_layernorm",
+            ]
+        )
+
+        if is_sparse_layer(cfg, layer_id):
+            names.extend(
+                [
+                    f"{prefix}.mlp.gate",
+                    f"{prefix}.mlp.shared_experts",
+                ]
+            )
+        else:
+            names.append(f"{prefix}.mlp")
+
+    num_layers = int(getattr(cfg, "num_hidden_layers"))
+    if target_layer == num_layers - 1:
+        names.extend(
+            [
+                "model.norm",
+                "lm_head",
+            ]
+        )
+
+    out = []
+    seen = set()
+    for x in names:
+        if x not in seen:
+            out.append(x)
+            seen.add(x)
+    return out
+
+
+def materialize_modules_to_device(
+    model,
+    module_names: list[str],
+    *,
+    device: str,
+) -> None:
+    for name in module_names:
+        mod = get_attr_by_dotted_name(model, name)
+        if isinstance(mod, torch.nn.Module):
+            mod.to_empty(device=device)
+
+
 def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, dst: str | None = None) -> None:
     x = dbg.get(src)
     if isinstance(x, torch.Tensor):
