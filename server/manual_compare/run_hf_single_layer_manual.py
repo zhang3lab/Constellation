@@ -248,6 +248,7 @@ def materialize_modules_to_device(
     device: str,
 ) -> None:
     for name in module_names:
+        print(f"[hf-single-layer] to_empty {name} -> {device}")
         mod = get_attr_by_dotted_name(model, name)
         if isinstance(mod, torch.nn.Module):
             mod.to_empty(device=device)
@@ -312,6 +313,11 @@ def main() -> None:
         backbone_device = "cuda:0"
     else:
         backbone_device = str(args.device)
+
+    if str(backbone_device).startswith("cuda"):
+        torch.cuda.set_device(backbone_device)
+        _ = torch.empty(1, device=backbone_device)
+        torch.cuda.empty_cache()
 
     backbone_dtype = torch.bfloat16
 
