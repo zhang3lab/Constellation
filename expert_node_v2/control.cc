@@ -757,6 +757,7 @@ bool HandleLoadWeightsEnd(
     bool incoming_cleared_before_ack = false;
     bool resident_ready_before_ack = false;
     bool enqueued_background_build = false;
+    std::size_t pending_build_queue_size = 0;
 
     {
         std::unique_lock<std::shared_mutex> lock(state->mu);
@@ -855,8 +856,6 @@ bool HandleLoadWeightsEnd(
         }
 
         incoming_ready_before_enqueue = entry->incoming_ready;
-
-	std::size_t pending_build_queue_size = 0;
 
         if (entry->incoming_ready) {
             if (!EnqueueResidentBuild(
