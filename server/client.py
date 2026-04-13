@@ -38,6 +38,7 @@ class NodeClient:
         if self.sock is not None:
             return
         sock = socket.create_connection((self.host, self.control_port), timeout=self.timeout_sec)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.settimeout(self.timeout_sec)
         self.sock = sock
 
