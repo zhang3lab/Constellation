@@ -389,71 +389,48 @@ def main() -> None:
                     )
                 )
 
-            probe_names = [
-                "model.embed_tokens.weight",
-                "model.layers.0.input_layernorm.weight",
-            ]
-             
-            for probe in probe_names:
-                probe_t = get_attr_by_dotted_name(model, probe)
-                print(
-                    "[hf-single-layer] probe",
-                    probe,
-                    "is_meta=",
-                    bool(getattr(probe_t, "is_meta", False)),
-                    "device=",
-                    getattr(probe_t, "device", None),
-                    "dtype=",
-                    getattr(probe_t, "dtype", None),
-                    "shape=",
-                    tuple(probe_t.shape) if hasattr(probe_t, "shape") else None,
+            with torch.no_grad():
+                hidden_states = model.model.embed_tokens(ids_t)
+
+                position_ids = torch.arange(
+                    hidden_states.shape[1],
+                    device=hidden_states.device,
+                    dtype=torch.long,
+                ).unsqueeze(0)
+
+                hidden_states_list = [hidden_states]
+
+                for i in range(target_layer + 1):
+                    layer_outputs_i = model.model.layers[i](
+                        hidden_states,
+                        attention_mask=None,
+                        position_ids=position_ids,
+                        past_key_value=None,
+                        output_attentions=False,
+                        use_cache=False,
+                    )
+
+                    if isinstance(layer_outputs_i, tuple):
+                        hidden_states = layer_outputs_i[0]
+                    else:
+                        hidden_states = layer_outputs_i
+
+                    hidden_states_list.append(hidden_states)
+
+                class _ManualOutputs:
+                    pass
+
+                outputs = _ManualOutputs()
+                outputs.hidden_states = tuple(
+                    x.detach() for x in hidden_states_list
                 )
 
-            with torch.no_grad():
-                embed_w = model.model.embed_tokens.weight
-                print(
-                    "[hf-single-layer] embed weight:",
-                    "is_meta=", bool(getattr(embed_w, "is_meta", False)),
-                    "device=", getattr(embed_w, "device", None),
-                    "dtype=", getattr(embed_w, "dtype", None),
-                    "shape=", tuple(embed_w.shape),
-                )
-                
-                hidden0 = model.model.embed_tokens(ids_t)
-                print(
-                    "[hf-single-layer] hidden0 after embed:",
-                    "is_meta=", bool(getattr(hidden0, "is_meta", False)),
-                    "device=", getattr(hidden0, "device", None),
-                    "dtype=", getattr(hidden0, "dtype", None),
-                    "shape=", tuple(hidden0.shape),
-                )
-                
-                ln0_w = model.model.layers[0].input_layernorm.weight
-                print(
-                    "[hf-single-layer] layer0 ln weight:",
-                    "is_meta=", bool(getattr(ln0_w, "is_meta", False)),
-                    "device=", getattr(ln0_w, "device", None),
-                    "dtype=", getattr(ln0_w, "dtype", None),
-                    "shape=", tuple(ln0_w.shape),
-                )
-                
-                hidden1 = model.model.layers[0].input_layernorm(hidden0)
-                print(
-                    "[hf-single-layer] hidden1 after layer0 input_layernorm:",
-                    "is_meta=", bool(getattr(hidden1, "is_meta", False)),
-                    "device=", getattr(hidden1, "device", None),
-                    "dtype=", getattr(hidden1, "dtype", None),
-                    "shape=", tuple(hidden1.shape),
-                )
-                outputs = model(
-                    input_ids=ids_t,
-                    use_cache=False,
-                    return_dict=True,
-                    output_hidden_states=True,
-                )
-        finally:
-            for h in hooks:
-                h.remove()
+                if is_last_layer:
+                    final_hidden_manual = model.model.norm(hidden_states)
+                    logits_manual = model.lm_head(final_hidden_manual)
+                    outputs.logits = logits_manual
+                else:
+                    outputs.logits = None
 
         dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
         router_dbg = {}
