@@ -31,23 +31,53 @@ def copy_named_tensor_into_model(
     *,
     loader: DeepseekModelLoader,
     tensor_name: str,
+    device: str,
+    dtype: torch.dtype,
 ) -> None:
+    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(device=device, dtype=dtype)
+
+    parent_name, leaf_name = tensor_name.rsplit(".", 1)
+    parent = get_attr_by_dotted_name(model, parent_name)
     target = get_attr_by_dotted_name(model, tensor_name)
-    loaded = loader.load_tensor_fp32_by_name(tensor_name)
+
     with torch.no_grad():
-        target.copy_(loaded.to(device=target.device, dtype=target.dtype))
+        if isinstance(target, torch.nn.Parameter):
+            if getattr(target, "is_meta", False):
+                new_param = torch.nn.Parameter(
+                    loaded.contiguous(),
+                    requires_grad=False,
+                )
+                setattr(parent, leaf_name, new_param)
+            else:
+                target.copy_(loaded.to(device=target.device, dtype=target.dtype))
+        else:
+            if getattr(target, "is_meta", False):
+                setattr(parent, leaf_name, loaded.contiguous())
+            else:
+                target.copy_(loaded.to(device=target.device, dtype=target.dtype))
 
 
-def load_hf_model(model_dir: str, device: str):
+def load_hf_model_skeleton(model_dir: str):
     config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
     config._attn_implementation = "eager"
-    model = AutoModelForCausalLM.from_pretrained(
-        model_dir,
-        config=config,
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-        device_map=device,
-    )
+
+    try:
+        from accelerate import init_empty_weights
+    except ImportError:
+        init_empty_weights = None
+
+    if init_empty_weights is not None:
+        with init_empty_weights():
+            model = AutoModelForCausalLM.from_config(
+                config,
+                trust_remote_code=True,
+            )
+    else:
+        model = AutoModelForCausalLM.from_config(
+            config,
+            trust_remote_code=True,
+        )
+
     model.eval()
     return model
 
@@ -85,6 +115,14 @@ def is_sparse_layer(cfg, layer_id: int) -> bool:
         and layer_id >= first_dense_replace
         and (layer_id % moe_layer_freq == 0)
     )
+
+
+def is_routed_expert_tensor_name(name: str) -> bool:
+    return ".mlp.experts." in name
+
+
+def is_shared_expert_tensor_name(name: str) -> bool:
+    return ".mlp.shared_experts." in name
 
 
 def names_to_target_layer(cfg, resident_expert_ids: list[int] | None, target_layer: int) -> list[str]:
@@ -202,17 +240,31 @@ def main() -> None:
     print(f"[hf-single-layer] resident_expert_ids={resident_expert_ids}")
 
     loader = DeepseekModelLoader(args.model_dir)
-    model = load_hf_model(args.model_dir, args.device)
+    model = load_hf_model_skeleton(args.model_dir)
     cfg = model.config
     num_layers = int(getattr(cfg, "num_hidden_layers"))
     is_last_layer = (target_layer == num_layers - 1)
+    backbone_device = "cuda"
+    backbone_dtype = torch.bfloat16
 
     try:
         for name in names_to_target_layer(cfg, resident_expert_ids, target_layer):
             print(f"[hf-single-layer] copy {name}")
-            copy_named_tensor_into_model(model, loader=loader, tensor_name=name)
+         
+            # 当前版本先统一把 backbone + shared experts + 当前需要的 routed experts
+            # 都放到同一张 CUDA 上，先把 layer-3 full-256 compare 跑通。
+            target_device = backbone_device
+            target_dtype = backbone_dtype
+         
+            copy_named_tensor_into_model(
+                model,
+                loader=loader,
+                tensor_name=name,
+                device=target_device,
+                dtype=target_dtype,
+            )
 
-        ids_t = torch.tensor([ids], dtype=torch.long, device=next(model.parameters()).device)
+        ids_t = torch.tensor([ids], dtype=torch.long, device=backbone_device)
 
         layer_outputs: dict[str, torch.Tensor] = {}
         misc_outputs: dict[str, torch.Tensor] = {}
