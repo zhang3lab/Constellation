@@ -86,10 +86,23 @@ def load_hf_model_skeleton(model_dir: str):
     config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
     config._attn_implementation = "eager"
 
-    model = AutoModelForCausalLM.from_config(
-        config,
-        trust_remote_code=True,
-    )
+    try:
+        from accelerate import init_empty_weights
+    except ImportError:
+        init_empty_weights = None
+
+    if init_empty_weights is not None:
+        with init_empty_weights():
+            model = AutoModelForCausalLM.from_config(
+                config,
+                trust_remote_code=True,
+            )
+    else:
+        model = AutoModelForCausalLM.from_config(
+            config,
+            trust_remote_code=True,
+        )
+
     model.eval()
     return model
 
