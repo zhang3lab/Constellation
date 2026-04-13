@@ -2,6 +2,8 @@ from pathlib import Path
 import threading
 import traceback
 from typing import Any, Dict, List, Sequence
+
+import time
      
 
 from common.protocol import TensorKind
@@ -411,15 +413,17 @@ class Coordinator:
         target = item["target"]
         tensor_kind = item["tensor_kind_enum"]
         expert_id = int(item["expert_id"])
-
+     
+        t0 = time.perf_counter()
         tensor_bytes, shape, dtype = DeepseekModelLoader.load_tensor_from_open_shard(
             shard_file,
             item["tensor_name"],
         )
-
+        t1 = time.perf_counter()
+     
         row_block = 128
         col_block = 128
-
+     
         self.send_one_tensor_bytes(
             expert_id=expert_id,
             tensor_kind=tensor_kind,
@@ -432,6 +436,23 @@ class Coordinator:
             client=client,
             target=target,
             verbose=False,
+        )
+        t2 = time.perf_counter()
+     
+        load_ms = (t1 - t0) * 1000.0
+        send_ms = (t2 - t1) * 1000.0
+        total_ms = (t2 - t0) * 1000.0
+     
+        print(
+            f"[server-upload-profile] "
+            f"expert={expert_id} "
+            f"worker={target['worker_id']} "
+            f"tensor={tensor_name} "
+            f"kind={tensor_kind.name} "
+            f"bytes={len(tensor_bytes)} "
+            f"load_ms={load_ms:.3f} "
+            f"send_ms={send_ms:.3f} "
+            f"total_ms={total_ms:.3f}"
         )
 
 
