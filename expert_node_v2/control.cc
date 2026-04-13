@@ -245,7 +245,10 @@ void RunResidentBuildWorker(ControlState* state) {
             std::chrono::duration<double, std::milli>(t1 - t0).count();
 
         const bool should_log =
-            state->verbose || !update_ok || !cleared || ms >= 20.0;
+            state->verbose ||
+            !update_ok ||
+            !cleared ||
+            queue_size_after_pop > 0;
 
         if (should_log) {
             std::printf("[%s] background resident build "
