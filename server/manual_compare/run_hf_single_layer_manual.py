@@ -277,21 +277,9 @@ def main() -> None:
     backbone_dtype = torch.bfloat16
 
     try:
-        needed_names = names_to_target_layer(cfg, resident_expert_ids, target_layer)
-
-        for name in needed_names:
-            print(f"[hf-single-layer] copy {name}")
-         
-            target_device = backbone_device
-            target_dtype = backbone_dtype
-         
-            copy_named_tensor_into_model(
-                model,
-                loader=loader,
-                tensor_name=name,
-                device=target_device,
-                dtype=target_dtype,
-            )
+        model.model.to_empty(device=backbone_device)
+        if target_layer == int(getattr(cfg, "num_hidden_layers")) - 1:
+            model.lm_head.to_empty(device=backbone_device)
 
         assert_named_tensors_materialized(model, needed_names)
 
@@ -337,20 +325,25 @@ def main() -> None:
                     )
                 )
 
-            probe = "model.layers.0.input_layernorm.weight"
-            probe_t = get_attr_by_dotted_name(model, probe)
-            print(
-                "[hf-single-layer] probe",
-                probe,
-                "is_meta=",
-                bool(getattr(probe_t, "is_meta", False)),
-                "device=",
-                getattr(probe_t, "device", None),
-                "dtype=",
-                getattr(probe_t, "dtype", None),
-            )
-            print("[hf-single-layer] backbone_device =", backbone_device)
-            print("[hf-single-layer] ids_t.device =", ids_t.device)
+            probe_names = [
+                "model.embed_tokens.weight",
+                "model.layers.0.input_layernorm.weight",
+            ]
+             
+            for probe in probe_names:
+                probe_t = get_attr_by_dotted_name(model, probe)
+                print(
+                    "[hf-single-layer] probe",
+                    probe,
+                    "is_meta=",
+                    bool(getattr(probe_t, "is_meta", False)),
+                    "device=",
+                    getattr(probe_t, "device", None),
+                    "dtype=",
+                    getattr(probe_t, "dtype", None),
+                    "shape=",
+                    tuple(probe_t.shape) if hasattr(probe_t, "shape") else None,
+                )
 
             with torch.no_grad():
                 outputs = model(
