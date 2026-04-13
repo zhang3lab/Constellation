@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -744,32 +745,67 @@ bool DispatchRequest(
 
     auto msg_type = static_cast<common::MsgType>(req.msg_type);
 
+    const bool profile_load_path =
+        msg_type == common::MsgType::LoadWeightsBegin ||
+        msg_type == common::MsgType::LoadWeightsChunk ||
+        msg_type == common::MsgType::LoadWeightsEnd;
+
+    const auto t0 = profile_load_path ? std::chrono::steady_clock::now()
+                                      : std::chrono::steady_clock::time_point{};
+
+    bool ok = false;
     switch (msg_type) {
         case common::MsgType::InventoryRequest:
-            return HandleInventoryRequest(fd, state, req, req_body);
+            ok = HandleInventoryRequest(fd, state, req, req_body);
+            break;
         case common::MsgType::ResidentInventoryRequest:
-            return HandleResidentInventoryRequest(fd, state, req, req_body);
+            ok = HandleResidentInventoryRequest(fd, state, req, req_body);
+            break;
         case common::MsgType::HeartbeatRequest:
-            return HandleHeartbeatRequest(fd, state, req, req_body);
+            ok = HandleHeartbeatRequest(fd, state, req, req_body);
+            break;
         case common::MsgType::PlacementPlan:
-            return HandlePlacementPlan(fd, state, req, req_body);
+            ok = HandlePlacementPlan(fd, state, req, req_body);
+            break;
         case common::MsgType::LoadWeightsBegin:
-            return HandleLoadWeightsBegin(fd, state, req, req_body);
+            ok = HandleLoadWeightsBegin(fd, state, req, req_body);
+            break;
         case common::MsgType::LoadWeightsChunk:
-            return HandleLoadWeightsChunk(fd, state, req, req_body);
+            ok = HandleLoadWeightsChunk(fd, state, req, req_body);
+            break;
         case common::MsgType::LoadWeightsEnd:
-            return HandleLoadWeightsEnd(fd, state, req, req_body);
+            ok = HandleLoadWeightsEnd(fd, state, req, req_body);
+            break;
         case common::MsgType::InferRequest:
             std::fprintf(stderr,
                          "[%s] InferRequest should not be handled on control port\n",
                          state->static_info.node_id.c_str());
-            return false;
+            ok = false;
+            break;
         default:
             std::fprintf(stderr, "[%s] unsupported msg_type: %u\n",
                          state->static_info.node_id.c_str(),
                          req.msg_type);
-            return false;
+            ok = false;
+            break;
     }
+
+    if (profile_load_path) {
+        const auto t1 = std::chrono::steady_clock::now();
+        const double ms =
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        std::fprintf(stderr,
+                     "[dispatch_profile] node=%s msg_type=%u rid=%u body_len=%u ok=%d ms=%.3f\n",
+                     state->static_info.node_id.c_str(),
+                     static_cast<unsigned>(req.msg_type),
+                     req.request_id,
+                     req.body_len,
+                     static_cast<int>(ok),
+                     ms);
+    }
+
+    return ok;
 }
 
 bool HandleOneRequest(
