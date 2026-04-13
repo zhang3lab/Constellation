@@ -686,5 +686,34 @@ class Coordinator:
             for err in errors:
                 print(f"[preload] ERROR\n{err}")
             raise RuntimeError(f"preload failed on {len(errors)} node(s)")
-     
+
+        self.discover_nodes()
+
+        missing_after_preload = [
+            p for p in placements_for_preload
+            if not self._placement_is_already_resident(p)
+        ]
+        loaded_count = len(placements_for_preload) - len(missing_after_preload)
+
+        log1(
+            self.log_level,
+            f"[preload] resident check loaded={loaded_count} "
+            f"expected={len(placements_for_preload)} "
+            f"missing={len(missing_after_preload)}"
+        )
+
+        if missing_after_preload:
+            for p in missing_after_preload[:8]:
+                print(
+                    f"[preload] MISSING "
+                    f"node={p['node_instance_id']} "
+                    f"worker={p['worker_id']} "
+                    f"expert={p['expert_id']}"
+                )
+            raise RuntimeError(
+                f"preload resident check failed: "
+                f"missing={len(missing_after_preload)}/"
+                f"{len(placements_for_preload)}"
+            )
+
         return all_expert_ids

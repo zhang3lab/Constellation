@@ -21,6 +21,7 @@ from server.expert_placement import (
 )
 from server.expert_placement import split_global_expert_id
 from server.fp8_utils import dequant_fp8_weight_blockwise
+from server.logging_utils import log1, log2
 
 
 def infer_one_expert(session, expert_id: int, hidden: np.ndarray):
