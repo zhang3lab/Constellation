@@ -1,5 +1,6 @@
 import json
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Any
 
@@ -112,6 +113,28 @@ class TensorCacheBuilder:
         self.index_path = self.cache_dir / "index.json"
         self.weights_path = self.cache_dir / "weights.bin"
 
+    def _load_one_tensor_bytes(self, model_loader, name: str) -> dict:
+        t = model_loader.load_tensor_fp32_by_name(name)
+        if t.dtype != torch.float32:
+            raise RuntimeError(
+                f"expected float32 tensor after loader decode: {name} dtype={t.dtype}"
+            )
+
+        t = t.detach().contiguous().cpu()
+        arr = t.numpy()
+        if arr.dtype != np.float32:
+            raise RuntimeError(
+                f"expected numpy float32 tensor cache dtype: {name} dtype={arr.dtype}"
+            )
+
+        raw = arr.tobytes(order="C")
+        return {
+            "name": name,
+            "raw": raw,
+            "shape": [int(x) for x in arr.shape],
+            "dtype": _torch_dtype_to_index_string(t.dtype),
+        }
+
     def build_from_names(
         self,
         model_loader,
@@ -119,6 +142,8 @@ class TensorCacheBuilder:
         *,
         max_seq_len: int,
         overwrite: bool = False,
+        num_workers: int = 1,
+        prefetch: int | None = None,
     ) -> None:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -130,6 +155,13 @@ class TensorCacheBuilder:
 
         tensor_names = list(dict.fromkeys(str(x) for x in tensor_names))
 
+        if num_workers <= 0:
+            raise ValueError(f"num_workers must be >= 1, got {num_workers}")
+        if prefetch is None:
+            prefetch = max(1, num_workers * 2)
+        if prefetch <= 0:
+            raise ValueError(f"prefetch must be >= 1, got {prefetch}")
+
         tmp_dir = Path(tempfile.mkdtemp(prefix="tensor_cache_build_", dir=self.cache_dir))
         tmp_weights_path = tmp_dir / "weights.bin"
         tmp_index_path = tmp_dir / "index.json"
@@ -139,33 +171,56 @@ class TensorCacheBuilder:
             offset = 0
 
             with tmp_weights_path.open("wb") as f:
-                for i, name in enumerate(tensor_names):
-                    print(f"[tensor-cache] [{i+1}/{len(tensor_names)}] {name}")
-                    t = model_loader.load_tensor_fp32_by_name(name)
-                    if t.dtype != torch.float32:
-                        raise RuntimeError(
-                            f"expected float32 tensor after loader decode: {name} dtype={t.dtype}"
-                        )
+                if num_workers == 1:
+                    for i, name in enumerate(tensor_names):
+                        print(f"[tensor-cache] [{i+1}/{len(tensor_names)}] {name}")
+                        item = self._load_one_tensor_bytes(model_loader, name)
 
-                    t = t.detach().contiguous().cpu()
-                    arr = t.numpy()
-                    if arr.dtype != np.float32:
-                        raise RuntimeError(
-                            f"expected numpy float32 tensor cache dtype: {name} dtype={arr.dtype}"
-                        )
+                        raw = item["raw"]
+                        nbytes = len(raw)
+                        f.write(raw)
 
-                    raw = arr.tobytes(order="C")
-                    nbytes = len(raw)
+                        index[name] = {
+                            "offset": int(offset),
+                            "nbytes": int(nbytes),
+                            "shape": item["shape"],
+                            "dtype": item["dtype"],
+                        }
+                        offset += nbytes
+                else:
+                    with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                        futures: dict[int, Any] = {}
+                        submit_i = 0
+                        next_i = 0
+                        total = len(tensor_names)
 
-                    f.write(raw)
+                        while next_i < total:
+                            while submit_i < total and len(futures) < prefetch:
+                                name = tensor_names[submit_i]
+                                futures[submit_i] = ex.submit(
+                                    self._load_one_tensor_bytes,
+                                    model_loader,
+                                    name,
+                                )
+                                submit_i += 1
 
-                    index[name] = {
-                        "offset": int(offset),
-                        "nbytes": int(nbytes),
-                        "shape": [int(x) for x in arr.shape],
-                        "dtype": _torch_dtype_to_index_string(t.dtype),
-                    }
-                    offset += nbytes
+                            fut = futures.pop(next_i)
+                            name = tensor_names[next_i]
+                            print(f"[tensor-cache] [{next_i+1}/{total}] {name}")
+
+                            item = fut.result()
+                            raw = item["raw"]
+                            nbytes = len(raw)
+                            f.write(raw)
+
+                            index[name] = {
+                                "offset": int(offset),
+                                "nbytes": int(nbytes),
+                                "shape": item["shape"],
+                                "dtype": item["dtype"],
+                            }
+                            offset += nbytes
+                            next_i += 1
 
                 print(f"[tensor-cache] [synthetic] {FREQ_CIS_TENSOR_NAME}")
                 freq_cis, freq_cis_meta = _build_freq_cis_tensor(
