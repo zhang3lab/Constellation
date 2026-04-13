@@ -52,7 +52,7 @@ def load_hf_model(model_dir: str, device: str):
     return model
 
 
-def load_restricted_expert_ids_from_model_dir(model_dir: str) -> list[int]:
+def load_resident_expert_ids_from_model_dir(model_dir: str) -> list[int] | None:
     config_path = Path(model_dir) / "config.json"
     if not config_path.exists():
         raise RuntimeError(f"missing config.json under {model_dir}")
@@ -60,13 +60,20 @@ def load_restricted_expert_ids_from_model_dir(model_dir: str) -> list[int]:
     with config_path.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    resident = cfg.get("resident_expert_ids")
+    resident = cfg.get("resident_expert_ids", None)
+    if resident is None:
+        return None
+
     if not isinstance(resident, list):
         raise RuntimeError(
-            f"{config_path}: expected resident_expert_ids to be a list, got {type(resident).__name__}"
+            f"{config_path}: expected resident_expert_ids to be a list or absent, got {type(resident).__name__}"
         )
 
-    return sorted({int(x) for x in resident})
+    out = sorted({int(x) for x in resident})
+    if not out:
+        raise RuntimeError(f"{config_path}: resident_expert_ids must not be empty when provided")
+
+    return out
 
 
 def is_sparse_layer(cfg, layer_id: int) -> bool:
@@ -80,7 +87,7 @@ def is_sparse_layer(cfg, layer_id: int) -> bool:
     )
 
 
-def names_to_target_layer(cfg, restricted_local_expert_ids: list[int], target_layer: int) -> list[str]:
+def names_to_target_layer(cfg, resident_expert_ids: list[int] | None, target_layer: int) -> list[str]:
     names = ["model.embed_tokens.weight"]
 
     for layer_id in range(target_layer + 1):
@@ -109,7 +116,13 @@ def names_to_target_layer(cfg, restricted_local_expert_ids: list[int], target_la
                     f"{prefix}.mlp.gate.e_score_correction_bias",
                 ]
             )
-            for expert_id in restricted_local_expert_ids:
+
+            if resident_expert_ids is None:
+                expert_ids = range(int(getattr(cfg, "n_routed_experts")))
+            else:
+                expert_ids = resident_expert_ids
+
+            for expert_id in expert_ids:
                 names.extend(
                     [
                         f"{prefix}.mlp.experts.{expert_id}.gate_proj.weight",
@@ -184,9 +197,9 @@ def main() -> None:
     decoded = tok.decode(ids)
 
     target_layer = int(args.layer_id)
-    restricted_local_expert_ids = load_restricted_expert_ids_from_model_dir(args.model_dir)
+    resident_expert_ids = load_resident_expert_ids_from_model_dir(args.model_dir)
     print(f"[hf-single-layer] target_layer={target_layer}")
-    print(f"[hf-single-layer] restricted_local_expert_ids={restricted_local_expert_ids}")
+    print(f"[hf-single-layer] resident_expert_ids={resident_expert_ids}")
 
     loader = DeepseekModelLoader(args.model_dir)
     model = load_hf_model(args.model_dir, args.device)
@@ -195,7 +208,7 @@ def main() -> None:
     is_last_layer = (target_layer == num_layers - 1)
 
     try:
-        for name in names_to_target_layer(cfg, restricted_local_expert_ids, target_layer):
+        for name in names_to_target_layer(cfg, resident_expert_ids, target_layer):
             print(f"[hf-single-layer] copy {name}")
             copy_named_tensor_into_model(model, loader=loader, tensor_name=name)
 
