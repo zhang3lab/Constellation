@@ -74,6 +74,7 @@ const char* TensorKindName(common::TensorKind k) {
 std::uint64_t MakeExpertWorkerKey(int expert_id, int worker_id) {
     return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(expert_id)) << 32) |
            static_cast<std::uint32_t>(worker_id);
+}
 
 bool EnqueueResidentBuild(
     ControlState* state,
