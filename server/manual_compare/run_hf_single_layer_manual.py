@@ -452,40 +452,6 @@ def main() -> None:
             for h in hooks:
                 h.remove()
 
-        if is_sparse_layer(cfg, target_layer):
-            moe = model.model.layers[target_layer].mlp
-            print("[hf-check] loaded_expert_ids size =", len(moe._loaded_expert_ids))
-            print("[hf-check] contains expert18 =", 18 in moe._loaded_expert_ids)
-        if is_sparse_layer(cfg, target_layer):
-            check_local_eid = 18
-            ex = model.model.layers[target_layer].mlp.experts[check_local_eid]
-         
-            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
-                w = getattr(ex, proj_name).weight
-                is_meta = bool(getattr(w, "is_meta", False))
-         
-                print(
-                    f"[hf-check] expert{check_local_eid} {proj_name}.weight",
-                    "is_meta=", is_meta,
-                    "device=", getattr(w, "device", None),
-                    "dtype=", getattr(w, "dtype", None),
-                    "shape=", tuple(w.shape),
-                )
-         
-                if is_meta:
-                    continue
-         
-                tensor_name = f"model.layers.{target_layer}.mlp.experts.{check_local_eid}.{proj_name}.weight"
-                ref = loader.load_tensor_fp32_by_name(tensor_name).float().cpu()
-                cur = w.detach().float().cpu()
-         
-                diff = (ref - cur).abs()
-                print(
-                    f"[hf-check] compare expert{check_local_eid} {proj_name}",
-                    "max_abs=", float(diff.max().item()),
-                    "mean_abs=", float(diff.mean().item()),
-                )
-
         dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
         router_dbg = {}
         if is_sparse_layer(cfg, target_layer):

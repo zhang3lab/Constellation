@@ -395,9 +395,24 @@ class DeepseekV3MLP(nn.Module):
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
         self.act_fn = ACT2FN[config.hidden_act]
 
-    def forward(self, x):
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-        return down_proj
+    def forward(self, x, debug: bool = False):
+        gate_linear = self.gate_proj(x)
+        up_linear = self.up_proj(x)
+        act = self.act_fn(gate_linear)
+        mul = act * up_linear
+        down_proj = self.down_proj(mul)
+
+        if not debug:
+            return down_proj
+
+        return {
+            "input": x.detach().cpu().clone(),
+            "gate_linear": gate_linear.detach().cpu().clone(),
+            "up_linear": up_linear.detach().cpu().clone(),
+            "act": act.detach().cpu().clone(),
+            "mul": mul.detach().cpu().clone(),
+            "down_proj": down_proj.detach().cpu().clone(),
+        }
 
 
 class MoEGate(nn.Module):
@@ -699,32 +714,8 @@ class DeepseekV3MoE(nn.Module):
      
         expert = self.experts[expert_id]
      
-        if expert_id == 18:
-            print(f"[hf-moe-full] before to_empty expert {expert_id}")
-            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
-                w = getattr(expert, proj_name).weight
-                print(
-                    f"  before {proj_name}",
-                    "is_meta=", bool(getattr(w, "is_meta", False)),
-                    "device=", getattr(w, "device", None),
-                    "dtype=", getattr(w, "dtype", None),
-                    "shape=", tuple(w.shape),
-                )
-     
         self._materialize_single_expert_module(expert_id)
         expert = self.experts[expert_id]
-     
-        if expert_id == 18:
-            print(f"[hf-moe-full] after to_empty expert {expert_id}")
-            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
-                w = getattr(expert, proj_name).weight
-                print(
-                    f"  after to_empty {proj_name}",
-                    "is_meta=", bool(getattr(w, "is_meta", False)),
-                    "device=", getattr(w, "device", None),
-                    "dtype=", getattr(w, "dtype", None),
-                    "shape=", tuple(w.shape),
-                )
      
         for proj_name in ["gate_proj", "up_proj", "down_proj"]:
             tensor_name = (
@@ -737,16 +728,6 @@ class DeepseekV3MoE(nn.Module):
      
             proj = getattr(expert, proj_name)
             weight = proj.weight
-     
-            if expert_id == 18:
-                print(
-                    f"[hf-moe-full] before copy expert {expert_id} {proj_name}",
-                    "target_is_meta=", bool(getattr(weight, "is_meta", False)),
-                    "target_device=", getattr(weight, "device", None),
-                    "loaded_device=", getattr(loaded, "device", None),
-                    "loaded_dtype=", getattr(loaded, "dtype", None),
-                    "loaded_shape=", tuple(loaded.shape),
-                )
      
             if getattr(weight, "is_meta", False):
                 raise RuntimeError(
@@ -762,20 +743,7 @@ class DeepseekV3MoE(nn.Module):
             with torch.no_grad():
                 weight.copy_(loaded)
      
-            if expert_id == 18:
-                w2 = getattr(expert, proj_name).weight
-                print(
-                    f"[hf-moe-full] after copy expert {expert_id} {proj_name}",
-                    "is_meta=", bool(getattr(w2, "is_meta", False)),
-                    "device=", getattr(w2, "device", None),
-                    "dtype=", getattr(w2, "dtype", None),
-                    "shape=", tuple(w2.shape),
-                )
-     
         self._loaded_expert_ids.add(expert_id)
-     
-        if expert_id == 18:
-            print(f"[hf-moe-full] loaded_expert_ids now contains 18? {18 in self._loaded_expert_ids}")
 
     def _evict_loaded_full_experts(self) -> None:
         if self.ep_size != 1:
@@ -936,7 +904,18 @@ class DeepseekV3MoE(nn.Module):
                     f"nan={tok_num_nan} inf={tok_num_inf}"
                 )
 
-            expert_out = expert(tokens_for_this_expert)
+            if i == 18 and int(num_tokens_for_expert) == 1:
+                dbg = expert(tokens_for_this_expert, debug=True)
+                expert_out = dbg["down_proj"]
+                debug_expert_outputs.append(
+                    {
+                        "expert_local_id": int(i),
+                        "num_tokens": int(num_tokens_for_expert),
+                        **dbg,
+                    }
+                )
+            else:
+                expert_out = expert(tokens_for_this_expert)
 
             finite = torch.isfinite(expert_out)
             num_finite = int(finite.sum().item())
