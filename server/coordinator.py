@@ -445,8 +445,6 @@ class Coordinator:
                     )
                 )
      
-            tensor_specs.sort(key=lambda x: (x.shard_path, x.tensor_order))
-     
             manifest.append(
                 BundleSpec(
                     expert_id=expert_id,
