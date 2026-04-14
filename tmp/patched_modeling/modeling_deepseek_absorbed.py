@@ -394,6 +394,7 @@ class DeepseekV3MLP(nn.Module):
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
         self.act_fn = ACT2FN[config.hidden_act]
+        self.last_debug = None
 
     def forward(self, x, debug: bool = False):
         gate_linear = self.gate_proj(x)
@@ -402,17 +403,19 @@ class DeepseekV3MLP(nn.Module):
         mul = act * up_linear
         down_proj = self.down_proj(mul)
 
-        if not debug:
-            return down_proj
+        if debug:
+            self.last_debug = {
+                "input": x.detach().cpu().clone(),
+                "gate_linear": gate_linear.detach().cpu().clone(),
+                "up_linear": up_linear.detach().cpu().clone(),
+                "act": act.detach().cpu().clone(),
+                "mul": mul.detach().cpu().clone(),
+                "down_proj": down_proj.detach().cpu().clone(),
+            }
+        else:
+            self.last_debug = None
 
-        return {
-            "input": x.detach().cpu().clone(),
-            "gate_linear": gate_linear.detach().cpu().clone(),
-            "up_linear": up_linear.detach().cpu().clone(),
-            "act": act.detach().cpu().clone(),
-            "mul": mul.detach().cpu().clone(),
-            "down_proj": down_proj.detach().cpu().clone(),
-        }
+        return down_proj
 
 
 class MoEGate(nn.Module):
@@ -872,6 +875,7 @@ class DeepseekV3MoE(nn.Module):
                 for expert_id in active_expert_ids:
                     self._ensure_full_expert_loaded(int(expert_id))
 
+        debug_target_expert = None
         debug_expert_outputs = []
         outputs = []
         start_idx = 0
@@ -905,21 +909,18 @@ class DeepseekV3MoE(nn.Module):
                 )
 
             if i == 18 and int(num_tokens_for_expert) == 1:
-                dbg = expert(tokens_for_this_expert, debug=True)
-                expert_out = dbg["down_proj"]
-                debug_item = {
-                    "expert_local_id": int(i),
-                    "num_tokens": int(num_tokens_for_expert),
-                    **dbg,
-                }
-            else:
-                expert_out = expert(tokens_for_this_expert)
+                expert_out = expert(tokens_for_this_expert, debug=True)
                 debug_item = {
                     "expert_local_id": int(i),
                     "num_tokens": int(num_tokens_for_expert),
                     "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
                     "expert_out": expert_out.detach().cpu().clone(),
                 }
+                if isinstance(expert.last_debug, dict):
+                    debug_item.update(expert.last_debug)
+                debug_expert_outputs.append(debug_item)
+            else:
+                expert_out = expert(tokens_for_this_expert)
 
             finite = torch.isfinite(expert_out)
             num_finite = int(finite.sum().item())
@@ -941,7 +942,6 @@ class DeepseekV3MoE(nn.Module):
                     f"nan={num_nan} inf={num_inf}"
                 )
 
-            debug_expert_outputs.append(debug_item)
             outputs.append(expert_out)
             start_idx = end_idx
 
@@ -1011,6 +1011,7 @@ class DeepseekV3MoE(nn.Module):
             "restored_by_token": restored_by_token.detach().cpu().clone(),
             "weighted_by_token": weighted_by_token.detach().cpu().clone(),
             "final_out": final_out.detach().cpu().clone(),
+            "debug_expert_outputs": debug_expert_outputs,
         }
 
         return final_out
