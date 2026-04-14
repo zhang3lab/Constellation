@@ -53,8 +53,8 @@ def main():
         names,
         max_seq_len=max_seq_len,
         overwrite=args.overwrite,
-        num_workers=8,
-        prefetch=8,
+        num_workers=64,
+        prefetch=128,
     )
 
     print("[tensor-cache] done")
