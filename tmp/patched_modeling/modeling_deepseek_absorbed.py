@@ -688,19 +688,44 @@ class DeepseekV3MoE(nn.Module):
 
     def _ensure_full_expert_loaded(self, expert_id: int) -> None:
         expert_id = int(expert_id)
-        print(f"[hf-moe-full] ensure expert {expert_id}")
         if expert_id in self._loaded_expert_ids:
             return
-
+     
         if not self._manual_lazy_loading_enabled():
             raise RuntimeError(
                 "full-mode routed expert lazy loading requires "
                 "layer_id/_manual_loader/_manual_device/_manual_dtype to be set"
             )
-
+     
+        expert = self.experts[expert_id]
+     
+        if expert_id == 18:
+            print(f"[hf-moe-full] before to_empty expert {expert_id}")
+            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+                w = getattr(expert, proj_name).weight
+                print(
+                    f"  before {proj_name}",
+                    "is_meta=", bool(getattr(w, "is_meta", False)),
+                    "device=", getattr(w, "device", None),
+                    "dtype=", getattr(w, "dtype", None),
+                    "shape=", tuple(w.shape),
+                )
+     
         self._materialize_single_expert_module(expert_id)
         expert = self.experts[expert_id]
-
+     
+        if expert_id == 18:
+            print(f"[hf-moe-full] after to_empty expert {expert_id}")
+            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+                w = getattr(expert, proj_name).weight
+                print(
+                    f"  after to_empty {proj_name}",
+                    "is_meta=", bool(getattr(w, "is_meta", False)),
+                    "device=", getattr(w, "device", None),
+                    "dtype=", getattr(w, "dtype", None),
+                    "shape=", tuple(w.shape),
+                )
+     
         for proj_name in ["gate_proj", "up_proj", "down_proj"]:
             tensor_name = (
                 f"model.layers.{int(self.layer_id)}.mlp.experts.{expert_id}.{proj_name}.weight"
@@ -709,49 +734,48 @@ class DeepseekV3MoE(nn.Module):
                 device=self._manual_device,
                 dtype=self._manual_dtype,
             ).contiguous()
-
+     
             proj = getattr(expert, proj_name)
             weight = proj.weight
+     
+            if expert_id == 18:
+                print(
+                    f"[hf-moe-full] before copy expert {expert_id} {proj_name}",
+                    "target_is_meta=", bool(getattr(weight, "is_meta", False)),
+                    "target_device=", getattr(weight, "device", None),
+                    "loaded_device=", getattr(loaded, "device", None),
+                    "loaded_dtype=", getattr(loaded, "dtype", None),
+                    "loaded_shape=", tuple(loaded.shape),
+                )
+     
             if getattr(weight, "is_meta", False):
                 raise RuntimeError(
                     f"{tensor_name}: weight is still meta after materializing expert module"
                 )
-
+     
             if tuple(weight.shape) != tuple(loaded.shape):
                 raise RuntimeError(
                     f"{tensor_name}: shape mismatch "
                     f"target={tuple(weight.shape)} loaded={tuple(loaded.shape)}"
                 )
-
-            if not torch.isfinite(loaded).all():
-                num_nan = int(torch.isnan(loaded).sum().item())
-                num_inf = int(torch.isinf(loaded).sum().item())
-                raise RuntimeError(
-                    f"{tensor_name}: loaded weight is not finite "
-                    f"(nan={num_nan}, inf={num_inf})"
-                )
-             
+     
             with torch.no_grad():
                 weight.copy_(loaded)
-             
-            if not torch.isfinite(weight).all():
-                num_nan = int(torch.isnan(weight).sum().item())
-                num_inf = int(torch.isinf(weight).sum().item())
-                raise RuntimeError(
-                    f"{tensor_name}: target weight after copy is not finite "
-                    f"(nan={num_nan}, inf={num_inf})"
+     
+            if expert_id == 18:
+                w2 = getattr(expert, proj_name).weight
+                print(
+                    f"[hf-moe-full] after copy expert {expert_id} {proj_name}",
+                    "is_meta=", bool(getattr(w2, "is_meta", False)),
+                    "device=", getattr(w2, "device", None),
+                    "dtype=", getattr(w2, "dtype", None),
+                    "shape=", tuple(w2.shape),
                 )
-
-        for proj_name in ["gate_proj", "up_proj", "down_proj"]:
-            w = getattr(expert, proj_name).weight
-            print(
-                f"[hf-moe-full] loaded expert {expert_id} {proj_name}",
-                "is_meta=", bool(getattr(w, "is_meta", False)),
-                "device=", getattr(w, "device", None),
-                "dtype=", getattr(w, "dtype", None),
-                "shape=", tuple(w.shape),
-            )
+     
         self._loaded_expert_ids.add(expert_id)
+     
+        if expert_id == 18:
+            print(f"[hf-moe-full] loaded_expert_ids now contains 18? {18 in self._loaded_expert_ids}")
 
     def _evict_loaded_full_experts(self) -> None:
         if self.ep_size != 1:

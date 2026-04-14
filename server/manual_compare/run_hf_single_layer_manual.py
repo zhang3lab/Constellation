@@ -436,6 +436,10 @@ def main() -> None:
                 h.remove()
 
         if is_sparse_layer(cfg, target_layer):
+            moe = model.model.layers[target_layer].mlp
+            print("[hf-check] loaded_expert_ids size =", len(moe._loaded_expert_ids))
+            print("[hf-check] contains expert18 =", 18 in moe._loaded_expert_ids)
+        if is_sparse_layer(cfg, target_layer):
             check_local_eid = 18
             ex = model.model.layers[target_layer].mlp.experts[check_local_eid]
          
