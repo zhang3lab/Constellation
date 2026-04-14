@@ -573,7 +573,7 @@ class Coordinator:
         manifest_items: List[BundleSpec],
         chunk_size: int,
         progress_prefix: str,
-        queue_size: int = 2,
+        queue_size: int = 1,
     ):
         if not manifest_items:
             return
@@ -604,6 +604,10 @@ class Coordinator:
                 if not error_box:
                     error_box.append(exc)
      
+        def get_error() -> Optional[BaseException]:
+            with sent_lock:
+                return error_box[0] if error_box else None
+     
         def sender_main() -> None:
             nonlocal sent_entries
             client = None
@@ -618,7 +622,15 @@ class Coordinator:
                 )
      
                 while True:
-                    item = q.get()
+                    err = get_error()
+                    if err is not None:
+                        break
+     
+                    try:
+                        item = q.get(timeout=0.5)
+                    except queue.Empty:
+                        continue
+     
                     if item is sentinel:
                         break
      
@@ -643,7 +655,10 @@ class Coordinator:
                 record_error(exc)
             finally:
                 if client is not None:
-                    client.__exit__(None, None, None)
+                    try:
+                        client.__exit__(None, None, None)
+                    except Exception:
+                        pass
      
         sender = threading.Thread(
             target=sender_main,
@@ -653,15 +668,41 @@ class Coordinator:
      
         try:
             for idx, bundle_spec in enumerate(manifest_items, start=1):
-                if error_box:
+                err = get_error()
+                if err is not None:
                     break
+     
+                if not sender.is_alive():
+                    raise RuntimeError(
+                        f"{progress_prefix} sender thread died unexpectedly "
+                        f"before expert={bundle_spec.expert_id}"
+                    )
      
                 loaded_bundle = self.load_one_bundle(
                     model_loader=model_loader,
                     bundle_spec=bundle_spec,
                 )
      
-                q.put(loaded_bundle)
+                while True:
+                    err = get_error()
+                    if err is not None:
+                        break
+     
+                    if not sender.is_alive():
+                        raise RuntimeError(
+                            f"{progress_prefix} sender thread died unexpectedly "
+                            f"while enqueueing expert={bundle_spec.expert_id}"
+                        )
+     
+                    try:
+                        q.put(loaded_bundle, timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
+     
+                err = get_error()
+                if err is not None:
+                    break
      
                 if idx == 1 or idx % 32 == 0 or idx == total_entries:
                     log1(
@@ -673,19 +714,23 @@ class Coordinator:
             record_error(exc)
             raise
         finally:
-            while True:
+            while sender.is_alive():
                 try:
-                    q.put(sentinel, timeout=0.1)
+                    q.put(sentinel, timeout=0.5)
                     break
                 except queue.Full:
-                    if not sender.is_alive():
+                    if get_error() is not None:
                         break
                     continue
      
-            sender.join()
+            sender.join(timeout=5.0)
      
-        if error_box:
-            raise error_box[0]
+        err = get_error()
+        if err is not None:
+            raise err
+     
+        if sender.is_alive():
+            raise RuntimeError(f"{progress_prefix} sender thread did not exit cleanly")
 
 
     def _placement_is_already_resident(self, placement: Dict[str, Any]) -> bool:
