@@ -441,13 +441,18 @@ def main() -> None:
          
             for proj_name in ["gate_proj", "up_proj", "down_proj"]:
                 w = getattr(ex, proj_name).weight
+                is_meta = bool(getattr(w, "is_meta", False))
+         
                 print(
                     f"[hf-check] expert{check_local_eid} {proj_name}.weight",
-                    "is_meta=", bool(getattr(w, "is_meta", False)),
+                    "is_meta=", is_meta,
                     "device=", getattr(w, "device", None),
                     "dtype=", getattr(w, "dtype", None),
-                    "finite=", int(torch.isfinite(w).sum().item()), "/", int(w.numel()),
+                    "shape=", tuple(w.shape),
                 )
+         
+                if is_meta:
+                    continue
          
                 tensor_name = f"model.layers.{target_layer}.mlp.experts.{check_local_eid}.{proj_name}.weight"
                 ref = loader.load_tensor_fp32_by_name(tensor_name).float().cpu()

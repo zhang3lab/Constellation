@@ -688,6 +688,7 @@ class DeepseekV3MoE(nn.Module):
 
     def _ensure_full_expert_loaded(self, expert_id: int) -> None:
         expert_id = int(expert_id)
+        print(f"[hf-moe-full] ensure expert {expert_id}")
         if expert_id in self._loaded_expert_ids:
             return
 
@@ -741,6 +742,15 @@ class DeepseekV3MoE(nn.Module):
                     f"(nan={num_nan}, inf={num_inf})"
                 )
 
+        for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+            w = getattr(expert, proj_name).weight
+            print(
+                f"[hf-moe-full] loaded expert {expert_id} {proj_name}",
+                "is_meta=", bool(getattr(w, "is_meta", False)),
+                "device=", getattr(w, "device", None),
+                "dtype=", getattr(w, "dtype", None),
+                "shape=", tuple(w.shape),
+            )
         self._loaded_expert_ids.add(expert_id)
 
     def _evict_loaded_full_experts(self) -> None:
