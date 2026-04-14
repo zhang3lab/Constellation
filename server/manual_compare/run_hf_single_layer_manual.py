@@ -323,6 +323,23 @@ def main() -> None:
     backbone_dtype = torch.bfloat16
 
     try:
+        for layer_id in range(target_layer + 1):
+            if is_sparse_layer(cfg, layer_id):
+                moe = model.model.layers[layer_id].mlp
+                moe.layer_id = int(layer_id)
+                moe._manual_loader = loader
+                moe._manual_device = backbone_device
+                moe._manual_dtype = backbone_dtype
+                moe._loaded_expert_ids = set()
+
+                print(
+                    f"[hf-bind] layer={layer_id}",
+                    "layer_id=", moe.layer_id,
+                    "loader_is_none=", moe._manual_loader is None,
+                    "device=", moe._manual_device,
+                    "dtype=", moe._manual_dtype,
+                )
+
         needed_module_names = module_names_to_target_layer(cfg, target_layer)
         materialize_modules_to_device(
             model,
