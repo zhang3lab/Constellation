@@ -407,15 +407,16 @@ def main() -> None:
     print(f"[hf-single-layer] target_layer={target_layer}")
     print(f"[hf-single-layer] resident_expert_ids={resident_expert_ids}")
 
+    loader = DeepseekModelLoader(args.model_dir)
+    model = load_hf_model_skeleton(args.model_dir)
+    cfg = model.config
+
     layer_to_device = build_layer_to_device_map(target_layer, devices)
     placements = module_placements_to_target_layer(cfg, target_layer, devices)
 
     print("[hf-single-layer] devices =", devices)
     print("[hf-single-layer] layer_to_device =", layer_to_device)
 
-    loader = DeepseekModelLoader(args.model_dir)
-    model = load_hf_model_skeleton(args.model_dir)
-    cfg = model.config
     num_layers = int(getattr(cfg, "num_hidden_layers"))
     is_last_layer = (target_layer == num_layers - 1)
 
