@@ -722,8 +722,24 @@ class DeepseekV3MoE(nn.Module):
                     f"target={tuple(weight.shape)} loaded={tuple(loaded.shape)}"
                 )
 
+            if not torch.isfinite(loaded).all():
+                num_nan = int(torch.isnan(loaded).sum().item())
+                num_inf = int(torch.isinf(loaded).sum().item())
+                raise RuntimeError(
+                    f"{tensor_name}: loaded weight is not finite "
+                    f"(nan={num_nan}, inf={num_inf})"
+                )
+             
             with torch.no_grad():
                 weight.copy_(loaded)
+             
+            if not torch.isfinite(weight).all():
+                num_nan = int(torch.isnan(weight).sum().item())
+                num_inf = int(torch.isinf(weight).sum().item())
+                raise RuntimeError(
+                    f"{tensor_name}: target weight after copy is not finite "
+                    f"(nan={num_nan}, inf={num_inf})"
+                )
 
         self._loaded_expert_ids.add(expert_id)
 
@@ -872,7 +888,41 @@ class DeepseekV3MoE(nn.Module):
                 expert = self.experts[i]
 
             tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
+
+            tok_finite = torch.isfinite(tokens_for_this_expert)
+            tok_num_finite = int(tok_finite.sum().item())
+            tok_num_total = int(tokens_for_this_expert.numel())
+            tok_num_nan = int(torch.isnan(tokens_for_this_expert).sum().item())
+            tok_num_inf = int(torch.isinf(tokens_for_this_expert).sum().item())
+
+            if tok_num_finite != tok_num_total:
+                raise RuntimeError(
+                    f"HF full-mode MoE expert input not finite for local expert {i}: "
+                    f"nan={tok_num_nan} inf={tok_num_inf}"
+                )
+
             expert_out = expert(tokens_for_this_expert)
+
+            finite = torch.isfinite(expert_out)
+            num_finite = int(finite.sum().item())
+            num_total = int(expert_out.numel())
+            num_nan = int(torch.isnan(expert_out).sum().item())
+            num_inf = int(torch.isinf(expert_out).sum().item())
+
+            if num_finite != num_total:
+                print(
+                    f"[hf-moe-full] bad expert_out: "
+                    f"expert_local_id={i} "
+                    f"tokens={int(num_tokens_for_expert)} "
+                    f"shape={tuple(expert_out.shape)} "
+                    f"finite={num_finite}/{num_total} "
+                    f"nan={num_nan} inf={num_inf}"
+                )
+                raise RuntimeError(
+                    f"HF full-mode MoE expert output not finite for local expert {i}: "
+                    f"nan={num_nan} inf={num_inf}"
+                )
+
             outputs.append(expert_out)
             start_idx = end_idx
 
