@@ -186,18 +186,28 @@ class Coordinator:
             )
 
 
-    def build_placement(
+    def discover_and_build_placement(
         self,
-        num_experts: int,
+        *,
+        expert_ids: List[int],
         expert_mem_bytes: int,
         memory_utilization: float = 0.9,
     ) -> None:
+        if len(set(expert_ids)) != len(expert_ids):
+            raise RuntimeError("expert_ids contains duplicates")
+     
+        self.discover_nodes()
+        self.print_summary()
+     
         self.placements = build_balanced_placement(
             gpu_inventory=self.gpu_inventory,
-            num_experts=num_experts,
+            expert_ids=expert_ids,
             expert_mem_bytes=expert_mem_bytes,
             memory_utilization=memory_utilization,
         )
+     
+        if self.log_level >= 2:
+            self.print_placement()
 
 
     def print_placement(self) -> None:

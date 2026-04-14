@@ -10,6 +10,8 @@ def build_restricted_global_expert_ids(run_cfg):
     restricted_local_ids = [int(x) for x in restricted_local_ids]
     if not restricted_local_ids:
         raise RuntimeError("restricted_expert_ids is provided but empty")
+    if len(set(restricted_local_ids)) != len(restricted_local_ids):
+        raise RuntimeError("restricted_expert_ids contains duplicates")
 
     experts_per_layer = int(run_cfg["experts_per_layer"])
     sparse_layer_start = int(run_cfg["sparse_layer_start"])
@@ -54,35 +56,15 @@ def setup_control_plane(coord, cfg):
 
     preload_expert_ids = build_restricted_global_expert_ids(run_cfg)
     if preload_expert_ids is not None:
-        preload_expert_ids = [int(x) for x in preload_expert_ids]
-        if len(set(preload_expert_ids)) != len(preload_expert_ids):
-            raise RuntimeError("preload_expert_ids contains duplicates")
-        num_experts = len(preload_expert_ids)
+        expert_ids = preload_expert_ids
     else:
-        num_experts = int(run_cfg["num_experts"])
+        expert_ids = list(range(int(run_cfg["num_experts"])))
 
-    # Discover current inventory first. This now also fetches resident inventory,
-    # which will be used for incremental preload diffing later.
-    coord.discover_nodes()
-    coord.print_summary()
-
-    coord.build_placement(
-        num_experts=num_experts,
+    coord.discover_and_build_placement(
+        expert_ids=expert_ids,
         expert_mem_bytes=expert_mem_bytes,
         memory_utilization=memory_utilization,
     )
-
-    if preload_expert_ids is not None:
-        if len(coord.placements) != len(preload_expert_ids):
-            raise RuntimeError(
-                f"placement size mismatch: placements={len(coord.placements)} "
-                f"restricted={len(preload_expert_ids)}"
-            )
-        for p, eid in zip(coord.placements, preload_expert_ids):
-            p["expert_id"] = int(eid)
-
-    if cfg["log_level"] >= 2:
-        coord.print_placement()
 
     drop_non_target_residents = bool(run_cfg.get("drop_non_target_residents", False))
     placement_acks = coord.send_placement_plan(
