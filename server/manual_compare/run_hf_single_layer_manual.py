@@ -501,6 +501,33 @@ def main() -> None:
             save_tensor_if_present(saved, outdir, dbg, "layer_output", f"{prefix}_output.pt")
             aux_keys = sorted(dbg.keys())
 
+        expert_dbg = dbg.get("debug_expert_outputs")
+        if isinstance(expert_dbg, list):
+            meta = []
+            for j, item in enumerate(expert_dbg):
+                if not isinstance(item, dict):
+                    continue
+                meta.append(
+                    {
+                        "expert_local_id": int(item["expert_local_id"]),
+                        "num_tokens": int(item["num_tokens"]),
+                    }
+                )
+                if "tokens_for_this_expert" in item:
+                    p = outdir / f"{prefix}_hf_expert{j}_tokens.pt"
+                    torch.save(item["tokens_for_this_expert"], p)
+                    saved.append(str(p))
+                if "expert_out" in item:
+                    p = outdir / f"{prefix}_hf_expert{j}_output.pt"
+                    torch.save(item["expert_out"], p)
+                    saved.append(str(p))
+         
+            p = outdir / f"{prefix}_hf_expert_outputs_meta.json"
+            with p.open("w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            saved.append(str(p))
+
         if is_last_layer:
             final_hidden = misc_outputs.get("final_hidden")
             if final_hidden is None:

@@ -870,6 +870,7 @@ class DeepseekV3MoE(nn.Module):
                 for expert_id in active_expert_ids:
                     self._ensure_full_expert_loaded(int(expert_id))
 
+        debug_expert_outputs = []
         outputs = []
         start_idx = 0
 
@@ -923,6 +924,18 @@ class DeepseekV3MoE(nn.Module):
                     f"nan={num_nan} inf={num_inf}"
                 )
 
+            tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
+            expert_out = expert(tokens_for_this_expert)
+
+            debug_expert_outputs.append(
+                {
+                    "expert_local_id": int(i),
+                    "num_tokens": int(num_tokens_for_expert),
+                    "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
+                    "expert_out": expert_out.detach().cpu().clone(),
+                }
+            )
+
             outputs.append(expert_out)
             start_idx = end_idx
 
@@ -963,6 +976,7 @@ class DeepseekV3MoE(nn.Module):
                 "restored_by_token": restored_by_token.detach().cpu().clone(),
                 "weighted_by_token": weighted_by_token.detach().cpu().clone(),
                 "final_out": final_out.detach().cpu().clone(),
+                "debug_expert_outputs": debug_expert_outputs,
             }
             return final_out
 
