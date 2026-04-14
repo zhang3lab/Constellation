@@ -42,7 +42,8 @@ struct HostTensorV2 {
     bool ready = false;
 
     void clear() {
-        bytes.clear();
+        std::vector<std::uint8_t> empty;
+        bytes.swap(empty);
         meta = common::TensorMeta{};
         ready = false;
     }
