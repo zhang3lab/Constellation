@@ -26,6 +26,68 @@ def get_attr_by_dotted_name(obj, dotted_name: str):
     return cur
 
 
+def build_layer_to_device_map(
+    target_layer: int,
+    devices: list[str],
+) -> dict[int, str]:
+    if target_layer < 0:
+        raise ValueError(f"target_layer must be >= 0, got {target_layer}")
+    if not devices:
+        raise ValueError("devices must be non-empty")
+
+    num_layers = target_layer + 1
+    num_devices = len(devices)
+    out: dict[int, str] = {}
+
+    for layer_id in range(num_layers):
+        dev_idx = (layer_id * num_devices) // num_layers
+        out[layer_id] = str(devices[dev_idx])
+
+    return out
+
+
+def target_dtype_for_tensor_name(
+    tensor_name: str,
+    default_dtype: torch.dtype,
+) -> torch.dtype:
+    if tensor_name.endswith(".weight_scale_inv"):
+        return torch.float32
+    if tensor_name.endswith(".mlp.gate.e_score_correction_bias"):
+        return torch.float32
+    return default_dtype
+
+
+def module_placements_to_target_layer(
+    cfg,
+    target_layer: int,
+    devices: list[str],
+) -> list[tuple[str, str]]:
+    layer_to_device = build_layer_to_device_map(target_layer, devices)
+    out: list[tuple[str, str]] = []
+
+    out.append(("model.embed_tokens", devices[0]))
+
+    for layer_id in range(target_layer + 1):
+        dev = layer_to_device[layer_id]
+        prefix = f"model.layers.{layer_id}"
+
+        out.append((f"{prefix}.input_layernorm", dev))
+        out.append((f"{prefix}.self_attn", dev))
+        out.append((f"{prefix}.post_attention_layernorm", dev))
+
+        if is_sparse_layer(cfg, layer_id):
+            out.append((f"{prefix}.mlp.gate", dev))
+            out.append((f"{prefix}.mlp.shared_experts", dev))
+        else:
+            out.append((f"{prefix}.mlp", dev))
+
+    if target_layer == int(getattr(cfg, "num_hidden_layers")) - 1:
+        out.append(("model.norm", devices[-1]))
+        out.append(("lm_head", devices[-1]))
+
+    return out
+
+
 def assert_named_tensors_materialized(
     model,
     tensor_names: list[str],
@@ -60,25 +122,39 @@ def copy_named_tensor_into_model(
     *,
     loader: DeepseekModelLoader,
     tensor_name: str,
-    device: str,
     dtype: torch.dtype,
 ) -> None:
     target_dtype = target_dtype_for_tensor_name(tensor_name, dtype)
-    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(
-        device=device,
-        dtype=target_dtype,
-    ).contiguous()
 
     parent_name, leaf_name = tensor_name.rsplit(".", 1)
     parent = get_attr_by_dotted_name(model, parent_name)
     target = get_attr_by_dotted_name(model, tensor_name)
+
+    if isinstance(target, torch.nn.Parameter):
+        target_device = str(target.device)
+        requires_grad = target.requires_grad
+    elif isinstance(target, torch.Tensor):
+        target_device = str(target.device)
+        requires_grad = False
+    else:
+        raise TypeError(f"{tensor_name}: unsupported target type {type(target).__name__}")
+
+    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(
+        device=target_device,
+        dtype=target_dtype,
+    ).contiguous()
+
+    print(
+        f"[hf-single-layer] copy {tensor_name} -> "
+        f"device={target_device} dtype={target_dtype}"
+    )
 
     with torch.no_grad():
         if isinstance(target, torch.nn.Parameter):
             if getattr(target, "is_meta", False) or target.dtype != target_dtype:
                 new_param = torch.nn.Parameter(
                     loaded,
-                    requires_grad=target.requires_grad,
+                    requires_grad=requires_grad,
                 )
                 if not hasattr(parent, "_parameters") or leaf_name not in parent._parameters:
                     raise RuntimeError(
@@ -215,55 +291,13 @@ def names_to_target_layer(cfg, resident_expert_ids: list[int] | None, target_lay
     return names
 
 
-def module_names_to_target_layer(cfg, target_layer: int) -> list[str]:
-    names = ["model.embed_tokens"]
-
-    for layer_id in range(target_layer + 1):
-        prefix = f"model.layers.{layer_id}"
-        names.extend(
-            [
-                f"{prefix}.input_layernorm",
-                f"{prefix}.self_attn",
-                f"{prefix}.post_attention_layernorm",
-            ]
-        )
-
-        if is_sparse_layer(cfg, layer_id):
-            names.extend(
-                [
-                    f"{prefix}.mlp.gate",
-                    f"{prefix}.mlp.shared_experts",
-                ]
-            )
-        else:
-            names.append(f"{prefix}.mlp")
-
-    num_layers = int(getattr(cfg, "num_hidden_layers"))
-    if target_layer == num_layers - 1:
-        names.extend(
-            [
-                "model.norm",
-                "lm_head",
-            ]
-        )
-
-    out = []
-    seen = set()
-    for x in names:
-        if x not in seen:
-            out.append(x)
-            seen.add(x)
-    return out
-
-
-def materialize_modules_to_device(
+def materialize_modules_with_placements(
     model,
-    module_names: list[str],
+    placements: list[tuple[str, str]],
     *,
-    device: str,
     default_dtype: torch.dtype,
 ) -> None:
-    for name in module_names:
+    for name, device in placements:
         print(f"[hf-single-layer] to_empty {name} -> {device}")
         mod = get_attr_by_dotted_name(model, name)
         if not isinstance(mod, torch.nn.Module):
@@ -271,7 +305,7 @@ def materialize_modules_to_device(
 
         mod.to_empty(device=device)
 
-        # Fix up selected params/buffers that should stay fp32 according to original model dtype.
+        # Recreate selected params/buffers with original fp32 dtype when needed.
         for param_name, param in list(mod.named_parameters(recurse=True)):
             full_name = f"{name}.{param_name}"
             want_dtype = target_dtype_for_tensor_name(full_name, default_dtype)
@@ -285,10 +319,6 @@ def materialize_modules_to_device(
 
             parent_rel, leaf = param_name.rsplit(".", 1) if "." in param_name else ("", param_name)
             parent_mod = mod.get_submodule(parent_rel) if parent_rel else mod
-            if leaf not in parent_mod._parameters:
-                raise RuntimeError(
-                    f"{full_name}: expected parameter leaf '{leaf}' in parent module"
-                )
             parent_mod._parameters[leaf] = new_param
 
         for buffer_name, buf in list(mod.named_buffers(recurse=True)):
@@ -301,10 +331,21 @@ def materialize_modules_to_device(
 
             parent_rel, leaf = buffer_name.rsplit(".", 1) if "." in buffer_name else ("", buffer_name)
             parent_mod = mod.get_submodule(parent_rel) if parent_rel else mod
-            if leaf in parent_mod._buffers:
-                parent_mod._buffers[leaf] = new_buf
-            else:
-                setattr(parent_mod, leaf, new_buf)
+            parent_mod._buffers[leaf] = new_buf
+
+
+def move_tensor_to_module_device(x: torch.Tensor, mod: torch.nn.Module) -> torch.Tensor:
+    try:
+        dev = next(mod.parameters()).device
+    except StopIteration:
+        try:
+            dev = next(mod.buffers()).device
+        except StopIteration:
+            return x
+
+    if x.device != dev:
+        x = x.to(dev)
+    return x
 
 
 def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, dst: str | None = None) -> None:
@@ -320,19 +361,18 @@ def main() -> None:
     ap.add_argument("--model-dir", type=str, required=True)
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-dir", type=str, required=True)
-    ap.add_argument("--device", type=str, default="cuda")
+    ap.add_argument(
+        "--devices",
+        type=str,
+        default="cuda:0",
+        help="Comma-separated CUDA devices, e.g. cuda:0,cuda:1,cuda:2,cuda:3",
+    )
     ap.add_argument("--layer-id", type=int, required=True)
     args = ap.parse_args()
 
-    if args.device == "cuda":
-        backbone_device = "cuda:0"
-    else:
-        backbone_device = str(args.device)
-
-    if str(backbone_device).startswith("cuda"):
-        torch.cuda.set_device(backbone_device)
-        _ = torch.empty(1, device=backbone_device)
-        torch.cuda.empty_cache()
+    devices = [x.strip() for x in args.devices.split(",") if x.strip()]
+    if not devices:
+        raise RuntimeError("no devices provided")
 
     with open(args.input_json, "r", encoding="utf-8") as f:
         inp = json.load(f)
@@ -367,6 +407,12 @@ def main() -> None:
     print(f"[hf-single-layer] target_layer={target_layer}")
     print(f"[hf-single-layer] resident_expert_ids={resident_expert_ids}")
 
+    layer_to_device = build_layer_to_device_map(target_layer, devices)
+    placements = module_placements_to_target_layer(cfg, target_layer, devices)
+
+    print("[hf-single-layer] devices =", devices)
+    print("[hf-single-layer] layer_to_device =", layer_to_device)
+
     loader = DeepseekModelLoader(args.model_dir)
     model = load_hf_model_skeleton(args.model_dir)
     cfg = model.config
@@ -381,7 +427,7 @@ def main() -> None:
                 moe = model.model.layers[layer_id].mlp
                 moe.layer_id = int(layer_id)
                 moe._manual_loader = loader
-                moe._manual_device = backbone_device
+                moe._manual_device = layer_to_device[layer_id]
                 moe._manual_dtype = backbone_dtype
                 moe._loaded_expert_ids = set()
 
@@ -393,16 +439,11 @@ def main() -> None:
                     "dtype=", moe._manual_dtype,
                 )
 
-        needed_module_names = module_names_to_target_layer(cfg, target_layer)
-        materialize_modules_to_device(
+        materialize_modules_with_placements(
             model,
-            needed_module_names,
-            device=backbone_device,
+            placements,
             default_dtype=backbone_dtype,
         )
-
-        if target_layer == int(getattr(cfg, "num_hidden_layers")) - 1:
-            model.lm_head.to_empty(device=backbone_device)
 
         needed_names = names_to_target_layer(cfg, resident_expert_ids, target_layer)
 
@@ -412,7 +453,6 @@ def main() -> None:
                 model,
                 loader=loader,
                 tensor_name=name,
-                device=backbone_device,
                 dtype=backbone_dtype,
             )
         gate = model.model.layers[target_layer].mlp.gate
@@ -423,7 +463,9 @@ def main() -> None:
 
         assert_named_tensors_materialized(model, needed_names)
 
-        ids_t = torch.tensor([ids], dtype=torch.long, device=backbone_device)
+        embed_weight = model.model.embed_tokens.weight
+        ids_t = torch.tensor([ids], dtype=torch.long, device=embed_weight.device)
+        hidden_states = model.model.embed_tokens(ids_t)
 
         layer_outputs: dict[str, torch.Tensor] = {}
         misc_outputs: dict[str, torch.Tensor] = {}
@@ -477,6 +519,14 @@ def main() -> None:
                 hidden_states_list = [hidden_states]
 
                 for i in range(target_layer + 1):
+                    layer_mod = model.model.layers[i]
+
+                    hidden_states = move_tensor_to_module_device(hidden_states, layer_mod)
+
+                    if attention_mask is not None:
+                        attention_mask = attention_mask.to(hidden_states.device)
+                    if position_ids is not None:
+                        position_ids = position_ids.to(hidden_states.device)
                     layer_outputs_i = model.model.layers[i](
                         hidden_states,
                         attention_mask=None,
@@ -502,7 +552,9 @@ def main() -> None:
                 )
 
                 if is_last_layer:
+                    hidden_states = hidden_states.to(model.model.norm.weight.device)
                     final_hidden_manual = model.model.norm(hidden_states)
+                    final_hidden_manual = final_hidden_manual.to(model.lm_head.weight.device)
                     logits_manual = model.lm_head(final_hidden_manual)
                     outputs.logits = logits_manual
                 else:
