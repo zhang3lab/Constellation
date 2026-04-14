@@ -373,7 +373,7 @@ def main() -> None:
             if not isinstance(lm_head_w, torch.Tensor):
                 raise TypeError(f"lm_head expected torch.Tensor, got {type(lm_head_w).__name__}")
          
-            frms_norminal_hidden_in = result["output"]
+            final_hidden_in = result["output"]
             if not isinstance(final_hidden_in, torch.Tensor):
                 final_hidden_in = torch.as_tensor(final_hidden_in)
          
