@@ -55,16 +55,44 @@ def build_balanced_placement(
                 fresh.append((key, gpu))
 
         chosen = None
+        reused = False
 
         if reusable:
             reusable.sort(key=lambda x: x[0])
             chosen = reusable[0][1]
+            reused = True
         elif fresh:
             fresh.sort(key=lambda x: x[0])
             chosen = fresh[0][1]
             chosen["remaining_mem_bytes"] -= expert_mem_bytes
         else:
             max_remaining = max((gpu["remaining_mem_bytes"] for gpu in gpus), default=0)
+            reused_count = sum(1 for p in placements if p["reuse_existing_resident"])
+            fresh_count = len(placements) - reused_count
+            total_capacity = sum(gpu["capacity_bytes"] for gpu in gpus)
+            total_remaining = sum(gpu["remaining_mem_bytes"] for gpu in gpus)
+
+            print(
+                f"[placement] FAIL slot={placement_index} expert={expert_id} "
+                f"need={expert_mem_bytes} max_remaining={max_remaining} "
+                f"placed={len(placements)} reused={reused_count} fresh={fresh_count} "
+                f"total_capacity={total_capacity} total_remaining={total_remaining} "
+                f"total_demand={len(expert_ids) * expert_mem_bytes}"
+            )
+            for gpu in sorted(gpus, key=lambda x: x["remaining_mem_bytes"], reverse=True):
+                print(
+                    f"[placement] worker-state "
+                    f"node={gpu['node_instance_id']} "
+                    f"worker={gpu['worker_id']} "
+                    f"vendor={gpu.get('gpu_vendor')} "
+                    f"name={gpu.get('gpu_name')} "
+                    f"free={gpu['free_mem_bytes']} "
+                    f"capacity={gpu['capacity_bytes']} "
+                    f"remaining={gpu['remaining_mem_bytes']} "
+                    f"assigned={len(gpu['assigned_slot_ids'])} "
+                    f"resident_count={len(gpu['resident_expert_ids'])}"
+                )
+
             raise PlacementError(
                 f"unable to place slot {placement_index} expert={expert_id}: "
                 f"need {expert_mem_bytes} bytes, "
@@ -86,7 +114,7 @@ def build_balanced_placement(
                 "worker_port": chosen["worker_port"],
                 "gpu_name": chosen["gpu_name"],
                 "expert_mem_bytes": expert_mem_bytes,
-                "reuse_existing_resident": expert_id in chosen["resident_expert_ids"],
+                "reuse_existing_resident": reused,
             }
         )
 
