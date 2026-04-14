@@ -916,6 +916,14 @@ class DeepseekV3MoE(nn.Module):
                 )
             else:
                 expert_out = expert(tokens_for_this_expert)
+                debug_expert_outputs.append(
+                    {
+                        "expert_local_id": int(i),
+                        "num_tokens": int(num_tokens_for_expert),
+                        "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
+                        "expert_out": expert_out.detach().cpu().clone(),
+                    }
+                )
 
             finite = torch.isfinite(expert_out)
             num_finite = int(finite.sum().item())

@@ -521,24 +521,34 @@ def main() -> None:
         expert_dbg = dbg.get("debug_expert_outputs")
         if isinstance(expert_dbg, list):
             meta = []
+            tensor_keys = [
+                "tokens_for_this_expert",
+                "expert_out",
+                "input",
+                "gate_linear",
+                "up_linear",
+                "act",
+                "mul",
+                "down_proj",
+            ]
+
             for j, item in enumerate(expert_dbg):
                 if not isinstance(item, dict):
                     continue
-                meta.append(
-                    {
-                        "expert_local_id": int(item["expert_local_id"]),
-                        "num_tokens": int(item["num_tokens"]),
-                    }
-                )
-                if "tokens_for_this_expert" in item:
-                    p = outdir / f"{prefix}_hf_expert{j}_tokens.pt"
-                    torch.save(item["tokens_for_this_expert"], p)
-                    saved.append(str(p))
-                if "expert_out" in item:
-                    p = outdir / f"{prefix}_hf_expert{j}_output.pt"
-                    torch.save(item["expert_out"], p)
-                    saved.append(str(p))
-         
+
+                meta_item = {
+                    "expert_local_id": int(item["expert_local_id"]) if "expert_local_id" in item else None,
+                    "num_tokens": int(item["num_tokens"]) if "num_tokens" in item else None,
+                }
+                meta.append(meta_item)
+
+                for key in tensor_keys:
+                    x = item.get(key)
+                    if isinstance(x, torch.Tensor):
+                        p = outdir / f"{prefix}_hf_expert{j}_{key}.pt"
+                        torch.save(x.detach().float().cpu(), p)
+                        saved.append(str(p))
+
             p = outdir / f"{prefix}_hf_expert_outputs_meta.json"
             with p.open("w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
