@@ -435,6 +435,31 @@ def main() -> None:
             for h in hooks:
                 h.remove()
 
+        if is_sparse_layer(cfg, target_layer):
+            check_local_eid = 18
+            ex = model.model.layers[target_layer].mlp.experts[check_local_eid]
+         
+            for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+                w = getattr(ex, proj_name).weight
+                print(
+                    f"[hf-check] expert{check_local_eid} {proj_name}.weight",
+                    "is_meta=", bool(getattr(w, "is_meta", False)),
+                    "device=", getattr(w, "device", None),
+                    "dtype=", getattr(w, "dtype", None),
+                    "finite=", int(torch.isfinite(w).sum().item()), "/", int(w.numel()),
+                )
+         
+                tensor_name = f"model.layers.{target_layer}.mlp.experts.{check_local_eid}.{proj_name}.weight"
+                ref = loader.load_tensor_fp32_by_name(tensor_name).float().cpu()
+                cur = w.detach().float().cpu()
+         
+                diff = (ref - cur).abs()
+                print(
+                    f"[hf-check] compare expert{check_local_eid} {proj_name}",
+                    "max_abs=", float(diff.max().item()),
+                    "mean_abs=", float(diff.mean().item()),
+                )
+
         dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
         router_dbg = {}
         if is_sparse_layer(cfg, target_layer):
