@@ -524,8 +524,8 @@ def main() -> None:
 
                     hidden_states = move_tensor_to_module_device(hidden_states, layer_mod)
 
-                    if attention_mask is not None:
-                        attention_mask = attention_mask.to(hidden_states.device)
+                    #if attention_mask is not None:
+                    #    attention_mask = attention_mask.to(hidden_states.device)
                     if position_ids is not None:
                         position_ids = position_ids.to(hidden_states.device)
                     layer_outputs_i = model.model.layers[i](
