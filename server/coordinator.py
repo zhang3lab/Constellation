@@ -1,10 +1,9 @@
+from dataclasses import dataclass, field
 from pathlib import Path
 import threading
 import traceback
-from typing import Any, Dict, List, Sequence
-
 import time
-     
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from common.protocol import TensorKind
 from server.client import NodeClient
@@ -15,6 +14,41 @@ from server.expert_placement import (
 )
 from server.logging_utils import log1, log2
 from server.placement import build_balanced_placement
+
+
+@dataclass(frozen=True)
+class TensorSpec:
+    tensor_kind_name: str
+    tensor_kind_enum: Any
+    tensor_order: int
+    tensor_name: str
+    shard_path: str
+
+
+@dataclass(frozen=True)
+class BundleSpec:
+    expert_id: int
+    target: Dict[str, Any]
+    tensors: List[TensorSpec]
+
+
+@dataclass
+class LoadedTensor:
+    spec: TensorSpec
+    tensor_bytes: bytes
+    shape: Tuple[int, ...]
+    dtype: Any
+    load_ms: Optional[float] = None
+
+
+@dataclass
+class LoadedBundle:
+    expert_id: int
+    target: Dict[str, Any]
+    tensors: List[LoadedTensor]
+    load_ms: Optional[float] = None
+    send_ms: Optional[float] = None
+    total_bytes: int = 0
 
 
 class Coordinator:
@@ -360,7 +394,7 @@ class Coordinator:
         model_loader,
         experts_per_layer: int = 256,
         placements=None,
-    ):
+    ) -> List[BundleSpec]:
         order = [
             ("w_up", TensorKind.WUp, 0),
             ("w_up_scale", TensorKind.WUpScale, 1),
@@ -373,12 +407,14 @@ class Coordinator:
         if placements is None:
             placements = self.placements
      
-        manifest = []
+        manifest: List[BundleSpec] = []
      
         for target in placements:
             expert_id = int(target["expert_id"])
             layer_id = expert_id // experts_per_layer
             local_expert_id = expert_id % experts_per_layer
+     
+            tensor_specs: List[TensorSpec] = []
      
             for tensor_kind_name, tensor_kind_enum, tensor_order in order:
                 if tensor_kind_name in ("w_up", "w_gate", "w_down"):
@@ -399,123 +435,54 @@ class Coordinator:
                         tensor_kind=base_kind,
                     )
      
-                manifest.append(
-                    {
-                        "expert_id": expert_id,
-                        "target": target,
-                        "tensor_kind_name": tensor_kind_name,
-                        "tensor_kind_enum": tensor_kind_enum,
-                        "tensor_order": tensor_order,
-                        "tensor_name": tensor_name,
-                        "shard_path": shard_path,
-                    }
+                tensor_specs.append(
+                    TensorSpec(
+                        tensor_kind_name=tensor_kind_name,
+                        tensor_kind_enum=tensor_kind_enum,
+                        tensor_order=tensor_order,
+                        tensor_name=tensor_name,
+                        shard_path=str(shard_path),
+                    )
                 )
+     
+            tensor_specs.sort(key=lambda x: (x.shard_path, x.tensor_order))
+     
+            manifest.append(
+                BundleSpec(
+                    expert_id=expert_id,
+                    target=target,
+                    tensors=tensor_specs,
+                )
+            )
+     
+        manifest.sort(
+            key=lambda x: (
+                str(x.target["host"]),
+                int(x.target["control_port"]),
+                int(x.expert_id),
+            )
+        )
      
         return manifest
 
 
-    def sort_preload_manifest(self, manifest):
-        return sorted(
-            manifest,
-            key=lambda x: (
-                str(x["target"]["host"]),
-                int(x["target"]["control_port"]),
-                str(x["shard_path"]),
-                int(x["expert_id"]),
-                int(x["tensor_order"]),
-            ),
-        )
-
-
-    def send_one_tensor_from_open_shard(
+    def load_one_bundle(
         self,
         *,
-        shard_file,
-        item,
-        chunk_size: int,
-        client,
-    ) -> None:
-        tensor_name = item["tensor_name"]
-        target = item["target"]
-        tensor_kind = item["tensor_kind_enum"]
-        expert_id = int(item["expert_id"])
-     
-        t0 = time.perf_counter()
-        tensor_bytes, shape, dtype = DeepseekModelLoader.load_tensor_from_open_shard(
-            shard_file,
-            item["tensor_name"],
-        )
-        t1 = time.perf_counter()
-     
-        row_block = 128
-        col_block = 128
-     
-        self.send_one_tensor_bytes(
-            expert_id=expert_id,
-            tensor_kind=tensor_kind,
-            tensor_bytes=tensor_bytes,
-            chunk_size=chunk_size,
-            shape=shape,
-            dtype=dtype,
-            row_block=row_block,
-            col_block=col_block,
-            client=client,
-            target=target,
-        )
-        t2 = time.perf_counter()
-     
-        load_ms = (t1 - t0) * 1000.0
-        send_ms = (t2 - t1) * 1000.0
-        total_ms = (t2 - t0) * 1000.0
-     
-        log2(
-            self.log_level,
-            f"[server-upload-profile] "
-            f"node={target['node_instance_id']} "
-            f"expert={expert_id} "
-            f"worker={target['worker_id']} "
-            f"tensor={tensor_name} "
-            f"kind={tensor_kind.name} "
-            f"bytes={len(tensor_bytes)} "
-            f"load_ms={load_ms:.3f} "
-            f"send_ms={send_ms:.3f} "
-            f"total_ms={total_ms:.3f}"
-        )
-
-
-    def _preload_manifest_for_one_node(
-        self,
         model_loader,
-        manifest_items,
-        chunk_size: int,
-        progress_prefix: str,
-    ):
-        if not manifest_items:
-            return
+        bundle_spec: BundleSpec,
+    ) -> LoadedBundle:
+        loaded_tensors: List[LoadedTensor] = []
+        total_bytes = 0
      
-        first_target = manifest_items[0]["target"]
-        host = str(first_target["host"])
-        control_port = int(first_target["control_port"])
-        node_instance_id = str(first_target["node_instance_id"])
+        t0_bundle = time.perf_counter()
      
-        client = None
         shard_file = None
         current_shard_path = None
-        done_entries = 0
-        total_entries = len(manifest_items)
      
         try:
-            client = NodeClient(host, control_port, log_level=self.log_level)
-            client.__enter__()
-     
-            log2(
-                self.log_level,
-                f"{progress_prefix} open control "
-                f"node={node_instance_id} host={host} port={control_port}"
-            )
-     
-            for item in manifest_items:
-                shard_path = str(item["shard_path"])
+            for spec in bundle_spec.tensors:
+                shard_path = str(spec.shard_path)
      
                 if shard_path != current_shard_path:
                     if shard_file is not None:
@@ -526,32 +493,200 @@ class Coordinator:
                     shard_file.__enter__()
                     current_shard_path = shard_path
      
-                    log2(
-                        self.log_level,
-                        f"{progress_prefix} open shard "
-                        f"node={node_instance_id} path={shard_path}"
-                    )
-     
-                self.send_one_tensor_from_open_shard(
-                    shard_file=shard_file,
-                    item=item,
-                    chunk_size=chunk_size,
-                    client=client,
+                t0 = time.perf_counter()
+                tensor_bytes, shape, dtype = DeepseekModelLoader.load_tensor_from_open_shard(
+                    shard_file,
+                    spec.tensor_name,
                 )
+                t1 = time.perf_counter()
      
-                done_entries += 1
-                if done_entries == 1 or done_entries % 128 == 0 or done_entries == total_entries:
-                    log1(
-                        self.log_level,
-                        f"{progress_prefix} {done_entries}/{total_entries} "
-                        f"expert={item['expert_id']} tensor={item['tensor_kind_name']}"
+                loaded_tensors.append(
+                    LoadedTensor(
+                        spec=spec,
+                        tensor_bytes=tensor_bytes,
+                        shape=shape,
+                        dtype=dtype,
+                        load_ms=(t1 - t0) * 1000.0,
                     )
+                )
+                total_bytes += len(tensor_bytes)
      
+            t1_bundle = time.perf_counter()
+     
+            return LoadedBundle(
+                expert_id=bundle_spec.expert_id,
+                target=bundle_spec.target,
+                tensors=loaded_tensors,
+                load_ms=(t1_bundle - t0_bundle) * 1000.0,
+                total_bytes=total_bytes,
+            )
         finally:
             if shard_file is not None:
                 shard_file.__exit__(None, None, None)
-            if client is not None:
-                client.__exit__(None, None, None)
+
+
+    def send_one_bundle_bytes(
+        self,
+        *,
+        bundle: LoadedBundle,
+        chunk_size: int,
+        client,
+    ) -> None:
+        row_block = 128
+        col_block = 128
+     
+        target = bundle.target
+        t0 = time.perf_counter()
+     
+        for loaded in bundle.tensors:
+            self.send_one_tensor_bytes(
+                expert_id=bundle.expert_id,
+                tensor_kind=loaded.spec.tensor_kind_enum,
+                tensor_bytes=loaded.tensor_bytes,
+                chunk_size=chunk_size,
+                shape=loaded.shape,
+                dtype=loaded.dtype,
+                row_block=row_block,
+                col_block=col_block,
+                client=client,
+                target=target,
+            )
+     
+        t1 = time.perf_counter()
+        bundle.send_ms = (t1 - t0) * 1000.0
+     
+        log2(
+            self.log_level,
+            f"[server-upload-profile] "
+            f"node={target['node_instance_id']} "
+            f"expert={bundle.expert_id} "
+            f"worker={target['worker_id']} "
+            f"tensors={len(bundle.tensors)} "
+            f"bytes={bundle.total_bytes} "
+            f"load_ms={bundle.load_ms:.3f} "
+            f"send_ms={bundle.send_ms:.3f}"
+        )
+
+
+    def _preload_manifest_for_one_node(
+        self,
+        model_loader,
+        manifest_items: List[BundleSpec],
+        chunk_size: int,
+        progress_prefix: str,
+        queue_size: int = 2,
+    ):
+        if not manifest_items:
+            return
+     
+        first_target = manifest_items[0].target
+        host = str(first_target["host"])
+        control_port = int(first_target["control_port"])
+        node_instance_id = str(first_target["node_instance_id"])
+     
+        for item in manifest_items:
+            cur_node_instance_id = str(item.target["node_instance_id"])
+            if cur_node_instance_id != node_instance_id:
+                raise ValueError(
+                    f"mixed node_instance_id in manifest_items: "
+                    f"{node_instance_id} vs {cur_node_instance_id}"
+                )
+     
+        total_entries = len(manifest_items)
+        sent_entries = 0
+        sent_lock = threading.Lock()
+     
+        q = queue.Queue(maxsize=queue_size)
+        sentinel = object()
+        error_box: List[BaseException] = []
+     
+        def record_error(exc: BaseException) -> None:
+            with sent_lock:
+                if not error_box:
+                    error_box.append(exc)
+     
+        def sender_main() -> None:
+            nonlocal sent_entries
+            client = None
+            try:
+                client = NodeClient(host, control_port, log_level=self.log_level)
+                client.__enter__()
+     
+                log2(
+                    self.log_level,
+                    f"{progress_prefix} open control "
+                    f"node={node_instance_id} host={host} port={control_port}"
+                )
+     
+                while True:
+                    item = q.get()
+                    if item is sentinel:
+                        break
+     
+                    bundle = item
+                    self.send_one_bundle_bytes(
+                        bundle=bundle,
+                        chunk_size=chunk_size,
+                        client=client,
+                    )
+     
+                    with sent_lock:
+                        sent_entries += 1
+                        cur_sent = sent_entries
+     
+                    if cur_sent == 1 or cur_sent % 32 == 0 or cur_sent == total_entries:
+                        log1(
+                            self.log_level,
+                            f"{progress_prefix} sent {cur_sent}/{total_entries} "
+                            f"expert={bundle.expert_id}"
+                        )
+            except BaseException as exc:
+                record_error(exc)
+            finally:
+                if client is not None:
+                    client.__exit__(None, None, None)
+     
+        sender = threading.Thread(
+            target=sender_main,
+            name=f"preload-sender-{node_instance_id}",
+        )
+        sender.start()
+     
+        try:
+            for idx, bundle_spec in enumerate(manifest_items, start=1):
+                if error_box:
+                    break
+     
+                loaded_bundle = self.load_one_bundle(
+                    model_loader=model_loader,
+                    bundle_spec=bundle_spec,
+                )
+     
+                q.put(loaded_bundle)
+     
+                if idx == 1 or idx % 32 == 0 or idx == total_entries:
+                    log1(
+                        self.log_level,
+                        f"{progress_prefix} loaded {idx}/{total_entries} "
+                        f"expert={bundle_spec.expert_id}"
+                    )
+        except BaseException as exc:
+            record_error(exc)
+            raise
+        finally:
+            while True:
+                try:
+                    q.put(sentinel, timeout=0.1)
+                    break
+                except queue.Full:
+                    if not sender.is_alive():
+                        break
+                    continue
+     
+            sender.join()
+     
+        if error_box:
+            raise error_box[0]
 
 
     def _placement_is_already_resident(self, placement: Dict[str, Any]) -> bool:
@@ -625,35 +760,35 @@ class Coordinator:
             experts_per_layer=experts_per_layer,
             placements=placements_for_preload,
         )
-        manifest = self.sort_preload_manifest(manifest)
-     
-        total_entries = len(manifest)
-        experts_to_preload = len({int(x["expert_id"]) for x in manifest})
+
+        total_bundles = len(manifest)
+        experts_to_preload = total_bundles
+        total_tensor_entries = sum(len(x.tensors) for x in manifest)
 
         log1(
             self.log_level,
             f"preloading all placed experts: experts={experts_to_preload} "
-            f"tensor_entries={total_entries}"
+            f"bundle_entries={total_bundles} tensor_entries={total_tensor_entries}"
         )
         log1(
             self.log_level,
             f"[preload] target_experts={len(all_expert_ids)} "
             f"experts_to_preload={experts_to_preload}"
         )
-     
+
         jobs_by_node = {}
         for item in manifest:
-            node_instance_id = str(item["target"]["node_instance_id"])
+            node_instance_id = str(item.target["node_instance_id"])
             jobs_by_node.setdefault(node_instance_id, []).append(item)
-     
+
         log1(self.log_level, f"[preload] parallel nodes={len(jobs_by_node)}")
-     
+
         errors = []
         err_lock = threading.Lock()
         threads = []
-     
+
         def worker(node_instance_id, items):
-            target = items[0]["target"]
+            target = items[0].target
             progress_prefix = f"[preload:{node_instance_id}]"
             try:
                 self._preload_manifest_for_one_node(
@@ -669,7 +804,7 @@ class Coordinator:
                         f"node={node_instance_id} "
                         f"host={target['host']} port={target['control_port']}\n{tb}"
                     )
-     
+
         for node_instance_id, items in jobs_by_node.items():
             th = threading.Thread(
                 target=worker,
@@ -678,10 +813,10 @@ class Coordinator:
             )
             th.start()
             threads.append(th)
-     
+
         for th in threads:
             th.join()
-     
+
         if errors:
             for err in errors:
                 print(f"[preload] ERROR\n{err}")
