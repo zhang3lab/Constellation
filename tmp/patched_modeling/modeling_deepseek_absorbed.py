@@ -907,23 +907,19 @@ class DeepseekV3MoE(nn.Module):
             if i == 18 and int(num_tokens_for_expert) == 1:
                 dbg = expert(tokens_for_this_expert, debug=True)
                 expert_out = dbg["down_proj"]
-                debug_expert_outputs.append(
-                    {
-                        "expert_local_id": int(i),
-                        "num_tokens": int(num_tokens_for_expert),
-                        **dbg,
-                    }
-                )
+                debug_item = {
+                    "expert_local_id": int(i),
+                    "num_tokens": int(num_tokens_for_expert),
+                    **dbg,
+                }
             else:
                 expert_out = expert(tokens_for_this_expert)
-                debug_expert_outputs.append(
-                    {
-                        "expert_local_id": int(i),
-                        "num_tokens": int(num_tokens_for_expert),
-                        "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
-                        "expert_out": expert_out.detach().cpu().clone(),
-                    }
-                )
+                debug_item = {
+                    "expert_local_id": int(i),
+                    "num_tokens": int(num_tokens_for_expert),
+                    "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
+                    "expert_out": expert_out.detach().cpu().clone(),
+                }
 
             finite = torch.isfinite(expert_out)
             num_finite = int(finite.sum().item())
@@ -945,18 +941,7 @@ class DeepseekV3MoE(nn.Module):
                     f"nan={num_nan} inf={num_inf}"
                 )
 
-            tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
-            expert_out = expert(tokens_for_this_expert)
-
-            debug_expert_outputs.append(
-                {
-                    "expert_local_id": int(i),
-                    "num_tokens": int(num_tokens_for_expert),
-                    "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
-                    "expert_out": expert_out.detach().cpu().clone(),
-                }
-            )
-
+            debug_expert_outputs.append(debug_item)
             outputs.append(expert_out)
             start_idx = end_idx
 
