@@ -44,6 +44,17 @@ def assert_named_tensors_materialized(
             + (f"\n... and {len(bad) - len(preview)} more" if len(bad) > len(preview) else "")
         )
 
+def target_dtype_for_tensor_name(
+    tensor_name: str,
+    default_dtype: torch.dtype,
+) -> torch.dtype:
+    if tensor_name.endswith(".weight_scale_inv"):
+        return torch.float32
+    if tensor_name.endswith(".mlp.gate.e_score_correction_bias"):
+        return torch.float32
+    return default_dtype
+
+
 def copy_named_tensor_into_model(
     model,
     *,
@@ -52,7 +63,11 @@ def copy_named_tensor_into_model(
     device: str,
     dtype: torch.dtype,
 ) -> None:
-    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(device=device, dtype=dtype).contiguous()
+    target_dtype = target_dtype_for_tensor_name(tensor_name, dtype)
+    loaded = loader.load_tensor_fp32_by_name(tensor_name).to(
+        device=device,
+        dtype=target_dtype,
+    ).contiguous()
 
     parent_name, leaf_name = tensor_name.rsplit(".", 1)
     parent = get_attr_by_dotted_name(model, parent_name)
@@ -60,7 +75,7 @@ def copy_named_tensor_into_model(
 
     with torch.no_grad():
         if isinstance(target, torch.nn.Parameter):
-            if getattr(target, "is_meta", False):
+            if getattr(target, "is_meta", False) or target.dtype != target_dtype:
                 new_param = torch.nn.Parameter(
                     loaded,
                     requires_grad=target.requires_grad,
@@ -71,15 +86,15 @@ def copy_named_tensor_into_model(
                     )
                 parent._parameters[leaf_name] = new_param
             else:
-                target.copy_(loaded.to(device=target.device, dtype=target.dtype))
+                target.copy_(loaded)
         else:
-            if getattr(target, "is_meta", False):
+            if getattr(target, "is_meta", False) or target.dtype != target_dtype:
                 if hasattr(parent, "_buffers") and leaf_name in parent._buffers:
                     parent._buffers[leaf_name] = loaded
                 else:
                     setattr(parent, leaf_name, loaded)
             else:
-                target.copy_(loaded.to(device=target.device, dtype=target.dtype))
+                target.copy_(loaded)
 
 
 def load_hf_model_skeleton(model_dir: str):
@@ -246,12 +261,50 @@ def materialize_modules_to_device(
     module_names: list[str],
     *,
     device: str,
+    default_dtype: torch.dtype,
 ) -> None:
     for name in module_names:
         print(f"[hf-single-layer] to_empty {name} -> {device}")
         mod = get_attr_by_dotted_name(model, name)
-        if isinstance(mod, torch.nn.Module):
-            mod.to_empty(device=device)
+        if not isinstance(mod, torch.nn.Module):
+            continue
+
+        mod.to_empty(device=device)
+
+        # Fix up selected params/buffers that should stay fp32 according to original model dtype.
+        for param_name, param in list(mod.named_parameters(recurse=True)):
+            full_name = f"{name}.{param_name}"
+            want_dtype = target_dtype_for_tensor_name(full_name, default_dtype)
+            if param.dtype == want_dtype:
+                continue
+
+            new_param = torch.nn.Parameter(
+                torch.empty_like(param, device=device, dtype=want_dtype),
+                requires_grad=param.requires_grad,
+            )
+
+            parent_rel, leaf = param_name.rsplit(".", 1) if "." in param_name else ("", param_name)
+            parent_mod = mod.get_submodule(parent_rel) if parent_rel else mod
+            if leaf not in parent_mod._parameters:
+                raise RuntimeError(
+                    f"{full_name}: expected parameter leaf '{leaf}' in parent module"
+                )
+            parent_mod._parameters[leaf] = new_param
+
+        for buffer_name, buf in list(mod.named_buffers(recurse=True)):
+            full_name = f"{name}.{buffer_name}"
+            want_dtype = target_dtype_for_tensor_name(full_name, default_dtype)
+            if buf.dtype == want_dtype:
+                continue
+
+            new_buf = torch.empty_like(buf, device=device, dtype=want_dtype)
+
+            parent_rel, leaf = buffer_name.rsplit(".", 1) if "." in buffer_name else ("", buffer_name)
+            parent_mod = mod.get_submodule(parent_rel) if parent_rel else mod
+            if leaf in parent_mod._buffers:
+                parent_mod._buffers[leaf] = new_buf
+            else:
+                setattr(parent_mod, leaf, new_buf)
 
 
 def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, dst: str | None = None) -> None:
@@ -345,6 +398,7 @@ def main() -> None:
             model,
             needed_module_names,
             device=backbone_device,
+            default_dtype=backbone_dtype,
         )
 
         if target_layer == int(getattr(cfg, "num_hidden_layers")) - 1:
@@ -361,6 +415,11 @@ def main() -> None:
                 device=backbone_device,
                 dtype=backbone_dtype,
             )
+        gate = model.model.layers[target_layer].mlp.gate
+        print(
+            "[hf-check] gate.weight dtype =", gate.weight.dtype,
+            "gate.bias_corr dtype =", gate.e_score_correction_bias.dtype,
+        )
 
         assert_named_tensors_materialized(model, needed_names)
 
