@@ -60,16 +60,18 @@ def setup_control_plane(coord, cfg):
     else:
         expert_ids = list(range(int(run_cfg["num_experts"])))
 
+    allow_drop_non_target_residents = bool(
+        run_cfg.get("allow_drop_non_target_residents", False)
+    )
+
     coord.discover_and_build_placement(
         expert_ids=expert_ids,
         expert_mem_bytes=expert_mem_bytes,
         memory_utilization=memory_utilization,
+        allow_drop_non_target_residents=allow_drop_non_target_residents,
     )
 
-    drop_non_target_residents = bool(run_cfg.get("drop_non_target_residents", False))
-    placement_acks = coord.send_placement_plan(
-        drop_non_target_residents=drop_non_target_residents
-    )
+    placement_acks = coord.send_placement_plan()
 
     model_loader = DeepseekModelLoader(model_root)
     coord.preload_all_placed_experts(

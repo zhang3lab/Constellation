@@ -122,6 +122,13 @@ def _resident_set(coord, node_instance_id, worker_id):
     )
 
 
+def _node_drop_map(coord, value: bool):
+    return {
+        str(node["node_instance_id"]): bool(value)
+        for node in coord.node_inventories
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, required=True)
@@ -136,24 +143,24 @@ def main():
 
     expert_id = 9900001
 
-    coord.discover_nodes()
-    coord.build_placement(
-        num_experts=1,
+    coord.discover_and_build_placement(
+        expert_ids=[expert_id],
         expert_mem_bytes=expert_mem_bytes,
         memory_utilization=memory_utilization,
+        allow_drop_non_target_residents=False,
     )
 
     if len(coord.placements) != 1:
         raise RuntimeError(f"expected exactly 1 placement, got {len(coord.placements)}")
 
     target = dict(coord.placements[0])
-    target["expert_id"] = expert_id
 
     print("[dup-upload] target")
     coord.placements = [target]
     coord.print_placement()
 
-    acks = coord.send_placement_plan(drop_non_target_residents=False)
+    coord.drop_non_target_residents_by_node = _node_drop_map(coord, False)
+    acks = coord.send_placement_plan()
     if len(acks) != 1 or int(acks[0]["status_code"]) != 0:
         raise RuntimeError(f"bad placement ack: {acks}")
 

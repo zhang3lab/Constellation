@@ -162,14 +162,11 @@ def _assert_ack_ok(acks: List[dict]) -> None:
             )
 
 
-def _assign_expert_ids(placements: List[dict], expert_ids: List[int]) -> None:
-    if len(placements) != len(expert_ids):
-        raise RuntimeError(
-            f"placement/expert_id size mismatch: placements={len(placements)} "
-            f"expert_ids={len(expert_ids)}"
-        )
-    for p, eid in zip(placements, expert_ids):
-        p["expert_id"] = int(eid)
+def _node_drop_map(coord: Coordinator, value: bool) -> Dict[str, bool]:
+    return {
+        str(node["node_instance_id"]): bool(value)
+        for node in coord.node_inventories
+    }
 
 
 def main():
@@ -200,10 +197,16 @@ def main():
     if not coord.gpu_inventory:
         raise RuntimeError("no workers discovered")
 
-    coord.build_placement(
-        num_experts=num_test_experts,
+    #
+    # Build a stable placement shape using dummy ids that are guaranteed not to
+    # hit current residents, so the worker targets are determined purely by
+    # fresh-placement logic.
+    #
+    coord.discover_and_build_placement(
+        expert_ids=expert_ids_round1,
         expert_mem_bytes=expert_mem_bytes,
         memory_utilization=memory_utilization,
+        allow_drop_non_target_residents=False,
     )
 
     if len(coord.placements) != num_test_experts:
@@ -221,9 +224,9 @@ def main():
     #
     # Round 1: place A, keep non-target residents, then upload A.
     #
-    _assign_expert_ids(coord.placements, expert_ids_round1)
+    coord.drop_non_target_residents_by_node = _node_drop_map(coord, False)
     print("[e2e-placement] round1 send placement drop_non_target_residents=0")
-    acks = coord.send_placement_plan(drop_non_target_residents=False)
+    acks = coord.send_placement_plan()
     _assert_ack_ok(acks)
 
     for target in coord.placements:
@@ -253,9 +256,12 @@ def main():
     # Round 2: place B on the same targets, but do NOT drop non-target residents.
     # A should still remain resident because we only changed the target plan.
     #
-    _assign_expert_ids(coord.placements, expert_ids_round2)
+    for p, eid in zip(coord.placements, expert_ids_round2):
+        p["expert_id"] = int(eid)
+
+    coord.drop_non_target_residents_by_node = _node_drop_map(coord, False)
     print("[e2e-placement] round2 send placement drop_non_target_residents=0")
-    acks = coord.send_placement_plan(drop_non_target_residents=False)
+    acks = coord.send_placement_plan()
     _assert_ack_ok(acks)
 
     coord.discover_nodes()
@@ -287,8 +293,9 @@ def main():
     # Round 3: place B again, but now DROP non-target residents.
     # A should disappear immediately even though B has not been loaded yet.
     #
+    coord.drop_non_target_residents_by_node = _node_drop_map(coord, True)
     print("[e2e-placement] round3 send placement drop_non_target_residents=1")
-    acks = coord.send_placement_plan(drop_non_target_residents=True)
+    acks = coord.send_placement_plan()
     _assert_ack_ok(acks)
 
     coord.discover_nodes()

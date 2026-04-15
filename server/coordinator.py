@@ -192,6 +192,7 @@ class Coordinator:
         expert_ids: List[int],
         expert_mem_bytes: int,
         memory_utilization: float = 0.9,
+        allow_drop_non_target_residents: bool = False,
     ) -> None:
         if len(set(expert_ids)) != len(expert_ids):
             raise RuntimeError("expert_ids contains duplicates")
@@ -199,11 +200,15 @@ class Coordinator:
         self.discover_nodes()
         self.print_summary()
      
-        self.placements = build_balanced_placement(
+        (
+            self.placements,
+            self.drop_non_target_residents_by_node,
+        ) = build_balanced_placement(
             gpu_inventory=self.gpu_inventory,
             expert_ids=expert_ids,
             expert_mem_bytes=expert_mem_bytes,
             memory_utilization=memory_utilization,
+            allow_drop_non_target_residents=allow_drop_non_target_residents,
         )
      
         if self.log_level >= 2:
@@ -245,45 +250,50 @@ class Coordinator:
         return grouped
 
 
-    def send_placement_plan(self, drop_non_target_residents: bool = False) -> list[dict]:
+    def send_placement_plan(self) -> list[dict]:
         grouped = self.group_placements_by_node()
         acks = []
-     
+
+        drop_by_node = getattr(self, "drop_non_target_residents_by_node", {})
+
         for node in self.node_inventories:
             node_instance_id = node["node_instance_id"]
             host = node["host"]
             control_port = node["control_port"]
-     
+
             assignments = grouped.get(node_instance_id, [])
-     
+            node_drop_non_target_residents = bool(
+                drop_by_node.get(node_instance_id, False)
+            )
+
             client = NodeClient(host, control_port, log_level=self.log_level)
             with client:
                 ack = client.send_placement_plan(
                     assignments,
-                    drop_non_target_residents=drop_non_target_residents,
+                    drop_non_target_residents=node_drop_non_target_residents,
                 )
-     
+
             ack = dict(ack)
             ack["node_instance_id"] = node_instance_id
             ack["reported_node_id"] = node["reported_node_id"]
             ack["host"] = host
             ack["control_port"] = control_port
             ack["num_assignments_sent"] = len(assignments)
-            ack["drop_non_target_residents"] = bool(drop_non_target_residents)
+            ack["drop_non_target_residents"] = node_drop_non_target_residents
             acks.append(ack)
-     
+
             log1(
                 self.log_level,
                 f"sent placement to {node_instance_id} "
                 f"reported_node_id={node['reported_node_id']} "
                 f"assignments={len(assignments)} "
-                f"drop_non_target_residents={int(drop_non_target_residents)} "
+                f"drop_non_target_residents={int(node_drop_non_target_residents)} "
                 f"needs_load={ack['needs_load']} "
                 f"all_ready={ack['all_ready']} "
                 f"target={ack['num_target_experts']} "
                 f"ready={ack['num_ready_experts']}"
             )
-     
+
         return acks
 
 

@@ -21,47 +21,33 @@ def main():
 
     preload_expert_ids = build_restricted_global_expert_ids(run_cfg)
     if preload_expert_ids is not None:
-        preload_expert_ids = [int(x) for x in preload_expert_ids]
-        if len(set(preload_expert_ids)) != len(preload_expert_ids):
-            raise RuntimeError("preload_expert_ids contains duplicates")
-        num_experts = len(preload_expert_ids)
+        expert_ids = preload_expert_ids
     else:
-        num_experts = int(run_cfg["num_experts"])
+        expert_ids = list(range(int(run_cfg["num_experts"])))
+
+    allow_drop_non_target_residents = bool(
+        run_cfg.get("allow_drop_non_target_residents", False)
+    )
 
     print("[placement-e2e] discover before placement")
-    coord.discover_nodes()
-    coord.print_summary()
+    coord.discover_and_build_placement(
+        expert_ids=expert_ids,
+        expert_mem_bytes=expert_mem_bytes,
+        memory_utilization=memory_utilization,
+        allow_drop_non_target_residents=allow_drop_non_target_residents,
+    )
 
     if not coord.node_inventories:
         raise RuntimeError("no node inventories discovered")
     if not coord.gpu_inventory:
         raise RuntimeError("no gpu inventory discovered")
-
-    coord.build_placement(
-        num_experts=num_experts,
-        expert_mem_bytes=expert_mem_bytes,
-        memory_utilization=memory_utilization,
-    )
-
-    if preload_expert_ids is not None:
-        if len(coord.placements) != len(preload_expert_ids):
-            raise RuntimeError(
-                f"placement size mismatch: placements={len(coord.placements)} "
-                f"restricted={len(preload_expert_ids)}"
-            )
-        for p, eid in zip(coord.placements, preload_expert_ids):
-            p["expert_id"] = int(eid)
-
     if not coord.placements:
         raise RuntimeError("placement is empty")
 
     print(f"[placement-e2e] built placements={len(coord.placements)}")
     coord.print_placement()
 
-    drop_non_target_residents = bool(run_cfg.get("drop_non_target_residents", False))
-    placement_acks = coord.send_placement_plan(
-        drop_non_target_residents=drop_non_target_residents
-    )
+    placement_acks = coord.send_placement_plan()
 
     if len(placement_acks) != len(coord.node_inventories):
         raise RuntimeError(
@@ -73,10 +59,8 @@ def main():
     total_ready = 0
     needs_load_nodes = 0
 
-    ack_by_node = {}
     for ack in placement_acks:
         node_instance_id = str(ack["node_instance_id"])
-        ack_by_node[node_instance_id] = ack
 
         status_code = int(ack["status_code"])
         if status_code != 0:
@@ -89,6 +73,7 @@ def main():
         num_ready = int(ack["num_ready_experts"])
         needs_load = bool(ack["needs_load"])
         all_ready = bool(ack["all_ready"])
+        node_drop = bool(ack["drop_non_target_residents"])
 
         if num_target != num_sent:
             raise RuntimeError(
@@ -114,6 +99,17 @@ def main():
                 f"needs_load={needs_load} all_ready={all_ready}"
             )
 
+        expected_node_drop = bool(
+            getattr(coord, "drop_non_target_residents_by_node", {}).get(
+                node_instance_id, False
+            )
+        )
+        if node_drop != expected_node_drop:
+            raise RuntimeError(
+                f"drop_non_target_residents mismatch for node={node_instance_id}: "
+                f"ack={node_drop} expected={expected_node_drop}"
+            )
+
         total_target += num_target
         total_ready += num_ready
         if needs_load:
@@ -124,7 +120,7 @@ def main():
             f"node={node_instance_id} "
             f"sent={num_sent} target={num_target} ready={num_ready} "
             f"needs_load={int(needs_load)} all_ready={int(all_ready)} "
-            f"drop_non_target_residents={int(bool(ack['drop_non_target_residents']))}"
+            f"drop_non_target_residents={int(node_drop)}"
         )
 
     if total_target != len(coord.placements):
@@ -152,8 +148,8 @@ def main():
 
     resident_hits = 0
     for node_instance_id, resident_by_worker in coord.node_resident_inventories.items():
-        for worker_id, expert_ids in resident_by_worker.items():
-            for expert_id in expert_ids:
+        for worker_id, resident_expert_ids in resident_by_worker.items():
+            for expert_id in resident_expert_ids:
                 key = (str(node_instance_id), int(worker_id), int(expert_id))
                 if key in placement_keys:
                     resident_hits += 1
