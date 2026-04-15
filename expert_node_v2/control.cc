@@ -671,12 +671,16 @@ bool HandleLoadWeightsChunk(
         return false;
     }
 
+    const auto t0 = std::chrono::steady_clock::now();
+
     common::LoadWeightsChunkMsg msg;
     if (!common::DecodeLoadWeightsChunkBody(req_body, &msg)) {
         std::fprintf(stderr, "[%s] failed to decode LoadWeightsChunk\n",
                      state->static_info.node_id.c_str());
         return false;
     }
+
+    const auto t1 = std::chrono::steady_clock::now();
 
     if (!state->active_load.active) {
         std::fprintf(stderr, "[%s] LoadWeightsChunk with no active load\n",
@@ -732,6 +736,8 @@ bool HandleLoadWeightsChunk(
         return false;
     }
 
+    const auto t2 = std::chrono::steady_clock::now();
+
     state->active_load.buffer.insert(
         state->active_load.buffer.end(),
         msg.chunk_data.begin(),
@@ -739,10 +745,21 @@ bool HandleLoadWeightsChunk(
     state->active_load.received_bytes =
         static_cast<std::uint64_t>(state->active_load.buffer.size());
 
+    const auto t3 = std::chrono::steady_clock::now();
+
     if (state->verbose) {
+        const double decode_ms =
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double validate_ms =
+            std::chrono::duration<double, std::milli>(t2 - t1).count();
+        const double copy_ms =
+            std::chrono::duration<double, std::milli>(t3 - t2).count();
+        const double total_ms =
+            std::chrono::duration<double, std::milli>(t3 - t0).count();
+
         std::printf("[%s] received LoadWeightsChunk rid=%u "
                     "expert=%d worker_id=%d tensor_kind=%s chunk_offset=%llu chunk_size=%zu "
-                    "received=%llu/%llu\n",
+                    "received=%llu/%llu decode_ms=%.3f validate_ms=%.3f copy_ms=%.3f total_ms=%.3f\n",
                     state->static_info.node_id.c_str(),
                     req.request_id,
                     msg.expert_id,
@@ -751,7 +768,11 @@ bool HandleLoadWeightsChunk(
                     static_cast<unsigned long long>(msg.chunk_offset),
                     msg.chunk_data.size(),
                     static_cast<unsigned long long>(state->active_load.received_bytes),
-                    static_cast<unsigned long long>(state->active_load.total_bytes));
+                    static_cast<unsigned long long>(state->active_load.total_bytes),
+                    decode_ms,
+                    validate_ms,
+                    copy_ms,
+                    total_ms);
     }
 
     return true;
