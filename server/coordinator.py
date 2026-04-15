@@ -603,53 +603,47 @@ class Coordinator:
         control_port = int(first_target["control_port"])
         node_instance_id = str(first_target["node_instance_id"])
      
-        for item in manifest_items:
-            cur_node_instance_id = str(item.target["node_instance_id"])
-            if cur_node_instance_id != node_instance_id:
-                raise ValueError(
-                    f"mixed node_instance_id in manifest_items: "
-                    f"{node_instance_id} vs {cur_node_instance_id}"
-                )
-     
         total_entries = len(manifest_items)
-        sent_entries = 0
-        sent_lock = threading.Lock()
-     
         q = queue.Queue(maxsize=queue_size)
         sentinel = object()
+        lock = threading.Lock()
         error_box: List[BaseException] = []
      
+        sent_entries = 0
+        sum_load_ms = 0.0
+        sum_send_ms = 0.0
+        sum_put_wait_ms = 0.0
+        sum_get_wait_ms = 0.0
+        sum_bytes = 0
+     
         def record_error(exc: BaseException) -> None:
-            with sent_lock:
+            with lock:
                 if not error_box:
                     error_box.append(exc)
      
-        def get_error() -> Optional[BaseException]:
-            with sent_lock:
+        def get_error():
+            with lock:
                 return error_box[0] if error_box else None
      
         def sender_main() -> None:
-            nonlocal sent_entries
+            nonlocal sent_entries, sum_send_ms, sum_get_wait_ms
             client = None
             try:
                 client = NodeClient(host, control_port, log_level=self.log_level)
                 client.__enter__()
      
-                log2(
-                    self.log_level,
-                    f"{progress_prefix} open control "
-                    f"node={node_instance_id} host={host} port={control_port}"
-                )
-     
                 while True:
-                    err = get_error()
-                    if err is not None:
-                        break
-     
+                    t0 = time.perf_counter()
                     try:
                         item = q.get(timeout=0.5)
                     except queue.Empty:
+                        if get_error() is not None:
+                            break
                         continue
+                    t1 = time.perf_counter()
+     
+                    with lock:
+                        sum_get_wait_ms += (t1 - t0) * 1000.0
      
                     if item is sentinel:
                         break
@@ -661,29 +655,24 @@ class Coordinator:
                         client=client,
                     )
      
-                    with sent_lock:
+                    with lock:
                         sent_entries += 1
-                        cur_sent = sent_entries
+                        sum_send_ms += float(bundle.send_ms or 0.0)
      
-                    if cur_sent == 1 or cur_sent % 32 == 0 or cur_sent == total_entries:
+                    if sent_entries == 1 or sent_entries % 32 == 0 or sent_entries == total_entries:
                         log1(
                             self.log_level,
-                            f"{progress_prefix} sent {cur_sent}/{total_entries} "
+                            f"{progress_prefix} sent {sent_entries}/{total_entries} "
                             f"expert={bundle.expert_id}"
                         )
             except BaseException as exc:
                 record_error(exc)
             finally:
                 if client is not None:
-                    try:
-                        client.__exit__(None, None, None)
-                    except Exception:
-                        pass
+                    client.__exit__(None, None, None)
      
-        sender = threading.Thread(
-            target=sender_main,
-            name=f"preload-sender-{node_instance_id}",
-        )
+        t_node0 = time.perf_counter()
+        sender = threading.Thread(target=sender_main, name=f"preload-sender-{node_instance_id}")
         sender.start()
      
         try:
@@ -692,37 +681,31 @@ class Coordinator:
                 if err is not None:
                     break
      
-                if not sender.is_alive():
-                    raise RuntimeError(
-                        f"{progress_prefix} sender thread died unexpectedly "
-                        f"before expert={bundle_spec.expert_id}"
-                    )
-     
-                loaded_bundle = self.load_one_bundle(
+                bundle = self.load_one_bundle(
                     model_loader=model_loader,
                     bundle_spec=bundle_spec,
                 )
+     
+                with lock:
+                    sum_load_ms += float(bundle.load_ms or 0.0)
+                    sum_bytes += int(bundle.total_bytes)
      
                 while True:
                     err = get_error()
                     if err is not None:
                         break
-     
-                    if not sender.is_alive():
-                        raise RuntimeError(
-                            f"{progress_prefix} sender thread died unexpectedly "
-                            f"while enqueueing expert={bundle_spec.expert_id}"
-                        )
-     
+                    t0 = time.perf_counter()
                     try:
-                        q.put(loaded_bundle, timeout=0.5)
+                        q.put(bundle, timeout=0.5)
+                        t1 = time.perf_counter()
+                        with lock:
+                            sum_put_wait_ms += (t1 - t0) * 1000.0
                         break
                     except queue.Full:
-                        continue
-     
-                err = get_error()
-                if err is not None:
-                    break
+                        if not sender.is_alive():
+                            raise RuntimeError(
+                                f"{progress_prefix} sender died while enqueueing expert={bundle_spec.expert_id}"
+                            )
      
                 if idx == 1 or idx % 32 == 0 or idx == total_entries:
                     log1(
@@ -741,16 +724,24 @@ class Coordinator:
                 except queue.Full:
                     if get_error() is not None:
                         break
-                    continue
-     
             sender.join(timeout=5.0)
      
         err = get_error()
         if err is not None:
             raise err
      
-        if sender.is_alive():
-            raise RuntimeError(f"{progress_prefix} sender thread did not exit cleanly")
+        wall_ms = (time.perf_counter() - t_node0) * 1000.0
+        log1(
+            self.log_level,
+            f"{progress_prefix} done "
+            f"bundles={total_entries} "
+            f"bytes={sum_bytes} "
+            f"wall_ms={wall_ms:.3f} "
+            f"sum_load_ms={sum_load_ms:.3f} "
+            f"sum_send_ms={sum_send_ms:.3f} "
+            f"sum_put_wait_ms={sum_put_wait_ms:.3f} "
+            f"sum_get_wait_ms={sum_get_wait_ms:.3f}"
+        )
 
 
     def _placement_is_already_resident(self, placement: Dict[str, Any]) -> bool:
