@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -127,6 +128,8 @@ bool EnqueueResidentBuild(
 }
 
 void RunResidentBuildWorker(ControlState* state) {
+    pthread_setname_np(pthread_self(), "resident_bg");
+
     if (state == nullptr) return;
 
     for (;;) {
@@ -1066,6 +1069,8 @@ bool HandleOneRequest(
 }  // namespace
 
 void RunControlLoop(ControlState* state) {
+    pthread_setname_np(pthread_self(), "ctrl_loop");
+
     if (state == nullptr) {
         std::fprintf(stderr, "[control] RunControlLoop: state is null\n");
         return;

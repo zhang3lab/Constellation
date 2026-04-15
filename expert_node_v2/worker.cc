@@ -7,6 +7,7 @@
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #include "common/header_codec.h"
@@ -139,6 +140,14 @@ bool HandleInferRequest(
 }
 
 void RunGpuWorkerLoopV2(GpuWorkerContextV2* ctx) {
+    char thread_name[16];
+    if (ctx != nullptr) {
+        std::snprintf(thread_name, sizeof(thread_name), "gpu_w%d", ctx->worker_id);
+        pthread_setname_np(pthread_self(), thread_name);
+    } else {
+        pthread_setname_np(pthread_self(), "gpu_w?");
+    }
+
     if (ctx == nullptr || ctx->state == nullptr) {
         std::fprintf(stderr, "[worker] invalid ctx\n");
         return;
