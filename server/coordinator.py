@@ -860,6 +860,8 @@ class Coordinator:
                         f"host={target['host']} port={target['control_port']}\n{tb}"
                     )
 
+        t0_preload = time.perf_counter()
+
         for node_instance_id, items in jobs_by_node.items():
             th = threading.Thread(
                 target=worker,
@@ -876,6 +878,9 @@ class Coordinator:
             for err in errors:
                 print(f"[preload] ERROR\n{err}")
             raise RuntimeError(f"preload failed on {len(errors)} node(s)")
+
+        wall_s = time.perf_counter() - t0_preload
+        print(f"[preload-total-wall] wall_s={wall_s:.3f}")
 
         deadline = time.time() + 30.0
 
