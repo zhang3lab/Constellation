@@ -586,9 +586,9 @@ class _BorrowedTorchIpcTensor:
         self.dtype = cp.dtype(str(desc["dtype"]))
 
         handle = base64.b64decode(desc["handle_b64"])
-        self.ptr = curuntime.ipcOpenMemHandle(handle)
 
         with cp.cuda.Device(self.device_id):
+            self.ptr = curuntime.ipcOpenMemHandle(handle)
             self.mem = cp.cuda.UnownedMemory(
                 self.ptr,
                 self.nbytes,
@@ -597,12 +597,11 @@ class _BorrowedTorchIpcTensor:
             )
             self.memptr = cp.cuda.MemoryPointer(self.mem, 0)
             self.cp_arr = cp.ndarray(self.shape, dtype=self.dtype, memptr=self.memptr)
-
-            # 零拷贝转成 torch tensor
             self.torch_tensor = torch.utils.dlpack.from_dlpack(self.cp_arr)
 
     def close(self) -> None:
-        curuntime.ipcCloseMemHandle(self.ptr)
+        with cp.cuda.Device(self.device_id):
+            curuntime.ipcCloseMemHandle(self.ptr)
 
 
 class DeepseekV3MoE(nn.Module):
