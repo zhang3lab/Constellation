@@ -69,9 +69,21 @@ def main() -> None:
 
         try:
             print("lease_id:", lease_id)
-            print("w_up shape:", w_up.array.shape, "dtype:", w_up.array.dtype, "sum:", float(w_up.array.sum().item()))
-            print("w_gate shape:", w_gate.array.shape, "dtype:", w_gate.array.dtype, "sum:", float(w_gate.array.sum().item()))
-            print("w_down shape:", w_down.array.shape, "dtype:", w_down.array.dtype, "sum:", float(w_down.array.sum().item()))
+            print(
+                "w_up shape:", w_up.array.shape,
+                "dtype:", w_up.array.dtype,
+                "sum_fp32:", float(w_up.array.astype(cp.float32).sum().item()),
+            )
+            print(
+                "w_gate shape:", w_gate.array.shape,
+                "dtype:", w_gate.array.dtype,
+                "sum_fp32:", float(w_gate.array.astype(cp.float32).sum().item()),
+            )
+            print(
+                "w_down shape:", w_down.array.shape,
+                "dtype:", w_down.array.dtype,
+                "sum_fp32:", float(w_down.array.astype(cp.float32).sum().item()),
+            )
         finally:
             w_up.close()
             w_gate.close()
