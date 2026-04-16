@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import time
 
 import cupy as cp
 from cupy.cuda import runtime as curuntime
@@ -47,6 +48,11 @@ def silu(x: cp.ndarray) -> cp.ndarray:
     return x / (1.0 + cp.exp(-x))
 
 
+def sync_device(device_id: int) -> None:
+    with cp.cuda.Device(device_id):
+        cp.cuda.runtime.deviceSynchronize()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", type=str, default="127.0.0.1")
@@ -55,57 +61,82 @@ def main() -> None:
     ap.add_argument("--expert-id", type=int, default=18)
     ap.add_argument("--device-id", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=1)
+    ap.add_argument("--repeat", type=int, default=2)
     args = ap.parse_args()
 
+    hidden = 7168
+    batch_size = int(args.batch_size)
+
     with CacheClient(args.host, args.port) as client:
-        resp = client.borrow_expert(
-            layer_id=args.layer_id,
-            expert_id=args.expert_id,
-            device_id=args.device_id,
-        )
-        assert resp["ok"], resp
+        for step in range(int(args.repeat)):
+            print(f"\n=== iteration {step} ===")
 
-        lease_id = resp["lease_id"]
-        tensors = resp["tensors"]
+            t0 = time.perf_counter()
+            resp = client.borrow_expert(
+                layer_id=args.layer_id,
+                expert_id=args.expert_id,
+                device_id=args.device_id,
+            )
+            t1 = time.perf_counter()
 
-        w_up = open_borrowed_tensor(tensors["w_up"], args.device_id)
-        w_gate = open_borrowed_tensor(tensors["w_gate"], args.device_id)
-        w_down = open_borrowed_tensor(tensors["w_down"], args.device_id)
-
-        try:
-            print("lease_id:", lease_id)
+            assert resp["ok"], resp
+            lease_id = resp["lease_id"]
+            tensors = resp["tensors"]
 
             print(
-                "w_up shape:", w_up.array.shape,
-                "dtype:", w_up.array.dtype,
-                "sum_fp32:", float(w_up.array.astype(cp.float32).sum().item()),
-                "mean_fp32:", float(w_up.array.astype(cp.float32).mean().item()),
+                f"[borrow] lease_id={lease_id} "
+                f"wall_ms={(t1 - t0) * 1000.0:.3f}"
             )
+
+            t2 = time.perf_counter()
+            w_up = open_borrowed_tensor(tensors["w_up"], args.device_id)
+            w_gate = open_borrowed_tensor(tensors["w_gate"], args.device_id)
+            w_down = open_borrowed_tensor(tensors["w_down"], args.device_id)
+            t3 = time.perf_counter()
+
             print(
-                "w_gate shape:", w_gate.array.shape,
-                "dtype:", w_gate.array.dtype,
-                "sum_fp32:", float(w_gate.array.astype(cp.float32).sum().item()),
-                "mean_fp32:", float(w_gate.array.astype(cp.float32).mean().item()),
-            )
-            print(
-                "w_down shape:", w_down.array.shape,
-                "dtype:", w_down.array.dtype,
-                "sum_fp32:", float(w_down.array.astype(cp.float32).sum().item()),
-                "mean_fp32:", float(w_down.array.astype(cp.float32).mean().item()),
+                f"[open_ipc] wall_ms={(t3 - t2) * 1000.0:.3f}"
             )
 
-            hidden = int(w_up.array.shape[1])
-            batch_size = int(args.batch_size)
+            try:
+                print(
+                    "w_up shape:", w_up.array.shape,
+                    "dtype:", w_up.array.dtype,
+                    "sum_fp32:", float(w_up.array.astype(cp.float32).sum().item()),
+                    "mean_fp32:", float(w_up.array.astype(cp.float32).mean().item()),
+                )
+                print(
+                    "w_gate shape:", w_gate.array.shape,
+                    "dtype:", w_gate.array.dtype,
+                    "sum_fp32:", float(w_gate.array.astype(cp.float32).sum().item()),
+                    "mean_fp32:", float(w_gate.array.astype(cp.float32).mean().item()),
+                )
+                print(
+                    "w_down shape:", w_down.array.shape,
+                    "dtype:", w_down.array.dtype,
+                    "sum_fp32:", float(w_down.array.astype(cp.float32).sum().item()),
+                    "mean_fp32:", float(w_down.array.astype(cp.float32).mean().item()),
+                )
 
-            with cp.cuda.Device(args.device_id):
-                x = cp.random.randn(batch_size, hidden, dtype=cp.float32)
-                x_fp = x.astype(w_up.array.dtype)
+                with cp.cuda.Device(args.device_id):
+                    x = cp.random.randn(batch_size, hidden, dtype=cp.float32)
+                    x_fp = x.astype(w_up.array.dtype)
 
-                gate_linear = x_fp @ w_gate.array.T
-                up_linear = x_fp @ w_up.array.T
-                act = silu(gate_linear.astype(cp.float32)).astype(x_fp.dtype)
-                mul = act * up_linear
-                out = mul @ w_down.array.T
+                    sync_device(args.device_id)
+                    t4 = time.perf_counter()
+
+                    gate_linear = x_fp @ w_gate.array.T
+                    up_linear = x_fp @ w_up.array.T
+                    act = silu(gate_linear.astype(cp.float32)).astype(x_fp.dtype)
+                    mul = act * up_linear
+                    out = mul @ w_down.array.T
+
+                    sync_device(args.device_id)
+                    t5 = time.perf_counter()
+
+                print(
+                    f"[expert_forward] wall_ms={(t5 - t4) * 1000.0:.3f}"
+                )
 
                 print(
                     "input shape:", x_fp.shape,
@@ -143,11 +174,18 @@ def main() -> None:
                     "mean_fp32:", float(out.astype(cp.float32).mean().item()),
                 )
 
-        finally:
-            w_up.close()
-            w_gate.close()
-            w_down.close()
-            print(client.return_expert(lease_id))
+            finally:
+                t6 = time.perf_counter()
+                w_up.close()
+                w_gate.close()
+                w_down.close()
+                ret = client.return_expert(lease_id)
+                t7 = time.perf_counter()
+
+                print(
+                    f"[return] wall_ms={(t7 - t6) * 1000.0:.3f} "
+                    f"resp={ret}"
+                )
 
 
 if __name__ == "__main__":
