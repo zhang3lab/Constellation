@@ -217,7 +217,12 @@ class CacheRequestHandler(socketserver.StreamRequestHandler):
                 else:
                     resp = {"ok": False, "error": f"unknown op: {op}"}
             except Exception as e:
-                resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+                traceback.print_exc()
+                resp = {
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                }
 
             send_json_line(self.wfile, resp)
 
