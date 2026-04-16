@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import time
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -519,6 +520,8 @@ def main() -> None:
 
                 hidden_states_list = [hidden_states]
 
+                layer_timing = []
+
                 for i in range(target_layer + 1):
                     layer_mod = model.model.layers[i]
 
@@ -528,6 +531,12 @@ def main() -> None:
                     #    attention_mask = attention_mask.to(hidden_states.device)
                     if position_ids is not None:
                         position_ids = position_ids.to(hidden_states.device)
+
+                    dev = hidden_states.device
+                    if dev.type == "cuda":
+                        torch.cuda.synchronize(dev)
+                    t0 = time.perf_counter()
+
                     layer_outputs_i = model.model.layers[i](
                         hidden_states,
                         attention_mask=None,
@@ -543,6 +552,28 @@ def main() -> None:
                         hidden_states = layer_outputs_i
 
                     hidden_states_list.append(hidden_states)
+
+                    dev = hidden_states.device
+                    if dev.type == "cuda":
+                        torch.cuda.synchronize(dev)
+                    t1 = time.perf_counter()
+
+                    layer_ms = (t1 - t0) * 1000.0
+                    layer_timing.append(
+                        {
+                            "layer_id": int(i),
+                            "device": str(dev),
+                            "layer_ms": layer_ms,
+                            "is_sparse": bool(is_sparse_layer(cfg, i)),
+                        }
+                    )
+
+                    print(
+                        f"[hf-layer-timing] layer={i} "
+                        f"device={dev} "
+                        f"is_sparse={is_sparse_layer(cfg, i)} "
+                        f"ms={layer_ms:.3f}"
+                    )
 
                 class _ManualOutputs:
                     pass
@@ -750,6 +781,7 @@ def main() -> None:
             "aux_keys": aux_keys,
             "has_final_hidden": bool(is_last_layer),
             "has_logits": bool(is_last_layer),
+            "layer_timing": layer_timing,
         }
         with (outdir / "hf_single_layer_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
