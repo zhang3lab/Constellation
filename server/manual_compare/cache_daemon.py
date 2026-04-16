@@ -219,56 +219,94 @@ class CacheDaemon:
             self._experts[key] = ex
             return ex
 
-    def borrow_expert(
+    def borrow_expert_batch(
         self,
         layer_id: int,
-        expert_id: int,
+        expert_ids: list[int],
         device_id: int,
     ) -> dict[str, Any]:
-        ex = self._ensure_expert_on_device(layer_id, expert_id, device_id)
-
-        lease_id = str(uuid.uuid4())
+        layer_id = int(layer_id)
+        device_id = int(device_id)
+        expert_ids = [int(x) for x in expert_ids]
+     
+        items = []
+     
+        # 先确保都 resident，避免中途部分成功部分失败。
+        residents: list[tuple[int, ExpertResident]] = []
+        for expert_id in expert_ids:
+            ex = self._ensure_expert_on_device(layer_id, expert_id, device_id)
+            residents.append((expert_id, ex))
+     
         with self._lock:
-            ex.pin_count += 1
-            ex.lease_ids.add(lease_id)
-            ex.last_access_ts = time.time()
-            self._leases[lease_id] = self._key(layer_id, expert_id, device_id)
-
-            return {
-                "ok": True,
-                "lease_id": lease_id,
-                "layer_id": int(layer_id),
-                "expert_id": int(expert_id),
-                "device_id": int(device_id),
-                "pin_count": ex.pin_count,
-                "tensors": {
-                    name: {
-                        "handle_b64": base64.b64encode(t.ipc_handle).decode("ascii"),
-                        "shape": list(t.shape),
-                        "dtype": t.dtype,
-                        "nbytes": t.nbytes,
+            for expert_id, ex in residents:
+                lease_id = str(uuid.uuid4())
+                ex.pin_count += 1
+                ex.lease_ids.add(lease_id)
+                ex.last_access_ts = time.time()
+                self._leases[lease_id] = self._key(layer_id, expert_id, device_id)
+     
+                items.append(
+                    {
+                        "lease_id": lease_id,
+                        "layer_id": layer_id,
+                        "expert_id": expert_id,
+                        "device_id": device_id,
+                        "pin_count": ex.pin_count,
+                        "tensors": {
+                            name: {
+                                "handle_b64": base64.b64encode(t.ipc_handle).decode("ascii"),
+                                "shape": list(t.shape),
+                                "dtype": t.dtype,
+                                "nbytes": t.nbytes,
+                            }
+                            for name, t in ex.tensors.items()
+                        },
                     }
-                    for name, t in ex.tensors.items()
-                },
-            }
-
-    def return_expert(self, lease_id: str) -> dict[str, Any]:
+                )
+     
+        return {
+            "ok": True,
+            "layer_id": layer_id,
+            "device_id": device_id,
+            "items": items,
+        }
+     
+     
+    def return_expert_batch(self, lease_ids: list[str]) -> dict[str, Any]:
+        lease_ids = [str(x) for x in lease_ids]
+        out = []
+     
         with self._lock:
-            key = self._leases.pop(str(lease_id), None)
-            if key is None:
-                return {"ok": False, "error": f"unknown lease_id: {lease_id}"}
-
-            ex = self._experts[key]
-            if lease_id in ex.lease_ids:
-                ex.lease_ids.remove(lease_id)
-            ex.pin_count = max(0, ex.pin_count - 1)
-            ex.last_access_ts = time.time()
-
-            return {
-                "ok": True,
-                "lease_id": str(lease_id),
-                "pin_count": ex.pin_count,
-            }
+            for lease_id in lease_ids:
+                key = self._leases.pop(lease_id, None)
+                if key is None:
+                    out.append(
+                        {
+                            "ok": False,
+                            "lease_id": lease_id,
+                            "error": f"unknown lease_id: {lease_id}",
+                        }
+                    )
+                    continue
+     
+                ex = self._experts[key]
+                if lease_id in ex.lease_ids:
+                    ex.lease_ids.remove(lease_id)
+                ex.pin_count = max(0, ex.pin_count - 1)
+                ex.last_access_ts = time.time()
+     
+                out.append(
+                    {
+                        "ok": True,
+                        "lease_id": lease_id,
+                        "pin_count": ex.pin_count,
+                    }
+                )
+     
+        return {
+            "ok": True,
+            "items": out,
+        }
 
     def query(self) -> dict[str, Any]:
         with self._lock:
@@ -300,15 +338,15 @@ class CacheRequestHandler(socketserver.StreamRequestHandler):
 
             op = req.get("op")
             try:
-                if op == "borrow_expert":
-                    resp = self.daemon_ref.borrow_expert(
+                if op == "borrow_expert_batch":
+                    resp = self.daemon_ref.borrow_expert_batch(
                         layer_id=int(req["layer_id"]),
-                        expert_id=int(req["expert_id"]),
+                        expert_ids=[int(x) for x in req["expert_ids"]],
                         device_id=int(req["device_id"]),
                     )
-                elif op == "return_expert":
-                    resp = self.daemon_ref.return_expert(
-                        lease_id=str(req["lease_id"]),
+                elif op == "return_expert_batch":
+                    resp = self.daemon_ref.return_expert_batch(
+                        lease_ids=[str(x) for x in req["lease_ids"]],
                     )
                 elif op == "query":
                     resp = self.daemon_ref.query()

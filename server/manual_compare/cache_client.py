@@ -43,21 +43,26 @@ class CacheClient:
             raise RuntimeError("cache daemon closed connection")
         return json.loads(line.decode("utf-8"))
 
-    def borrow_expert(self, layer_id: int, expert_id: int, device_id: int) -> dict[str, Any]:
+    def borrow_expert_batch(
+        self,
+        layer_id: int,
+        expert_ids: list[int],
+        device_id: int,
+    ) -> dict[str, Any]:
         return self._request(
             {
-                "op": "borrow_expert",
+                "op": "borrow_expert_batch",
                 "layer_id": int(layer_id),
-                "expert_id": int(expert_id),
+                "expert_ids": [int(x) for x in expert_ids],
                 "device_id": int(device_id),
             }
         )
-
-    def return_expert(self, lease_id: str) -> dict[str, Any]:
+     
+    def return_expert_batch(self, lease_ids: list[str]) -> dict[str, Any]:
         return self._request(
             {
-                "op": "return_expert",
-                "lease_id": str(lease_id),
+                "op": "return_expert_batch",
+                "lease_ids": [str(x) for x in lease_ids],
             }
         )
 
