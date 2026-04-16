@@ -798,8 +798,8 @@ class DeepseekV3MoE(nn.Module):
 
         self.last_debug["final_out"] = y.detach().cpu().clone()
 
-        #if not self.partial_resident_mode and self._manual_lazy_loading_enabled():
-        #    self._evict_loaded_full_experts()
+        if not self.partial_resident_mode and self._manual_lazy_loading_enabled():
+            self._evict_loaded_full_experts()
 
         return y
 
