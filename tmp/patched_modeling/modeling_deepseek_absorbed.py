@@ -24,9 +24,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch DeepSeek model."""
+import base64
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
+
+import cupy as cp
+from cupy.cuda import runtime as curuntime
 
 import torch
 import torch.nn.functional as F
@@ -67,6 +71,8 @@ except ImportError:
 from .configuration_deepseek import DeepseekV3Config
 import torch.distributed as dist
 import numpy as np
+
+from server.manual_compare.cache_client import CacheClient
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -572,6 +578,33 @@ class MoEGate(nn.Module):
         return topk_idx, topk_weight
 
 
+class _BorrowedTorchIpcTensor:
+    def __init__(self, desc: dict, device_id: int):
+        self.device_id = int(device_id)
+        self.nbytes = int(desc["nbytes"])
+        self.shape = tuple(int(x) for x in desc["shape"])
+        self.dtype = cp.dtype(str(desc["dtype"]))
+
+        handle = base64.b64decode(desc["handle_b64"])
+        self.ptr = curuntime.ipcOpenMemHandle(handle)
+
+        with cp.cuda.Device(self.device_id):
+            self.mem = cp.cuda.UnownedMemory(
+                self.ptr,
+                self.nbytes,
+                self,
+                device_id=self.device_id,
+            )
+            self.memptr = cp.cuda.MemoryPointer(self.mem, 0)
+            self.cp_arr = cp.ndarray(self.shape, dtype=self.dtype, memptr=self.memptr)
+
+            # 零拷贝转成 torch tensor
+            self.torch_tensor = torch.utils.dlpack.from_dlpack(self.cp_arr)
+
+    def close(self) -> None:
+        curuntime.ipcCloseMemHandle(self.ptr)
+
+
 class DeepseekV3MoE(nn.Module):
     """
     A mixed expert module containing shared experts.
@@ -770,6 +803,76 @@ class DeepseekV3MoE(nn.Module):
         if str(self._manual_device).startswith("cuda"):
             torch.cuda.empty_cache()
 
+    def _cache_daemon_enabled(self) -> bool:
+        return bool(getattr(self, "_cache_daemon_host", None))
+     
+     
+    def _get_cache_client(self):
+        cached = getattr(self, "_cache_client_obj", None)
+        if cached is not None:
+            return cached
+     
+        host = str(getattr(self, "_cache_daemon_host"))
+        port = int(getattr(self, "_cache_daemon_port"))
+        client = CacheClient(host, port)
+        client.__enter__()
+        self._cache_client_obj = client
+        return client
+     
+     
+    def _borrow_expert_batch_from_cache(
+        self,
+        *,
+        layer_id: int,
+        expert_ids: list[int],
+        device_id: int,
+    ):
+        client = self._get_cache_client()
+        resp = client.borrow_expert_batch(
+            layer_id=int(layer_id),
+            expert_ids=[int(x) for x in expert_ids],
+            device_id=int(device_id),
+        )
+        if not resp.get("ok", False):
+            raise RuntimeError(f"borrow_expert_batch failed: {resp}")
+     
+        out = {}
+        for item in resp["items"]:
+            expert_id = int(item["expert_id"])
+            tensors = item["tensors"]
+     
+            w_up = _BorrowedTorchIpcTensor(tensors["w_up"], device_id)
+            w_gate = _BorrowedTorchIpcTensor(tensors["w_gate"], device_id)
+            w_down = _BorrowedTorchIpcTensor(tensors["w_down"], device_id)
+     
+            out[expert_id] = {
+                "lease_id": str(item["lease_id"]),
+                "w_up": w_up,
+                "w_gate": w_gate,
+                "w_down": w_down,
+            }
+        return out
+     
+     
+    def _return_expert_batch_to_cache(self, borrowed: dict[int, dict]) -> None:
+        if not borrowed:
+            return
+     
+        lease_ids = []
+        for item in borrowed.values():
+            lease_ids.append(str(item["lease_id"]))
+     
+        # 先关本地 IPC mapping
+        for item in borrowed.values():
+            item["w_up"].close()
+            item["w_gate"].close()
+            item["w_down"].close()
+     
+        client = self._get_cache_client()
+        resp = client.return_expert_batch(lease_ids)
+        if not resp.get("ok", False):
+            raise RuntimeError(f"return_expert_batch failed: {resp}")
+
     def forward(self, hidden_states):
         self.last_debug = {}
 
@@ -819,21 +922,21 @@ class DeepseekV3MoE(nn.Module):
         num_tokens, hidden_dim = x.shape
         top_k = int(topk_ids.shape[1])
         num_total_experts = int(self.config.n_routed_experts)
-
+     
         cnts = topk_ids.new_zeros((topk_ids.shape[0], num_total_experts))
         cnts.scatter_(1, topk_ids, 1)
         tokens_per_expert = cnts.sum(dim=0)
-
+     
         flat_topk_ids = topk_ids.view(-1)
         idxs = flat_topk_ids.argsort()
         sorted_tokens = x[idxs // top_k]
         sorted_tokens_shape = sorted_tokens.shape
-
+     
         if self.ep_size > 1:
             tokens_per_ep_rank = tokens_per_expert.view(self.ep_size, -1).sum(dim=1)
             tokens_per_expert_group = tokens_per_expert.new_empty(tokens_per_expert.shape[0])
             dist.all_to_all_single(tokens_per_expert_group, tokens_per_expert)
-
+     
             output_splits = (
                 tokens_per_expert_group.view(self.ep_size, -1)
                 .sum(1)
@@ -842,7 +945,7 @@ class DeepseekV3MoE(nn.Module):
                 .tolist()
             )
             input_split_sizes = tokens_per_ep_rank.cpu().numpy().tolist()
-
+     
             gathered_tokens = sorted_tokens.new_empty(
                 int(tokens_per_expert_group.sum().cpu().item()),
                 sorted_tokens.shape[1],
@@ -851,170 +954,187 @@ class DeepseekV3MoE(nn.Module):
                 list(gathered_tokens.split(output_splits)),
                 list(sorted_tokens.split(input_split_sizes)),
             )
-
+     
             tokens_per_expert_post_gather = tokens_per_expert_group.view(
                 self.ep_size,
                 self.experts_per_rank,
             ).sum(dim=0)
-
+     
             gatherd_idxs = np.zeros(shape=(gathered_tokens.shape[0],), dtype=np.int32)
             s = 0
             for i, k in enumerate(tokens_per_expert_group.cpu().numpy()):
                 gatherd_idxs[s : s + int(k)] = i % self.experts_per_rank
                 s += int(k)
             gatherd_idxs = gatherd_idxs.argsort()
-
+     
             sorted_tokens = gathered_tokens[gatherd_idxs]
             tokens_per_expert_local = tokens_per_expert_post_gather.cpu().numpy()
         else:
             gatherd_idxs = None
             tokens_per_expert_local = tokens_per_expert.cpu().numpy()
-
-            if self._manual_lazy_loading_enabled():
-                active_expert_ids = torch.nonzero(tokens_per_expert > 0, as_tuple=False).view(-1).tolist()
-                for expert_id in active_expert_ids:
-                    self._ensure_full_expert_loaded(int(expert_id))
-
-        debug_target_expert = None
+     
+        cache_mode = (self.ep_size == 1) and self._cache_daemon_enabled()
+        borrowed = {}
         debug_expert_outputs = []
         outputs = []
         start_idx = 0
-
-        for i, num_tokens_for_expert in enumerate(tokens_per_expert_local.tolist()):
-            end_idx = start_idx + int(num_tokens_for_expert)
-            if num_tokens_for_expert == 0:
-                continue
-
-            if self.ep_size > 1:
-                expert = self.experts[i + self.ep_rank * self.experts_per_rank]
-                if expert is None:
+     
+        try:
+            if cache_mode:
+                if x.device.type != "cuda":
+                    raise RuntimeError("cache-daemon path expects CUDA tensor input")
+                device_id = int(x.device.index)
+                active_expert_ids = torch.nonzero(tokens_per_expert > 0, as_tuple=False).view(-1).tolist()
+                borrowed = self._borrow_expert_batch_from_cache(
+                    layer_id=int(self.layer_id),
+                    expert_ids=[int(e) for e in active_expert_ids],
+                    device_id=device_id,
+                )
+            elif self.ep_size == 1 and self._manual_lazy_loading_enabled():
+                active_expert_ids = torch.nonzero(tokens_per_expert > 0, as_tuple=False).view(-1).tolist()
+                for expert_id in active_expert_ids:
+                    self._ensure_full_expert_loaded(int(expert_id))
+     
+            for i, num_tokens_for_expert in enumerate(tokens_per_expert_local.tolist()):
+                end_idx = start_idx + int(num_tokens_for_expert)
+                if num_tokens_for_expert == 0:
+                    continue
+     
+                tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
+     
+                tok_finite = torch.isfinite(tokens_for_this_expert)
+                tok_num_finite = int(tok_finite.sum().item())
+                tok_num_total = int(tokens_for_this_expert.numel())
+                tok_num_nan = int(torch.isnan(tokens_for_this_expert).sum().item())
+                tok_num_inf = int(torch.isinf(tokens_for_this_expert).sum().item())
+     
+                if tok_num_finite != tok_num_total:
                     raise RuntimeError(
-                        f"expert {i + self.ep_rank * self.experts_per_rank} is None on rank {self.ep_rank}"
+                        f"HF full-mode MoE expert input not finite for local expert {i}: "
+                        f"nan={tok_num_nan} inf={tok_num_inf}"
                     )
-            else:
-                expert = self.experts[i]
-
-            tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
-
-            tok_finite = torch.isfinite(tokens_for_this_expert)
-            tok_num_finite = int(tok_finite.sum().item())
-            tok_num_total = int(tokens_for_this_expert.numel())
-            tok_num_nan = int(torch.isnan(tokens_for_this_expert).sum().item())
-            tok_num_inf = int(torch.isinf(tokens_for_this_expert).sum().item())
-
-            if tok_num_finite != tok_num_total:
-                raise RuntimeError(
-                    f"HF full-mode MoE expert input not finite for local expert {i}: "
-                    f"nan={tok_num_nan} inf={tok_num_inf}"
+     
+                if self.ep_size > 1:
+                    expert = self.experts[i + self.ep_rank * self.experts_per_rank]
+                    if expert is None:
+                        raise RuntimeError(
+                            f"expert {i + self.ep_rank * self.experts_per_rank} is None on rank {self.ep_rank}"
+                        )
+                    expert_out = expert(tokens_for_this_expert)
+     
+                elif cache_mode:
+                    item = borrowed[int(i)]
+                    w_up = item["w_up"].torch_tensor
+                    w_gate = item["w_gate"].torch_tensor
+                    w_down = item["w_down"].torch_tensor
+     
+                    gate_linear = tokens_for_this_expert @ w_gate.t()
+                    up_linear = tokens_for_this_expert @ w_up.t()
+                    act = F.silu(gate_linear.float()).to(tokens_for_this_expert.dtype)
+                    mul = act * up_linear
+                    expert_out = mul @ w_down.t()
+     
+                else:
+                    expert = self.experts[i]
+                    expert_out = expert(tokens_for_this_expert)
+     
+                finite = torch.isfinite(expert_out)
+                num_finite = int(finite.sum().item())
+                num_total = int(expert_out.numel())
+                num_nan = int(torch.isnan(expert_out).sum().item())
+                num_inf = int(torch.isinf(expert_out).sum().item())
+     
+                if num_finite != num_total:
+                    raise RuntimeError(
+                        f"HF full-mode MoE expert output not finite for local expert {i}: "
+                        f"nan={num_nan} inf={num_inf}"
+                    )
+     
+                # 先只留 meta，别存大张量 debug，避免内存膨胀
+                debug_expert_outputs.append(
+                    {
+                        "expert_local_id": int(i),
+                        "num_tokens": int(num_tokens_for_expert),
+                    }
                 )
-
-            if i == 18 and int(num_tokens_for_expert) == 1:
-                expert_out = expert(tokens_for_this_expert, debug=True)
-                debug_item = {
-                    "expert_local_id": int(i),
-                    "num_tokens": int(num_tokens_for_expert),
-                    "tokens_for_this_expert": tokens_for_this_expert.detach().cpu().clone(),
-                    "expert_out": expert_out.detach().cpu().clone(),
-                }
-                if isinstance(expert.last_debug, dict):
-                    debug_item.update(expert.last_debug)
-                debug_expert_outputs.append(debug_item)
-            else:
-                expert_out = expert(tokens_for_this_expert)
-
-            finite = torch.isfinite(expert_out)
-            num_finite = int(finite.sum().item())
-            num_total = int(expert_out.numel())
-            num_nan = int(torch.isnan(expert_out).sum().item())
-            num_inf = int(torch.isinf(expert_out).sum().item())
-
-            if num_finite != num_total:
-                print(
-                    f"[hf-moe-full] bad expert_out: "
-                    f"expert_local_id={i} "
-                    f"tokens={int(num_tokens_for_expert)} "
-                    f"shape={tuple(expert_out.shape)} "
-                    f"finite={num_finite}/{num_total} "
-                    f"nan={num_nan} inf={num_inf}"
-                )
-                raise RuntimeError(
-                    f"HF full-mode MoE expert output not finite for local expert {i}: "
-                    f"nan={num_nan} inf={num_inf}"
-                )
-
-            outputs.append(expert_out)
-            start_idx = end_idx
-
-        outs = (
-            torch.cat(outputs, dim=0)
-            if len(outputs)
-            else sorted_tokens.new_empty((0, hidden_dim))
-        )
-
-        if self.ep_size > 1:
-            new_x = torch.empty_like(outs)
-            new_x[torch.as_tensor(gatherd_idxs, device=new_x.device)] = outs
-
-            gathered_tokens_back = x.new_empty(*sorted_tokens_shape)
-            dist.all_to_all(
-                list(gathered_tokens_back.split(input_split_sizes)),
-                list(new_x.split(output_splits)),
+     
+                outputs.append(expert_out)
+                start_idx = end_idx
+     
+            outs = (
+                torch.cat(outputs, dim=0)
+                if len(outputs)
+                else sorted_tokens.new_empty((0, hidden_dim))
             )
-            restored_sorted = gathered_tokens_back
-        else:
-            restored_sorted = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
-            restored_sorted[idxs] = outs
-
-            restored_by_token = restored_sorted.view(*topk_ids.shape, -1)
+     
+            if self.ep_size > 1:
+                new_x = torch.empty_like(outs)
+                new_x[torch.as_tensor(gatherd_idxs, device=new_x.device)] = outs
+     
+                gathered_tokens_back = x.new_empty(*sorted_tokens_shape)
+                dist.all_to_all(
+                    list(gathered_tokens_back.split(input_split_sizes)),
+                    list(new_x.split(output_splits)),
+                )
+                restored_sorted = gathered_tokens_back
+            else:
+                restored_sorted = x.new_empty((flat_topk_ids.shape[0], hidden_dim))
+                restored_sorted[idxs] = outs
+     
+                restored_by_token = restored_sorted.view(*topk_ids.shape, -1)
+                weighted_by_token = (
+                    restored_by_token.type(topk_weight.dtype)
+                    * topk_weight.unsqueeze(dim=-1)
+                )
+                final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
+     
+                self.last_moe_infer_debug = {
+                    "topk_ids": topk_ids.detach().cpu().clone(),
+                    "topk_weight": topk_weight.detach().cpu().clone(),
+                    "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
+                    "idxs": idxs.detach().cpu().clone(),
+                    "outs": outs.detach().cpu().clone(),
+                    "restored_flat": restored_sorted.detach().cpu().clone(),
+                    "restored_by_token": restored_by_token.detach().cpu().clone(),
+                    "weighted_by_token": weighted_by_token.detach().cpu().clone(),
+                    "final_out": final_out.detach().cpu().clone(),
+                    "debug_expert_outputs": debug_expert_outputs,
+                }
+                return final_out
+     
+            inv_idxs = torch.empty_like(idxs)
+            inv_idxs[idxs] = torch.arange(idxs.numel(), device=idxs.device)
+     
+            restored_flat = restored_sorted[inv_idxs]
+            restored_by_token = restored_flat.view(*topk_ids.shape, -1)
+     
             weighted_by_token = (
                 restored_by_token.type(topk_weight.dtype)
                 * topk_weight.unsqueeze(dim=-1)
             )
             final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
-
+     
             self.last_moe_infer_debug = {
                 "topk_ids": topk_ids.detach().cpu().clone(),
                 "topk_weight": topk_weight.detach().cpu().clone(),
                 "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
                 "idxs": idxs.detach().cpu().clone(),
+                "gatherd_idxs": torch.as_tensor(gatherd_idxs).detach().cpu().clone(),
                 "outs": outs.detach().cpu().clone(),
-                "restored_flat": restored_sorted.detach().cpu().clone(),
+                "restored_sorted": restored_sorted.detach().cpu().clone(),
+                "inv_idxs": inv_idxs.detach().cpu().clone(),
+                "restored_flat": restored_flat.detach().cpu().clone(),
                 "restored_by_token": restored_by_token.detach().cpu().clone(),
                 "weighted_by_token": weighted_by_token.detach().cpu().clone(),
                 "final_out": final_out.detach().cpu().clone(),
                 "debug_expert_outputs": debug_expert_outputs,
             }
+     
             return final_out
-
-        inv_idxs = torch.empty_like(idxs)
-        inv_idxs[idxs] = torch.arange(idxs.numel(), device=idxs.device)
-
-        restored_flat = restored_sorted[inv_idxs]
-        restored_by_token = restored_flat.view(*topk_ids.shape, -1)
-
-        weighted_by_token = (
-            restored_by_token.type(topk_weight.dtype)
-            * topk_weight.unsqueeze(dim=-1)
-        )
-        final_out = weighted_by_token.sum(dim=1).type(restored_by_token.dtype)
-
-        self.last_moe_infer_debug = {
-            "topk_ids": topk_ids.detach().cpu().clone(),
-            "topk_weight": topk_weight.detach().cpu().clone(),
-            "flat_topk_ids": flat_topk_ids.detach().cpu().clone(),
-            "idxs": idxs.detach().cpu().clone(),
-            "gatherd_idxs": torch.as_tensor(gatherd_idxs).detach().cpu().clone(),
-            "outs": outs.detach().cpu().clone(),
-            "restored_sorted": restored_sorted.detach().cpu().clone(),
-            "inv_idxs": inv_idxs.detach().cpu().clone(),
-            "restored_flat": restored_flat.detach().cpu().clone(),
-            "restored_by_token": restored_by_token.detach().cpu().clone(),
-            "weighted_by_token": weighted_by_token.detach().cpu().clone(),
-            "final_out": final_out.detach().cpu().clone(),
-            "debug_expert_outputs": debug_expert_outputs,
-        }
-
-        return final_out
+     
+        finally:
+            if cache_mode:
+                self._return_expert_batch_to_cache(borrowed)
 
     @torch.no_grad()
     def _moe_infer_partial_resident(self, x, topk_ids, topk_weight):

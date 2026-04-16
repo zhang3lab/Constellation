@@ -432,6 +432,8 @@ def main() -> None:
                 moe._manual_device = layer_to_device[layer_id]
                 moe._manual_dtype = backbone_dtype
                 moe._loaded_expert_ids = set()
+                moe._cache_daemon_host = "127.0.0.1"
+                moe._cache_daemon_port = 47000
 
                 print(
                     f"[hf-bind] layer={layer_id}",
