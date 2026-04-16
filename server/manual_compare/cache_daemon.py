@@ -18,7 +18,6 @@ from cupy.cuda import runtime as curuntime
 from server.deepseek_model_loader import DeepseekModelLoader
 
 
-# 避免 CuPy memory pool/suballocation 干扰 IPC handle。
 cp.cuda.set_allocator(None)
 cp.cuda.set_pinned_memory_allocator(None)
 
@@ -63,7 +62,17 @@ class TensorResident:
 
 
 @dataclass
-class ExpertResident:
+class CpuResident:
+    layer_id: int
+    expert_id: int
+    w_up_cpu: torch.Tensor
+    w_gate_cpu: torch.Tensor
+    w_down_cpu: torch.Tensor
+    last_access_ts: float = 0.0
+
+
+@dataclass
+class GpuResident:
     layer_id: int
     expert_id: int
     device_id: int
@@ -78,11 +87,13 @@ class CacheDaemon:
     def __init__(
         self,
         model_dir: str,
-        resident_dtype: str = "float16",
+        resident_dtype: str = "bfloat16",
     ) -> None:
         self._lock = threading.RLock()
         self._loader = DeepseekModelLoader(str(model_dir))
-        self._experts: dict[tuple[int, int, int], ExpertResident] = {}
+
+        self._cpu_experts: dict[tuple[int, int], CpuResident] = {}
+        self._gpu_experts: dict[tuple[int, int, int], GpuResident] = {}
         self._leases: dict[str, tuple[int, int, int]] = {}
 
         self._resident_dtype_str = str(resident_dtype)
@@ -91,6 +102,7 @@ class CacheDaemon:
 
     @staticmethod
     def _parse_torch_dtype(dtype_str: str) -> torch.dtype:
+        key = dtype_str.lower()
         m = {
             "float16": torch.float16,
             "fp16": torch.float16,
@@ -99,7 +111,6 @@ class CacheDaemon:
             "float32": torch.float32,
             "fp32": torch.float32,
         }
-        key = dtype_str.lower()
         if key not in m:
             raise ValueError(f"unsupported resident dtype: {dtype_str}")
         return m[key]
@@ -116,7 +127,11 @@ class CacheDaemon:
         raise ValueError(f"unsupported resident dtype: {dtype_str}")
 
     @staticmethod
-    def _key(layer_id: int, expert_id: int, device_id: int) -> tuple[int, int, int]:
+    def _cpu_key(layer_id: int, expert_id: int) -> tuple[int, int]:
+        return (int(layer_id), int(expert_id))
+
+    @staticmethod
+    def _gpu_key(layer_id: int, expert_id: int, device_id: int) -> tuple[int, int, int]:
         return (int(layer_id), int(expert_id), int(device_id))
 
     def _export_ipc_handle(self, arr: cp.ndarray) -> bytes:
@@ -139,43 +154,103 @@ class CacheDaemon:
             ipc_handle=self._export_ipc_handle(arr),
         )
 
-    def _load_real_expert_to_device(
+    def _ensure_expert_on_cpu(
         self,
         layer_id: int,
         expert_id: int,
-        device_id: int,
-    ) -> ExpertResident:
+    ) -> CpuResident:
+        cpu_key = self._cpu_key(layer_id, expert_id)
+
+        with self._lock:
+            cached = self._cpu_experts.get(cpu_key)
+            if cached is not None:
+                cached.last_access_ts = time.time()
+                return cached
+
         print(
-            f"[cache-daemon] loading expert layer={layer_id} expert={expert_id} "
-            f"device=cuda:{device_id} dtype={self._resident_dtype_str}",
+            f"[cache-daemon] loading expert-to-cpu "
+            f"layer={layer_id} expert={expert_id} dtype={self._resident_dtype_str}",
             flush=True,
         )
 
         t0 = time.perf_counter()
+
         w_up_t, w_gate_t, w_down_t = self._loader.load_routed_expert_triplet_fp32(
             layer_id=int(layer_id),
             expert_id=int(expert_id),
         )
+
+        # CPU resident 直接用 bf16/fp16，省 host memory
+        w_up_t = w_up_t.to(dtype=self._resident_torch_dtype).cpu().contiguous()
+        w_gate_t = w_gate_t.to(dtype=self._resident_torch_dtype).cpu().contiguous()
+        w_down_t = w_down_t.to(dtype=self._resident_torch_dtype).cpu().contiguous()
+
+        cpu_ex = CpuResident(
+            layer_id=int(layer_id),
+            expert_id=int(expert_id),
+            w_up_cpu=w_up_t,
+            w_gate_cpu=w_gate_t,
+            w_down_cpu=w_down_t,
+            last_access_ts=time.time(),
+        )
+
         t1 = time.perf_counter()
 
+        print(
+            f"[cache-daemon] loaded expert-to-cpu "
+            f"layer={layer_id} expert={expert_id} "
+            f"disk_and_cast_ms={(t1 - t0) * 1000.0:.3f}",
+            flush=True,
+        )
+
+        with self._lock:
+            cached = self._cpu_experts.get(cpu_key)
+            if cached is not None:
+                return cached
+            self._cpu_experts[cpu_key] = cpu_ex
+            return cpu_ex
+
+    def _promote_expert_to_device(
+        self,
+        layer_id: int,
+        expert_id: int,
+        device_id: int,
+    ) -> GpuResident:
+        gpu_key = self._gpu_key(layer_id, expert_id, device_id)
+
+        with self._lock:
+            cached = self._gpu_experts.get(gpu_key)
+            if cached is not None:
+                cached.last_access_ts = time.time()
+                return cached
+
+        cpu_ex = self._ensure_expert_on_cpu(layer_id, expert_id)
+
+        print(
+            f"[cache-daemon] promote expert-to-gpu "
+            f"layer={layer_id} expert={expert_id} device=cuda:{device_id}",
+            flush=True,
+        )
+
+        t0 = time.perf_counter()
+
         w_up = torch_tensor_to_cupy_on_device(
-            w_up_t,
+            cpu_ex.w_up_cpu,
             device_id=device_id,
             target_torch_dtype=self._resident_torch_dtype,
         )
         w_gate = torch_tensor_to_cupy_on_device(
-            w_gate_t,
+            cpu_ex.w_gate_cpu,
             device_id=device_id,
             target_torch_dtype=self._resident_torch_dtype,
         )
         w_down = torch_tensor_to_cupy_on_device(
-            w_down_t,
+            cpu_ex.w_down_cpu,
             device_id=device_id,
             target_torch_dtype=self._resident_torch_dtype,
         )
-        t2 = time.perf_counter()
 
-        ex = ExpertResident(
+        gpu_ex = GpuResident(
             layer_id=int(layer_id),
             expert_id=int(expert_id),
             device_id=int(device_id),
@@ -193,41 +268,31 @@ class CacheDaemon:
             lease_ids=set(),
             last_access_ts=time.time(),
         )
-        t3 = time.perf_counter()
+
+        t1 = time.perf_counter()
 
         print(
-            f"[cache-daemon] loaded expert layer={layer_id} expert={expert_id} "
-            f"device=cuda:{device_id} "
-            f"disk_ms={(t1 - t0) * 1000.0:.3f} "
-            f"h2d_ms={(t2 - t1) * 1000.0:.3f} "
-            f"ipc_ms={(t3 - t2) * 1000.0:.3f}",
+            f"[cache-daemon] promoted expert-to-gpu "
+            f"layer={layer_id} expert={expert_id} device=cuda:{device_id} "
+            f"h2d_ms={(t1 - t0) * 1000.0:.3f} "
+            f"resident_dtypes=({w_up.dtype}, {w_gate.dtype}, {w_down.dtype})",
             flush=True,
         )
-        return ex
+
+        with self._lock:
+            cached = self._gpu_experts.get(gpu_key)
+            if cached is not None:
+                return cached
+            self._gpu_experts[gpu_key] = gpu_ex
+            return gpu_ex
 
     def _ensure_expert_on_device(
         self,
         layer_id: int,
         expert_id: int,
         device_id: int,
-    ) -> ExpertResident:
-        key = self._key(layer_id, expert_id, device_id)
-
-        with self._lock:
-            cached = self._experts.get(key)
-            if cached is not None:
-                cached.last_access_ts = time.time()
-                return cached
-
-        ex = self._load_real_expert_to_device(layer_id, expert_id, device_id)
-
-        with self._lock:
-            # double-check，防止并发重复 load
-            cached = self._experts.get(key)
-            if cached is not None:
-                return cached
-            self._experts[key] = ex
-            return ex
+    ) -> GpuResident:
+        return self._promote_expert_to_device(layer_id, expert_id, device_id)
 
     def borrow_expert_batch(
         self,
@@ -238,23 +303,22 @@ class CacheDaemon:
         layer_id = int(layer_id)
         device_id = int(device_id)
         expert_ids = [int(x) for x in expert_ids]
-     
+
         items = []
-     
-        # 先确保都 resident，避免中途部分成功部分失败。
-        residents: list[tuple[int, ExpertResident]] = []
+        residents: list[tuple[int, GpuResident]] = []
+
         for expert_id in expert_ids:
             ex = self._ensure_expert_on_device(layer_id, expert_id, device_id)
             residents.append((expert_id, ex))
-     
+
         with self._lock:
             for expert_id, ex in residents:
                 lease_id = str(uuid.uuid4())
                 ex.pin_count += 1
                 ex.lease_ids.add(lease_id)
                 ex.last_access_ts = time.time()
-                self._leases[lease_id] = self._key(layer_id, expert_id, device_id)
-     
+                self._leases[lease_id] = self._gpu_key(layer_id, expert_id, device_id)
+
                 items.append(
                     {
                         "lease_id": lease_id,
@@ -273,19 +337,18 @@ class CacheDaemon:
                         },
                     }
                 )
-     
+
         return {
             "ok": True,
             "layer_id": layer_id,
             "device_id": device_id,
             "items": items,
         }
-     
-     
+
     def return_expert_batch(self, lease_ids: list[str]) -> dict[str, Any]:
         lease_ids = [str(x) for x in lease_ids]
         out = []
-     
+
         with self._lock:
             for lease_id in lease_ids:
                 key = self._leases.pop(lease_id, None)
@@ -298,17 +361,13 @@ class CacheDaemon:
                         }
                     )
                     continue
-     
-                ex = self._experts[key]
+
+                ex = self._gpu_experts[key]
                 if lease_id in ex.lease_ids:
                     ex.lease_ids.remove(lease_id)
                 ex.pin_count = max(0, ex.pin_count - 1)
                 ex.last_access_ts = time.time()
 
-                if ex.pin_count == 0:
-                    # 直接 drop resident，避免 GPU cache 越积越多
-                    self._experts.pop(key, None)
-     
                 out.append(
                     {
                         "ok": True,
@@ -316,7 +375,16 @@ class CacheDaemon:
                         "pin_count": ex.pin_count,
                     }
                 )
-     
+
+                # 只从 VRAM 卸载，CPU resident 保留
+                if ex.pin_count == 0:
+                    print(
+                        f"[cache-daemon] gpu-evict-on-return "
+                        f"layer={key[0]} expert={key[1]} device=cuda:{key[2]}",
+                        flush=True,
+                    )
+                    self._gpu_experts.pop(key, None)
+
         return {
             "ok": True,
             "items": out,
@@ -324,9 +392,19 @@ class CacheDaemon:
 
     def query(self) -> dict[str, Any]:
         with self._lock:
-            items = []
-            for (layer_id, expert_id, device_id), ex in self._experts.items():
-                items.append(
+            cpu_items = []
+            for (layer_id, expert_id), ex in self._cpu_experts.items():
+                cpu_items.append(
+                    {
+                        "layer_id": int(layer_id),
+                        "expert_id": int(expert_id),
+                        "last_access_ts": float(ex.last_access_ts),
+                    }
+                )
+
+            gpu_items = []
+            for (layer_id, expert_id, device_id), ex in self._gpu_experts.items():
+                gpu_items.append(
                     {
                         "layer_id": int(layer_id),
                         "expert_id": int(expert_id),
@@ -337,7 +415,12 @@ class CacheDaemon:
                         "tensor_names": sorted(ex.tensors.keys()),
                     }
                 )
-            return {"ok": True, "experts": items}
+
+            return {
+                "ok": True,
+                "cpu_experts": cpu_items,
+                "gpu_experts": gpu_items,
+            }
 
 
 class CacheRequestHandler(socketserver.StreamRequestHandler):
@@ -387,7 +470,7 @@ def main() -> None:
     ap.add_argument("--host", type=str, default="127.0.0.1")
     ap.add_argument("--port", type=int, default=47000)
     ap.add_argument("--model-dir", type=str, required=True)
-    ap.add_argument("--resident-dtype", type=str, default="float16")
+    ap.add_argument("--resident-dtype", type=str, default="bfloat16")
     args = ap.parse_args()
 
     daemon = CacheDaemon(
