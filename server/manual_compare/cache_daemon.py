@@ -304,6 +304,10 @@ class CacheDaemon:
                     ex.lease_ids.remove(lease_id)
                 ex.pin_count = max(0, ex.pin_count - 1)
                 ex.last_access_ts = time.time()
+
+                if ex.pin_count == 0:
+                    # 直接 drop resident，避免 GPU cache 越积越多
+                    self._experts.pop(key, None)
      
                 out.append(
                     {
