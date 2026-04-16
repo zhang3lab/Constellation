@@ -6,7 +6,7 @@ import base64
 import cupy as cp
 from cupy.cuda import runtime as curuntime
 
-from cache_client import CacheClient
+from server.manual_compare.cache_client import CacheClient
 
 
 class BorrowedCudaTensor:
