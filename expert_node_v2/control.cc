@@ -759,7 +759,7 @@ bool HandleLoadWeightsChunk(
         const double total_ms =
             std::chrono::duration<double, std::milli>(t3 - t0).count();
 
-        std::printf("[%s] received LoadWeightsChunk rid=%u "
+	std::printf("[%s] received LoadWeightsChunk rid=%u "
                     "expert=%d worker_id=%d tensor_kind=%s chunk_offset=%llu chunk_size=%zu "
                     "received=%llu/%llu decode_ms=%.3f validate_ms=%.3f copy_ms=%.3f total_ms=%.3f\n",
                     state->static_info.node_id.c_str(),
@@ -768,7 +768,7 @@ bool HandleLoadWeightsChunk(
                     msg.worker_id,
                     TensorKindName(msg.tensor_kind),
                     static_cast<unsigned long long>(msg.chunk_offset),
-                    msg.chunk_data.size(),
+                    chunk_view.size(),
                     static_cast<unsigned long long>(state->active_load.received_bytes),
                     static_cast<unsigned long long>(state->active_load.total_bytes),
                     decode_ms,
