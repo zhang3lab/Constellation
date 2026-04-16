@@ -442,6 +442,13 @@ def main() -> None:
                     "device=", moe._manual_device,
                     "dtype=", moe._manual_dtype,
                 )
+                print(
+                    "[hf-bind-cache]",
+                    "layer=", layer_id,
+                    "host=", getattr(moe, "_cache_daemon_host", None),
+                    "port=", getattr(moe, "_cache_daemon_port", None),
+                    flush=True,
+                )
 
         materialize_modules_with_placements(
             model,
