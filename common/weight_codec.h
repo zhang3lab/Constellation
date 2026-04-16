@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -16,12 +17,11 @@ struct LoadWeightsBeginMsg {
     TensorMeta meta;
 };
 
-struct LoadWeightsChunkMsg {
+struct LoadWeightsChunkMsgHeader {
     std::int32_t expert_id = -1;
     std::int32_t worker_id = -1;
     TensorKind tensor_kind = TensorKind::WUp;
     std::uint64_t chunk_offset = 0;
-    std::vector<std::uint8_t> chunk_data;
 };
 
 struct LoadWeightsEndMsg {
@@ -36,11 +36,14 @@ bool DecodeLoadWeightsBeginBody(
     const std::string& body,
     LoadWeightsBeginMsg* out);
 
-std::string EncodeLoadWeightsChunkBody(const LoadWeightsChunkMsg& msg);
+std::string EncodeLoadWeightsChunkBody(
+    const LoadWeightsChunkMsgHeader& header,
+    std::span<const std::uint8_t> chunk_view);
 
 bool DecodeLoadWeightsChunkBody(
     const std::string& body,
-    LoadWeightsChunkMsg* out);
+    LoadWeightsChunkMsgHeader* out_header,
+    std::span<const std::uint8_t>* out_chunk_view);
 
 std::string EncodeLoadWeightsEndBody(const LoadWeightsEndMsg& msg);
 

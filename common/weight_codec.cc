@@ -71,41 +71,48 @@ bool DecodeLoadWeightsBeginBody(
     return offset == body.size();
 }
 
-std::string EncodeLoadWeightsChunkBody(const LoadWeightsChunkMsg& msg) {
+std::string EncodeLoadWeightsChunkBody(
+    const LoadWeightsChunkMsgHeader& header,
+    std::span<const std::uint8_t> chunk_view) {
     std::string body;
-    body.reserve(4 + 4 + 4 + 8 + 4 + msg.chunk_data.size());
+    body.reserve(4 + 4 + 4 + 8 + 4 + chunk_view.size());
 
-    AppendI32(&body, msg.expert_id);
-    AppendI32(&body, msg.worker_id);
-    AppendI32(&body, static_cast<std::int32_t>(msg.tensor_kind));
-    AppendU64(&body, msg.chunk_offset);
-    AppendU32(&body, static_cast<std::uint32_t>(msg.chunk_data.size()));
-    body.append(
-        reinterpret_cast<const char*>(msg.chunk_data.data()),
-        msg.chunk_data.size());
+    AppendI32(&body, header.expert_id);
+    AppendI32(&body, header.worker_id);
+    AppendI32(&body, static_cast<std::int32_t>(header.tensor_kind));
+    AppendU64(&body, header.chunk_offset);
+    AppendU32(&body, static_cast<std::uint32_t>(chunk_view.size()));
+
+    if (!chunk_view.empty()) {
+        body.append(
+            reinterpret_cast<const char*>(chunk_view.data()),
+            chunk_view.size());
+    }
 
     return body;
 }
 
-bool DecodeLoadWeightsChunkBody(const std::string& body, LoadWeightsChunkMsg* out) {
-    if (out == nullptr) return false;
+bool DecodeLoadWeightsChunkBody(
+    const std::string& body,
+    LoadWeightsChunkMsgHeader* out_header,
+    std::span<const std::uint8_t>* out_chunk_view) {
+    if (out_header == nullptr || out_chunk_view == nullptr) return false;
 
     std::size_t offset = 0;
-    if (!ReadI32(body, &offset, &out->expert_id)) return false;
-    if (!ReadI32(body, &offset, &out->worker_id)) return false;
-    if (!ReadTensorKind(body, &offset, &out->tensor_kind)) return false;
-    if (!ReadU64(body, &offset, &out->chunk_offset)) return false;
+    if (!ReadI32(body, &offset, &out_header->expert_id)) return false;
+    if (!ReadI32(body, &offset, &out_header->worker_id)) return false;
+    if (!ReadTensorKind(body, &offset, &out_header->tensor_kind)) return false;
+    if (!ReadU64(body, &offset, &out_header->chunk_offset)) return false;
 
     std::uint32_t chunk_size = 0;
     if (!ReadU32(body, &offset, &chunk_size)) return false;
     if (offset + chunk_size > body.size()) return false;
 
-    out->chunk_data.resize(chunk_size);
-    if (chunk_size > 0) {
-        std::memcpy(out->chunk_data.data(), body.data() + offset, chunk_size);
-    }
-    offset += chunk_size;
+    *out_chunk_view = std::span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(body.data() + offset),
+        static_cast<std::size_t>(chunk_size));
 
+    offset += chunk_size;
     return offset == body.size();
 }
 

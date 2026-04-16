@@ -673,8 +673,9 @@ bool HandleLoadWeightsChunk(
 
     const auto t0 = std::chrono::steady_clock::now();
 
-    common::LoadWeightsChunkMsg msg;
-    if (!common::DecodeLoadWeightsChunkBody(req_body, &msg)) {
+    common::LoadWeightsChunkMsgHeader msg;
+    std::span<const std::uint8_t> chunk_view;
+    if (!common::DecodeLoadWeightsChunkBody(req_body, &msg, &chunk_view)) {
         std::fprintf(stderr, "[%s] failed to decode LoadWeightsChunk\n",
                      state->static_info.node_id.c_str());
         return false;
@@ -726,7 +727,7 @@ bool HandleLoadWeightsChunk(
 
     const std::uint64_t new_received =
         state->active_load.received_bytes +
-        static_cast<std::uint64_t>(msg.chunk_data.size());
+        static_cast<std::uint64_t>(chunk_view.size());
     if (new_received > state->active_load.total_bytes) {
         std::fprintf(stderr,
                      "[%s] LoadWeightsChunk overflow: chunk would make received=%llu > total=%llu\n",
@@ -741,8 +742,8 @@ bool HandleLoadWeightsChunk(
     std::memcpy(
         state->active_load.buffer.data() +
             static_cast<std::size_t>(msg.chunk_offset),
-        msg.chunk_data.data(),
-        msg.chunk_data.size());
+        chunk_view.data(),
+        chunk_view.size());
 
     state->active_load.received_bytes = new_received;
 
