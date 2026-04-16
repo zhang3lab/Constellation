@@ -20,16 +20,17 @@ class CacheClient:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        try:
-            if self.rfile is not None:
-                self.rfile.close()
-        finally:
-            try:
-                if self.wfile is not None:
-                    self.wfile.close()
-                finally:
-                    if self.sock is not None:
-                        self.sock.close()
+        if self.rfile is not None:
+            self.rfile.close()
+            self.rfile = None
+
+        if self.wfile is not None:
+            self.wfile.close()
+            self.wfile = None
+
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
 
     def _request(self, obj: dict[str, Any]) -> dict[str, Any]:
         assert self.wfile is not None and self.rfile is not None
