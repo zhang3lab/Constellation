@@ -96,6 +96,10 @@ class CacheDaemon:
         self._gpu_experts: dict[tuple[int, int, int], GpuResident] = {}
         self._leases: dict[str, tuple[int, int, int]] = {}
 
+        # connection tracking
+        self._conn_to_leases: dict[str, set[str]] = {}
+        self._lease_to_conn: dict[str, str] = {}
+
         self._resident_dtype_str = str(resident_dtype)
         self._resident_torch_dtype = self._parse_torch_dtype(self._resident_dtype_str)
         self._resident_cupy_dtype = self._parse_cupy_dtype(self._resident_dtype_str)
@@ -133,6 +137,50 @@ class CacheDaemon:
     @staticmethod
     def _gpu_key(layer_id: int, expert_id: int, device_id: int) -> tuple[int, int, int]:
         return (int(layer_id), int(expert_id), int(device_id))
+
+    def register_connection(self, connection_id: str) -> None:
+        connection_id = str(connection_id)
+        with self._lock:
+            self._conn_to_leases.setdefault(connection_id, set())
+
+    def _register_lease_to_connection(self, connection_id: str, lease_id: str) -> None:
+        connection_id = str(connection_id)
+        lease_id = str(lease_id)
+        with self._lock:
+            self._conn_to_leases.setdefault(connection_id, set()).add(lease_id)
+            self._lease_to_conn[lease_id] = connection_id
+
+    def _unregister_lease_from_connection(self, lease_id: str) -> None:
+        lease_id = str(lease_id)
+        with self._lock:
+            conn_id = self._lease_to_conn.pop(lease_id, None)
+            if conn_id is None:
+                return
+            s = self._conn_to_leases.get(conn_id)
+            if s is not None:
+                s.discard(lease_id)
+
+    def on_client_disconnect(self, connection_id: str) -> None:
+        connection_id = str(connection_id)
+
+        with self._lock:
+            lease_ids = list(self._conn_to_leases.get(connection_id, set()))
+
+        if not lease_ids:
+            with self._lock:
+                self._conn_to_leases.pop(connection_id, None)
+            return
+
+        print(
+            f"[cache-daemon] client disconnect cleanup "
+            f"connection_id={connection_id} leases={len(lease_ids)}",
+            flush=True,
+        )
+
+        self.return_expert_batch(lease_ids)
+
+        with self._lock:
+            self._conn_to_leases.pop(connection_id, None)
 
     def _export_ipc_handle(self, arr: cp.ndarray) -> bytes:
         ptr = int(arr.data.ptr)
@@ -180,7 +228,6 @@ class CacheDaemon:
             expert_id=int(expert_id),
         )
 
-        # CPU resident 直接用 bf16/fp16，省 host memory
         w_up_t = w_up_t.to(dtype=self._resident_torch_dtype).cpu().contiguous()
         w_gate_t = w_gate_t.to(dtype=self._resident_torch_dtype).cpu().contiguous()
         w_down_t = w_down_t.to(dtype=self._resident_torch_dtype).cpu().contiguous()
@@ -299,15 +346,25 @@ class CacheDaemon:
         layer_id: int,
         expert_ids: list[int],
         device_id: int,
+        connection_id: str,
     ) -> dict[str, Any]:
         layer_id = int(layer_id)
         device_id = int(device_id)
+        connection_id = str(connection_id)
         expert_ids = [int(x) for x in expert_ids]
+
+        self.register_connection(connection_id)
 
         items = []
         residents: list[tuple[int, GpuResident]] = []
 
         for expert_id in expert_ids:
+            with self._lock:
+                if connection_id not in self._conn_to_leases:
+                    raise RuntimeError(
+                        f"connection {connection_id} is gone during borrow_expert_batch"
+                    )
+
             ex = self._ensure_expert_on_device(layer_id, expert_id, device_id)
             residents.append((expert_id, ex))
 
@@ -317,7 +374,9 @@ class CacheDaemon:
                 ex.pin_count += 1
                 ex.lease_ids.add(lease_id)
                 ex.last_access_ts = time.time()
+
                 self._leases[lease_id] = self._gpu_key(layer_id, expert_id, device_id)
+                self._register_lease_to_connection(connection_id, lease_id)
 
                 items.append(
                     {
@@ -361,6 +420,8 @@ class CacheDaemon:
                         }
                     )
                     continue
+
+                self._unregister_lease_from_connection(lease_id)
 
                 ex = self._gpu_experts[key]
                 if lease_id in ex.lease_ids:
@@ -427,37 +488,45 @@ class CacheRequestHandler(socketserver.StreamRequestHandler):
     daemon_ref: CacheDaemon = None  # type: ignore[assignment]
 
     def handle(self) -> None:
-        while True:
-            try:
-                req = recv_json_line(self.rfile)
-            except EOFError:
-                return
+        connection_id = f"{self.client_address[0]}:{self.client_address[1]}:{id(self)}"
+        self.daemon_ref.register_connection(connection_id)
 
-            op = req.get("op")
-            try:
-                if op == "borrow_expert_batch":
-                    resp = self.daemon_ref.borrow_expert_batch(
-                        layer_id=int(req["layer_id"]),
-                        expert_ids=[int(x) for x in req["expert_ids"]],
-                        device_id=int(req["device_id"]),
-                    )
-                elif op == "return_expert_batch":
-                    resp = self.daemon_ref.return_expert_batch(
-                        lease_ids=[str(x) for x in req["lease_ids"]],
-                    )
-                elif op == "query":
-                    resp = self.daemon_ref.query()
-                else:
-                    resp = {"ok": False, "error": f"unknown op: {op}"}
-            except Exception as e:
-                traceback.print_exc()
-                resp = {
-                    "ok": False,
-                    "error": f"{type(e).__name__}: {e}",
-                    "traceback": traceback.format_exc(),
-                }
+        try:
+            while True:
+                try:
+                    req = recv_json_line(self.rfile)
+                except EOFError:
+                    return
 
-            send_json_line(self.wfile, resp)
+                op = req.get("op")
+                try:
+                    if op == "borrow_expert_batch":
+                        resp = self.daemon_ref.borrow_expert_batch(
+                            layer_id=int(req["layer_id"]),
+                            expert_ids=[int(x) for x in req["expert_ids"]],
+                            device_id=int(req["device_id"]),
+                            connection_id=connection_id,
+                        )
+                    elif op == "return_expert_batch":
+                        resp = self.daemon_ref.return_expert_batch(
+                            lease_ids=[str(x) for x in req["lease_ids"]],
+                        )
+                    elif op == "query":
+                        resp = self.daemon_ref.query()
+                    else:
+                        resp = {"ok": False, "error": f"unknown op: {op}"}
+                except Exception as e:
+                    traceback.print_exc()
+                    resp = {
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "traceback": traceback.format_exc(),
+                    }
+
+                send_json_line(self.wfile, resp)
+
+        finally:
+            self.daemon_ref.on_client_disconnect(connection_id)
 
 
 class ThreadedTCPServer(socketserver.ThreadingTCPServer):
