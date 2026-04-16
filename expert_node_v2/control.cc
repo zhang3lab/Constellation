@@ -629,7 +629,7 @@ bool HandleLoadWeightsBegin(
     state->active_load.total_bytes = msg.total_bytes;
     state->active_load.received_bytes = 0;
     state->active_load.buffer.clear();
-    state->active_load.buffer.reserve(static_cast<std::size_t>(msg.total_bytes));
+    state->active_load.buffer.resize(static_cast<std::size_t>(msg.total_bytes));
     state->active_load.meta = msg.meta;
 
     if (state->verbose) {
@@ -738,12 +738,13 @@ bool HandleLoadWeightsChunk(
 
     const auto t2 = std::chrono::steady_clock::now();
 
-    state->active_load.buffer.insert(
-        state->active_load.buffer.end(),
-        msg.chunk_data.begin(),
-        msg.chunk_data.end());
-    state->active_load.received_bytes =
-        static_cast<std::uint64_t>(state->active_load.buffer.size());
+    std::memcpy(
+        state->active_load.buffer.data() +
+            static_cast<std::size_t>(msg.chunk_offset),
+        msg.chunk_data.data(),
+        msg.chunk_data.size());
+
+    state->active_load.received_bytes = new_received;
 
     const auto t3 = std::chrono::steady_clock::now();
 
