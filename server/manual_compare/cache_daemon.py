@@ -36,13 +36,19 @@ def send_json_line(wfile, obj: dict[str, Any]) -> None:
     wfile.flush()
 
 
-def torch_cpu_tensor_to_cupy(x: torch.Tensor, device_id: int) -> cp.ndarray:
+def torch_tensor_to_cupy_on_device(
+    x: torch.Tensor,
+    device_id: int,
+    target_torch_dtype: torch.dtype,
+) -> cp.ndarray:
     if not isinstance(x, torch.Tensor):
         raise TypeError(f"expected torch.Tensor, got {type(x).__name__}")
-    x = x.detach().cpu().contiguous()
-    np_arr = x.numpy()
-    with cp.cuda.Device(device_id):
-        return cp.asarray(np_arr)
+
+    x_cuda = x.detach().contiguous().to(
+        device=f"cuda:{int(device_id)}",
+        dtype=target_torch_dtype,
+    )
+    return cp.from_dlpack(x_cuda)
 
 
 @dataclass
@@ -100,18 +106,14 @@ class CacheDaemon:
 
     @staticmethod
     def _parse_cupy_dtype(dtype_str: str):
-        m = {
-            "float16": cp.float16,
-            "fp16": cp.float16,
-            "bfloat16": cp.float16,  # CuPy bf16 support depends on build; first版用 fp16 更稳
-            "bf16": cp.float16,
-            "float32": cp.float32,
-            "fp32": cp.float32,
-        }
         key = dtype_str.lower()
-        if key not in m:
-            raise ValueError(f"unsupported resident dtype: {dtype_str}")
-        return m[key]
+        if key in ("float16", "fp16"):
+            return cp.dtype("float16")
+        if key in ("bfloat16", "bf16"):
+            return cp.dtype("bfloat16")
+        if key in ("float32", "fp32"):
+            return cp.dtype("float32")
+        raise ValueError(f"unsupported resident dtype: {dtype_str}")
 
     @staticmethod
     def _key(layer_id: int, expert_id: int, device_id: int) -> tuple[int, int, int]:
@@ -156,13 +158,21 @@ class CacheDaemon:
         )
         t1 = time.perf_counter()
 
-        w_up_t = w_up_t.to(dtype=self._resident_torch_dtype).contiguous()
-        w_gate_t = w_gate_t.to(dtype=self._resident_torch_dtype).contiguous()
-        w_down_t = w_down_t.to(dtype=self._resident_torch_dtype).contiguous()
-
-        w_up = torch_cpu_tensor_to_cupy(w_up_t, device_id)
-        w_gate = torch_cpu_tensor_to_cupy(w_gate_t, device_id)
-        w_down = torch_cpu_tensor_to_cupy(w_down_t, device_id)
+        w_up = torch_tensor_to_cupy_on_device(
+            w_up_t,
+            device_id=device_id,
+            target_torch_dtype=self._resident_torch_dtype,
+        )
+        w_gate = torch_tensor_to_cupy_on_device(
+            w_gate_t,
+            device_id=device_id,
+            target_torch_dtype=self._resident_torch_dtype,
+        )
+        w_down = torch_tensor_to_cupy_on_device(
+            w_down_t,
+            device_id=device_id,
+            target_torch_dtype=self._resident_torch_dtype,
+        )
         t2 = time.perf_counter()
 
         ex = ExpertResident(
