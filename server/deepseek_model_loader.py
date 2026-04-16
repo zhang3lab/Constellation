@@ -176,12 +176,47 @@ class DeepseekModelLoader:
     def open_shard(self, shard_path: str):
         return safe_open(shard_path, framework="pt", device="cpu")
 
+    def should_cache_tensor_name(self, tensor_name: str) -> bool:
+        tensor_name = str(tensor_name)
+     
+        # 最耗内存的 routed experts 一律不缓存
+        if ".mlp.experts." in tensor_name:
+            return False
+     
+        # shared expert 也很大，先不缓存
+        if ".mlp.shared_experts." in tensor_name:
+            return False
+     
+        # dense ffn 大矩阵也先不缓存
+        if tensor_name.endswith(".mlp.gate_proj.weight"):
+            return False
+        if tensor_name.endswith(".mlp.up_proj.weight"):
+            return False
+        if tensor_name.endswith(".mlp.down_proj.weight"):
+            return False
+     
+        # attention 大矩阵也先不缓存
+        if ".self_attn." in tensor_name and tensor_name.endswith(".weight"):
+            return False
+     
+        # embedding / lm_head 也很大，先不缓存
+        if tensor_name == "model.embed_tokens.weight":
+            return False
+        if tensor_name == "lm_head.weight":
+            return False
+     
+        # 其余小 tensor 可以缓存
+        return True
+
     def load_tensor_fp32_by_name(self, tensor_name: str) -> torch.Tensor:
         tensor_name = str(tensor_name)
 
-        cached = self._tensor_cache.get(tensor_name)
-        if cached is not None:
-            return cached
+        should_cache = self.should_cache_tensor_name(tensor_name)
+
+        if should_cache:
+            cached = self._tensor_cache.get(tensor_name)
+            if cached is not None:
+                return cached
 
         _, shard_path = self.resolve_tensor(tensor_name)
 
@@ -200,7 +235,9 @@ class DeepseekModelLoader:
             else:
                 t = t.to(torch.float32).contiguous()
 
-        self._tensor_cache[tensor_name] = t
+        if should_cache:
+            self._tensor_cache[tensor_name] = t
+
         return t
 
     def load_routed_expert_triplet_fp32(self, layer_id: int, expert_id: int):
