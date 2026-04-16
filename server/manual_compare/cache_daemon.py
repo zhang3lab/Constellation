@@ -13,6 +13,9 @@ from typing import Any
 import cupy as cp
 from cupy.cuda import runtime as curuntime
 
+cp.cuda.set_allocator(None)
+cp.cuda.set_pinned_memory_allocator(None)
+
 
 def recv_json_line(rfile) -> dict[str, Any]:
     line = rfile.readline()
