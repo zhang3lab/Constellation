@@ -466,11 +466,6 @@ def main() -> None:
                 tensor_name=name,
                 dtype=backbone_dtype,
             )
-        gate = model.model.layers[target_layer].mlp.gate
-        print(
-            "[hf-check] gate.weight dtype =", gate.weight.dtype,
-            "gate.bias_corr dtype =", gate.e_score_correction_bias.dtype,
-        )
 
         assert_named_tensors_materialized(model, needed_names)
 
