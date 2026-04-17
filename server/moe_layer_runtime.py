@@ -145,43 +145,87 @@ def dispatch_topk_experts(session, hidden: np.ndarray, routes, *, return_aux: bo
     return weighted_outputs
 
 
-def combine_outputs(weighted_outputs):
+def combine_outputs_torch(
+    weighted_outputs,
+    *,
+    out_dtype: torch.dtype,
+    accum_dtype: torch.dtype = torch.float32,
+    device: str | torch.device = "cpu",
+):
     if not weighted_outputs:
         raise RuntimeError("weighted_outputs is empty")
 
-    y0 = weighted_outputs[0][2]
-    combined = np.zeros_like(y0, dtype=np.float32)
+    first_y = weighted_outputs[0][2]
+    first_y_t = torch.as_tensor(first_y, dtype=accum_dtype, device=device)
+    combined = torch.zeros_like(first_y_t, dtype=accum_dtype, device=device)
 
     for expert_id, weight, y in weighted_outputs:
-        y = np.asarray(y, dtype=np.float32)
-        combined += float(weight) * y
+        y_t = torch.as_tensor(y, dtype=accum_dtype, device=device)
+        w_t = torch.as_tensor(weight, dtype=accum_dtype, device=device)
+        combined.add_(w_t * y_t)
 
-    return combined
+    return combined.to(dtype=out_dtype)
 
 
-def run_topk_moe_layer(session, hidden, routes, *, return_aux: bool = False):
+def run_topk_moe_layer(
+    session,
+    hidden,
+    routes,
+    *,
+    return_aux: bool = False,
+    accum_dtype: torch.dtype = torch.float32,
+):
     if not isinstance(hidden, torch.Tensor):
         raise TypeError(f"hidden must be torch.Tensor, got {type(hidden).__name__}")
     if hidden.ndim != 1:
         raise RuntimeError(f"hidden must be 1D, got shape={tuple(hidden.shape)}")
 
-    hidden_np = hidden.detach().cpu().numpy()
+    hidden = hidden.detach()
+    out_dtype = hidden.dtype
+
+    hidden_cpu = hidden.to(device="cpu")
+    if not hidden_cpu.is_contiguous():
+        hidden_cpu = hidden_cpu.contiguous()
+
+    # transport 边界先统一到 numpy float32
+    if hidden_cpu.dtype == torch.bfloat16:
+        hidden_np = hidden_cpu.float().numpy()
+    else:
+        hidden_np = hidden_cpu.numpy()
+
     if hidden_np.dtype != np.float32:
         hidden_np = hidden_np.astype(np.float32, copy=False)
+
     if not hidden_np.flags["C_CONTIGUOUS"]:
         hidden_np = np.ascontiguousarray(hidden_np)
 
     if return_aux:
         weighted_outputs, expert_outputs = dispatch_topk_experts(
-            session, hidden_np, routes, return_aux=True
+            session,
+            hidden_np,
+            routes,
+            return_aux=True,
         )
-        combined = combine_outputs(weighted_outputs)
+        combined = combine_outputs_torch(
+            weighted_outputs,
+            out_dtype=out_dtype,
+            accum_dtype=accum_dtype,
+            device="cpu",
+        )
         return combined, weighted_outputs, expert_outputs
 
     weighted_outputs = dispatch_topk_experts(
-        session, hidden_np, routes, return_aux=False
+        session,
+        hidden_np,
+        routes,
+        return_aux=False,
     )
-    combined = combine_outputs(weighted_outputs)
+    combined = combine_outputs_torch(
+        weighted_outputs,
+        out_dtype=out_dtype,
+        accum_dtype=accum_dtype,
+        device="cpu",
+    )
     return combined, weighted_outputs
 
 
