@@ -144,8 +144,15 @@ def main() -> None:
             return_aux=False,
         )
         response0 = _require_dict(response0, "response0")
-        if set(response0.keys()) != {"result"}:
-            raise RuntimeError(f"response0 expected keys {{'result'}}, got {sorted(response0.keys())}")
+        if set(response0.keys()) != {"result", "stream"}:
+            raise RuntimeError(
+                f"response0 expected keys {{'result', 'stream'}}, got {sorted(response0.keys())}"
+            )
+
+        if response0["stream"] is not False:
+            raise RuntimeError(
+                f"case0 expected stream=False, got {response0['stream']!r}"
+            )
         _validate_result_payload(response0["result"])
 
         result0 = response0["result"]
@@ -179,9 +186,14 @@ def main() -> None:
             return_aux=True,
         )
         response1 = _require_dict(response1, "response1")
-        if set(response1.keys()) != {"result", "aux"}:
+        if set(response1.keys()) != {"result", "stream", "aux"}:
             raise RuntimeError(
-                f"response1 expected keys {{'result', 'aux'}}, got {sorted(response1.keys())}"
+                f"response1 expected keys {{'result', 'stream', 'aux'}}, got {sorted(response1.keys())}"
+            )
+         
+        if response1["stream"] is not False:
+            raise RuntimeError(
+                f"case1 expected stream=False, got {response1['stream']!r}"
             )
 
         _validate_result_payload(response1["result"])

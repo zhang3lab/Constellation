@@ -10,6 +10,7 @@ from server.generation_runtime import run_generation_from_input_ids
 from server.generation_types import (
     GenerationResult,
     GenerationState,
+    GreedySampling,
     SamplingConfig,
     TemperatureTopPSampling,
 )
@@ -81,9 +82,15 @@ def _get_model_name(session, request: dict) -> str:
     return "deepseek-v3"
 
 
+def _get_stream_flag(request: dict) -> bool:
+    stream = request.get("stream", False)
+    if not isinstance(stream, bool):
+        raise TypeError(f"request['stream'] expected bool, got {type(stream).__name__}")
+    return stream
+
+
 def _reject_unsupported_request_fields(request: dict) -> None:
     unsupported = [
-        "stream",
         "n",
         "tools",
         "tool_choice",
@@ -302,23 +309,30 @@ def _build_sampling_config(session, request: dict) -> SamplingConfig:
             f"request['temperature'] expected int|float, got {type(temperature).__name__}"
         )
     if not isinstance(top_p, (int, float)):
-        raise TypeError(f"request['top_p'] expected int|float, got {type(top_p).__name__}")
+        raise TypeError(
+            f"request['top_p'] expected int|float, got {type(top_p).__name__}"
+        )
 
     temperature = float(temperature)
     top_p = float(top_p)
 
-    if temperature <= 0.0:
-        raise RuntimeError(f"temperature must be > 0, got {temperature}")
+    if temperature < 0.0:
+        raise RuntimeError(f"temperature must be >= 0, got {temperature}")
     if top_p <= 0.0 or top_p > 1.0:
         raise RuntimeError(f"top_p must be in (0, 1], got {top_p}")
 
     stop_token_sequences = _normalize_stop_to_token_sequences(session, request.get("stop"))
 
-    return SamplingConfig(
-        strategy=TemperatureTopPSampling(
+    if temperature == 0.0:
+        strategy = GreedySampling()
+    else:
+        strategy = TemperatureTopPSampling(
             temperature=temperature,
             top_p=top_p,
-        ),
+        )
+
+    return SamplingConfig(
+        strategy=strategy,
         max_new_tokens=max_new_tokens,
         stop_token_sequences=stop_token_sequences,
     )
@@ -362,6 +376,7 @@ def run_chat_completions(
         raise RuntimeError("chat runtime is not ready")
 
     _reject_unsupported_request_fields(request)
+    stream = _get_stream_flag(request)
 
     messages = _normalize_messages(request.get("messages"))
     input_ids, prompt_text = _render_chat_messages_to_input_ids_and_prompt(
@@ -419,6 +434,7 @@ def run_chat_completions(
     if return_aux:
         return {
             "result": payload,
+            "stream": stream,
             "aux": {
                 "prompt_text": prompt_text,
                 "input_ids": input_ids,
@@ -427,4 +443,5 @@ def run_chat_completions(
 
     return {
         "result": payload,
+        "stream": stream,
     }

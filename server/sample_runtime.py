@@ -49,7 +49,7 @@ def sample_temperature_top_p_from_logits(
     if top_p <= 0.0 or top_p > 1.0:
         raise ValueError(f"top_p must be in (0, 1], got {top_p}")
 
-    work_logits = logits if temperature == 1.0 else (logits / temperature)
+    work_logits = logits / temperature
 
     if top_p == 1.0:
         probs = torch.softmax(work_logits, dim=-1)
