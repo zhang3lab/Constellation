@@ -1,12 +1,12 @@
-# Constellation Expert Runtime v2
+# Constellation Runtime v2
 
-A minimal end-to-end runtime for DeepSeek-V3.1 MoE expert inference. The current goal is correctness, clear control/data-plane separation, and easy debugging, not peak performance.
+A minimal end-to-end runtime for DeepSeek-V3.1 MoE inference and chat serving. The current goal is correctness, clean runtime structure, and easy debugging, not peak performance.
 
 ## Current status
 
-Validated end to end on a small resident subset using real DeepSeek-V3.1 weights and real router weights.
+Validated end to end on real DeepSeek-V3.1 weights across both expert runtime and full-model runtime paths.
 
-Working path:
+Working paths now include:
 - node startup and GPU discovery
 - control-plane inventory
 - placement generation and broadcast
@@ -15,14 +15,23 @@ Working path:
 - single-expert inference
 - top-k dispatch and weighted combine
 - repeated-run stability validation
+- full backbone preload for DeepSeek-V3.1
+- prefill runtime
+- single-token decode runtime
+- sampling runtime
+- generation runtime
+- manual HF-vs-runtime compare for target layers
+- OpenAI-style `/v1/chat/completions` API
+- non-streaming chat responses
+- streaming SSE chat responses
 
-Latest validation status: **ALL VALIDATION PASSED**.
+Latest validation status: **CHAT COMPLETIONS PATH WORKING END TO END**.
 
 ## System model
 
-The system has two roles.
+The system now has three major layers.
 
-### Server side (Python)
+### 1. Control plane (Python)
 Responsible for:
 - reading config
 - discovering expert nodes
@@ -30,20 +39,27 @@ Responsible for:
 - building placement
 - preloading expert weights
 - maintaining routing metadata
-- opening inference sessions
-- dispatching expert inference requests
-- combining outputs and running validation
 
-### Expert node side (C++/CUDA)
+### 2. Full-model runtime (Python + Torch/CUDA)
+Responsible for:
+- loading non-MoE backbone tensors
+- building runtime partition and MLA runtime
+- prefill over full prompts
+- single-token decode
+- sampling
+- chat/generation orchestration
+- API serving
+
+### 3. Expert node runtime (C++/CUDA)
 Responsible for:
 - enumerating local GPUs
-- starting one worker thread/process per GPU
+- starting one worker per GPU
 - exposing one control endpoint per node
 - exposing one worker endpoint per GPU
 - receiving weight-loading commands
 - storing tensor metadata and bytes
 - uploading resident experts to GPU memory
-- executing inference kernels
+- executing expert inference kernels
 
 ## Ports and protocol
 
@@ -71,7 +87,7 @@ Inventory and placement records include at least:
 
 ## Tensor loading model
 
-Each expert is loaded as six tensors:
+Each routed expert is loaded as six tensors:
 - `w_up`
 - `w_up_scale`
 - `w_gate`
@@ -123,126 +139,202 @@ The node no longer hardcodes DeepSeek matrix sizes or block sizes inside the loa
 
 ## Runtime execution model
 
-The runtime has two phases.
+The runtime now has three phases.
 
 ### 1. Control phase
-Performed before inference session creation:
+Performed before runtime use:
 - discover nodes
 - fetch inventory
 - build placement
 - send placement plan
 - preload resident experts
 
-### 2. Runtime phase
-Performed during inference:
-- route token to top-k experts
-- send `InferRequest` to the selected workers' `worker_port`
-- receive expert outputs
-- combine weighted outputs on the server side
+### 2. Full-model runtime initialization
+Performed once per runtime/session:
+- preload non-MoE backbone tensors
+- create backbone store
+- build MLA runtime
+- build frequency cache by device
+- initialize paged attention cache managers
+
+### 3. Runtime phase
+Performed during inference/generation:
+- run prompt prefill
+- run token decode
+- route sparse layers to top-k experts
+- send `InferRequest` to selected worker ports
+- combine weighted expert outputs
+- sample next tokens
+- build chat completion responses
 
 Weight loading is not part of the inference session.
 
+## Backbone runtime
+
+The full-model runtime currently supports:
+- embedding
+- all 61 decoder layers
+- first 3 dense layers
+- remaining sparse layers
+- final norm
+- lm_head
+- paged KV cache
+- MLA runtime
+
+Backbone preload is partitioned across GPUs through a `LayerPartition`.
+
+Supported partition types:
+- `TwoGpuLayerPartition`
+- `ExplicitLayerPartition`
+
+Current chat/runtime validation uses explicit multi-GPU partitioning rather than the earlier fixed two-GPU split.
+
+## Generation runtime
+
+Generation is split into:
+- `prefill_runtime.py`
+- `decode_runtime.py`
+- `sample_runtime.py`
+- `generation_runtime.py`
+
+The current generation flow is:
+- tokenize prompt or chat template
+- run prefill and obtain next-token logits
+- sample first token
+- loop decode one token at a time
+- stop on EOS, stop-token sequence, or max token count
+- decode output text with special tokens skipped
+
+## Chat completions API
+
+The runtime now exposes an OpenAI-style:
+- `POST /v1/chat/completions`
+
+Supported behavior:
+- `messages`
+- `temperature`
+- `top_p`
+- `max_tokens` / `max_completion_tokens`
+- `stream=false`
+- `stream=true`
+
+Current API behavior:
+- non-streaming returns standard chat completion JSON
+- streaming returns SSE chunks with `chat.completion.chunk`
+- final stream chunk carries `finish_reason`
+- `[DONE]` is emitted at the end
+
+The current implementation supports text-only chat completions. Tool use and multimodal features are not yet implemented.
+
+## Manual compare utilities
+
+Manual compare now exists on both sides:
+
+### HF side
+Used to:
+- run layers up to a target layer
+- save per-layer outputs
+- save expert debug outputs
+- save `final_hidden`
+- save `final_norm_output`
+- save `next_token_logits`
+- save top-k decoded next-token logits as JSON
+
+### Runtime side
+Used to:
+- run runtime layers up to a target layer
+- save per-layer outputs
+- save sparse/dense aux tensors
+- save expert outputs
+- save `final_hidden`
+- save `final_norm_output`
+- save `next_token_logits`
+- save top-k decoded next-token logits as JSON
+
+This made it possible to compare HF and runtime first-token distributions directly.
+
 ## Current scope
 
-The current implementation is intentionally narrow:
-- single token
-- batch size 1
-- hidden size 7168 for the current DeepSeek path
-- FP16 input/output on the inference path
-- small resident subsets for debugging and validation
+The current implementation is still intentionally narrow:
+- correctness-first
+- batch size 1 for most validation paths
+- small resident subsets for expert-path debugging
+- minimal API surface
+- limited serving features
+- no tool-calling or multimodal API support yet
+- no performance tuning as a primary goal yet
 
 ## Repository structure
 
 ### Control plane
 - `server/coordinator.py`: discovery, placement, preload
-- `server/main.py`: config loading and orchestration
+- `server/control_plane.py`: setup helpers and orchestration pieces
 
 ### Runtime/session
-- `server/inference_session.py`: session state and client pool
-- `server/moe_layer_runtime.py`: expert dispatch and combine
-- `server/router_runtime.py`: router loading and routing
+- `server/inference_session.py`: runtime/session state
+- `server/backbone_store.py`: backbone preload and layer partitioning
+- `server/prefill_runtime.py`
+- `server/decode_runtime.py`
+- `server/sample_runtime.py`
+- `server/generation_runtime.py`
 
-### Validation
-- `server/expert_inference_validation.py`
-- `server/validation_suite.py`
-- `server/test_utils.py`
+### API
+- `server/chat_completions_adapter.py`
+- `server/openai_api_runtime.py`
+- `server/openai_api_app.py`
 
-### Model utilities
-- `server/model_locator.py`
-- `server/make_model_pkg.py`
-- `server/bootstrap_env.py`
+### Validation and compare
+- `server/manual_compare/run_hf_single_layer_manual.py`
+- `server/manual_compare/run_runtime_single_layer_manual.py`
 
-### Node runtime
+### Expert runtime
+- `server/moe_layer_runtime.py`
+- `server/router_runtime.py`
 - `expert_node_v2/`
-
-## Environment/bootstrap
-
-A one-shot bootstrap script can:
-- install the flash-attn wheel based on local Python / torch / CUDA version
-- install `requirements.txt`
-- generate a writable package shell for the model directory
-
-The generated package is typically placed under:
-- `tmp/DeepSeek_V3_1`
-
-and must include:
-- `configuration_deepseek.py`
-- `modeling_deepseek.py`
 
 ## Config shape
 
-The active config structure is:
+The active config structure is still centered around:
+- nodes
+- model root
+- run range
+- KV cache sizing
 
-```json
-{
-  "verbose": false,
-  "nodes": [
-    { "host": "192.168.1.10", "control_port": 40000 },
-    { "host": "192.168.1.11", "control_port": 40000 }
-  ],
-  "model": {
-    "family": "deepseek_v3",
-    "root": "/model/ModelScope/deepseek-ai/DeepSeek-V3.1",
-    "chunk_size": 1048576,
-    "expert_mem_bytes": 2147483648,
-    "memory_utilization": 0.9
-  },
-  "run": {
-    "mode": "validation",
-    "start_layer": 0,
-    "end_layer": 60,
-    "collect_per_layer": true,
-    "experts_per_layer": 256,
-    "sparse_layer_start": 3,
-    "sparse_layer_end": 60,
-    "num_experts": 8
-  },
-  "kv_cache": {
-    "max_batch_size": 1,
-    "max_seq_len": 256,
-    "page_size": 128,
-    "use_triton": true
-  }
-}
-```
-
-Tests use a separate config at `server/test/config.json`.
+Tests continue to use `server/test/config.json`.
 
 ## What was cleaned up
 
 This version reflects the main cleanup decisions:
-- old `expert_node` removed; `expert_node_v2` is the active runtime
+- old `expert_node` removed; `expert_node_v2` is the active node runtime
 - `worker_id` replaces `local_gpu_id`
 - control and data planes are separated by port
 - tensor metadata is explicit and carried over protocol
 - node-side tensor interpretation uses normalized metadata only
-- documentation is reduced to one concise runtime note
+- full-model runtime is split into prefill/decode/sample/generation pieces
+- chat completion serving is now part of the runtime stack
+- compare tooling now saves aligned last-layer artifacts on both HF and runtime sides
+
+## Recent fixes that mattered
+
+Recent correctness fixes included:
+- replacing fixed two-GPU backbone partitioning with explicit multi-GPU partitioning for runtime validation and serving
+- aligning runtime and HF last-layer artifacts:
+  - `final_hidden`
+  - `final_norm_output`
+  - `next_token_logits`
+- validating first-token top-k logits directly between HF and runtime
+- using tokenizer EOS rather than executor-local ad hoc EOS state
+- decoding generated text with `skip_special_tokens=True`
+
+These changes were required to move from structurally working but semantically broken output to correct chat completions output.
 
 ## Next likely work
 
 Natural next steps are:
-- multi-node larger resident subsets
-- batching / concurrency work
-- more flexible dtype and shape support
+- turn manual acceptance checks into formal API smoke tests
+- improve streaming from pseudo-streaming to token-by-token runtime streaming
+- add batching / concurrency support
+- improve cache-daemon observability and memory accounting
+- expand partitioning and runtime configuration flexibility
 - performance instrumentation and latency analysis
-- less ad hoc validation/demo code around the runtime core
+- future migration of runtime structure toward STELRA / new hardware backends
