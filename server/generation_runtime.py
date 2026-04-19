@@ -98,7 +98,8 @@ def _maybe_finish_after_commit(
     if executor is None:
         raise RuntimeError("session.full_model_executor is not initialized")
 
-    eos_token_id = getattr(executor, "eos_token_id", None)
+    tokenizer = session.get_deepseek_model_loader().load_tokenizer()
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
     if eos_token_id is not None and int(token_id) == int(eos_token_id):
         return "eos_token"
 
