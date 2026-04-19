@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
+from server.backbone_store import make_even_explicit_partition
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
