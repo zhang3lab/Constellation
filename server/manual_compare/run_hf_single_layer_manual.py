@@ -365,61 +365,191 @@ def save_tensor_if_present(saved: list[str], outdir: Path, dbg: dict, src: str, 
         saved.append(str(p))
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model-dir", type=str, required=True)
-    ap.add_argument("--input-json", type=str, required=True)
-    ap.add_argument("--output-dir", type=str, required=True)
-    ap.add_argument("--topk", type=int, default=10)
-    ap.add_argument(
-        "--devices",
-        type=str,
-        default="cuda:0",
-        help="Comma-separated CUDA devices, e.g. cuda:0,cuda:1,cuda:2,cuda:3",
-    )
-    ap.add_argument("--layer-id", type=int, required=True)
-    args = ap.parse_args()
+def run_forward_to_target_layer(
+    *,
+    model,
+    cfg,
+    ids: list[int],
+    target_layer: int,
+) -> dict:
+    layer_outputs: dict[str, torch.Tensor] = {}
+    misc_outputs: dict[str, torch.Tensor] = {}
 
-    devices = [x.strip() for x in args.devices.split(",") if x.strip()]
+    def make_layer_hook(name: str):
+        def _hook(_module, _inp, out):
+            x = out[0] if isinstance(out, tuple) else out
+            if not isinstance(x, torch.Tensor):
+                raise TypeError(f"hook {name}: expected tensor, got {type(x).__name__}")
+            if x.ndim >= 1 and x.shape[0] == 1:
+                x = x.squeeze(0)
+            layer_outputs[name] = x.detach().float().cpu()
+        return _hook
+
+    hooks = []
+    outputs = None
+
+    try:
+        for i in range(target_layer):
+            hooks.append(
+                model.model.layers[i].register_forward_hook(
+                    make_layer_hook(f"layer_{i}_output")
+                )
+            )
+
+        embed_weight = model.model.embed_tokens.weight
+        ids_t = torch.tensor([ids], dtype=torch.long, device=embed_weight.device)
+
+        with torch.no_grad():
+            hidden_states = model.model.embed_tokens(ids_t)
+
+            position_ids = torch.arange(
+                hidden_states.shape[1],
+                device=hidden_states.device,
+                dtype=torch.long,
+            ).unsqueeze(0)
+
+            hidden_states_list = [hidden_states]
+            layer_timing: list[dict] = []
+
+            for i in range(target_layer + 1):
+                layer_mod = model.model.layers[i]
+
+                hidden_states = move_tensor_to_module_device(hidden_states, layer_mod)
+
+                if position_ids is not None:
+                    position_ids = position_ids.to(hidden_states.device)
+
+                dev = hidden_states.device
+                if dev.type == "cuda":
+                    torch.cuda.synchronize(dev)
+                t0 = time.perf_counter()
+
+                layer_outputs_i = model.model.layers[i](
+                    hidden_states,
+                    attention_mask=None,
+                    position_ids=position_ids,
+                    past_key_value=None,
+                    output_attentions=False,
+                    use_cache=False,
+                )
+
+                if isinstance(layer_outputs_i, tuple):
+                    hidden_states = layer_outputs_i[0]
+                else:
+                    hidden_states = layer_outputs_i
+
+                hidden_states_list.append(hidden_states)
+
+                dev = hidden_states.device
+                if dev.type == "cuda":
+                    torch.cuda.synchronize(dev)
+                t1 = time.perf_counter()
+
+                layer_ms = (t1 - t0) * 1000.0
+                layer_timing.append(
+                    {
+                        "layer_id": int(i),
+                        "device": str(dev),
+                        "layer_ms": layer_ms,
+                        "is_sparse": bool(is_sparse_layer(cfg, i)),
+                    }
+                )
+
+                print(
+                    f"[hf-layer-timing] layer={i} "
+                    f"device={dev} "
+                    f"is_sparse={is_sparse_layer(cfg, i)} "
+                    f"ms={layer_ms:.3f}"
+                )
+
+            class _ManualOutputs:
+                pass
+
+            outputs = _ManualOutputs()
+            outputs.hidden_states = tuple(x.detach() for x in hidden_states_list)
+
+            num_layers = int(getattr(cfg, "num_hidden_layers"))
+            is_last_layer = (target_layer == num_layers - 1)
+
+            if is_last_layer:
+                final_hidden = hidden_states
+                if not isinstance(final_hidden, torch.Tensor):
+                    raise TypeError(
+                        f"final_hidden expected torch.Tensor, got {type(final_hidden).__name__}"
+                    )
+
+                final_hidden = final_hidden.to(model.model.norm.weight.device)
+                final_norm_output = model.model.norm(final_hidden)
+
+                final_norm_output_for_lm = final_norm_output.to(model.lm_head.weight.device)
+                logits = model.lm_head(final_norm_output_for_lm)
+
+                if not isinstance(logits, torch.Tensor):
+                    raise TypeError(
+                        f"logits expected torch.Tensor, got {type(logits).__name__}"
+                    )
+                if logits.ndim != 3 or logits.shape[0] != 1:
+                    raise RuntimeError(
+                        f"logits expected shape [1, T, V], got {tuple(logits.shape)}"
+                    )
+
+                misc_outputs["final_hidden"] = (
+                    final_hidden.detach().float().cpu().squeeze(0)
+                )
+                misc_outputs["final_norm_output"] = (
+                    final_norm_output.detach().float().cpu().squeeze(0)
+                )
+                misc_outputs["next_token_logits"] = (
+                    logits[:, -1, :].detach().float().cpu().squeeze(0)
+                )
+
+                outputs.logits = logits
+            else:
+                outputs.logits = None
+    finally:
+        for h in hooks:
+            h.remove()
+
+    dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
+    router_dbg = {}
+    if is_sparse_layer(cfg, target_layer):
+        router_dbg = getattr(
+            model.model.layers[target_layer].mlp.gate,
+            "last_router_debug",
+            {},
+        ) or {}
+
+    aux_keys = sorted(list(misc_outputs.keys()))
+
+    return {
+        "outputs": outputs,
+        "layer_outputs": layer_outputs,
+        "misc_outputs": misc_outputs,
+        "layer_timing": layer_timing,
+        "dbg": dbg,
+        "router_dbg": router_dbg,
+        "aux_keys": aux_keys,
+    }
+
+
+def prepare_model_and_weights(
+    *,
+    model_dir: str,
+    devices: list[str],
+    target_layer: int,
+) -> dict:
     if not devices:
         raise RuntimeError("no devices provided")
 
-    with open(args.input_json, "r", encoding="utf-8") as f:
-        inp = json.load(f)
+    tok = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
 
-    prompt = inp.get("prompt")
-    input_ids = inp.get("input_ids")
+    loader = DeepseekModelLoader(model_dir)
+    model = load_hf_model_skeleton(model_dir)
+    cfg = model.config
 
-    outdir = Path(args.output_dir)
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    tok = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True)
-
-    if input_ids is not None:
-        if not isinstance(input_ids, list):
-            raise TypeError(f"input_ids must be a list, got {type(input_ids).__name__}")
-        ids = [int(x) for x in input_ids]
-        if len(ids) == 0:
-            raise RuntimeError("input_ids must not be empty")
-
-        if prompt is None:
-            prompt = tok.decode(ids)
-    else:
-        if prompt is None:
-            raise RuntimeError("input_json must contain either prompt or input_ids")
-
-        ids = tok(prompt, add_special_tokens=True)["input_ids"][0].tolist()
-
-    decoded = tok.decode(ids)
-
-    target_layer = int(args.layer_id)
-    resident_expert_ids = load_resident_expert_ids_from_model_dir(args.model_dir)
+    resident_expert_ids = load_resident_expert_ids_from_model_dir(model_dir)
     print(f"[hf-single-layer] target_layer={target_layer}")
     print(f"[hf-single-layer] resident_expert_ids={resident_expert_ids}")
-
-    loader = DeepseekModelLoader(args.model_dir)
-    model = load_hf_model_skeleton(args.model_dir)
-    cfg = model.config
 
     layer_to_device = build_layer_to_device_map(target_layer, devices)
     placements = module_placements_to_target_layer(cfg, target_layer, devices)
@@ -432,420 +562,380 @@ def main() -> None:
 
     backbone_dtype = torch.bfloat16
 
-    try:
-        for layer_id in range(target_layer + 1):
-            if is_sparse_layer(cfg, layer_id):
-                moe = model.model.layers[layer_id].mlp
-                moe.layer_id = int(layer_id)
-                moe._manual_loader = loader
-                moe._manual_device = layer_to_device[layer_id]
-                moe._manual_dtype = backbone_dtype
-                moe._loaded_expert_ids = set()
-                moe._cache_daemon_host = "127.0.0.1"
-                moe._cache_daemon_port = 47000
+    for layer_id in range(target_layer + 1):
+        if is_sparse_layer(cfg, layer_id):
+            moe = model.model.layers[layer_id].mlp
+            moe.layer_id = int(layer_id)
+            moe._manual_loader = loader
+            moe._manual_device = layer_to_device[layer_id]
+            moe._manual_dtype = backbone_dtype
+            moe._loaded_expert_ids = set()
+            moe._cache_daemon_host = "127.0.0.1"
+            moe._cache_daemon_port = 47000
 
-                print(
-                    f"[hf-bind] layer={layer_id}",
-                    "layer_id=", moe.layer_id,
-                    "loader_is_none=", moe._manual_loader is None,
-                    "device=", moe._manual_device,
-                    "dtype=", moe._manual_dtype,
-                )
-                print(
-                    "[hf-bind-cache]",
-                    "layer=", layer_id,
-                    "host=", getattr(moe, "_cache_daemon_host", None),
-                    "port=", getattr(moe, "_cache_daemon_port", None),
-                    flush=True,
-                )
-
-        materialize_modules_with_placements(
-            model,
-            placements,
-            default_dtype=backbone_dtype,
-        )
-
-        needed_names = names_to_target_layer(cfg, resident_expert_ids, target_layer)
-
-        for name in needed_names:
-            print(f"[hf-single-layer] copy {name}")
-            copy_named_tensor_into_model(
-                model,
-                loader=loader,
-                tensor_name=name,
-                dtype=backbone_dtype,
+            print(
+                f"[hf-bind] layer={layer_id}",
+                "layer_id=", moe.layer_id,
+                "loader_is_none=", moe._manual_loader is None,
+                "device=", moe._manual_device,
+                "dtype=", moe._manual_dtype,
+            )
+            print(
+                "[hf-bind-cache]",
+                "layer=", layer_id,
+                "host=", getattr(moe, "_cache_daemon_host", None),
+                "port=", getattr(moe, "_cache_daemon_port", None),
+                flush=True,
             )
 
-        assert_named_tensors_materialized(model, needed_names)
+    materialize_modules_with_placements(
+        model,
+        placements,
+        default_dtype=backbone_dtype,
+    )
 
-        embed_weight = model.model.embed_tokens.weight
-        ids_t = torch.tensor([ids], dtype=torch.long, device=embed_weight.device)
-        hidden_states = model.model.embed_tokens(ids_t)
+    needed_names = names_to_target_layer(cfg, resident_expert_ids, target_layer)
+    for name in needed_names:
+        print(f"[hf-single-layer] copy {name}")
+        copy_named_tensor_into_model(
+            model,
+            loader=loader,
+            tensor_name=name,
+            dtype=backbone_dtype,
+        )
 
-        layer_outputs: dict[str, torch.Tensor] = {}
-        misc_outputs: dict[str, torch.Tensor] = {}
+    assert_named_tensors_materialized(model, needed_names)
 
-        def make_layer_hook(name: str):
-            def _hook(_module, _inp, out):
-                x = out[0] if isinstance(out, tuple) else out
-                if not isinstance(x, torch.Tensor):
-                    raise TypeError(f"hook {name}: expected tensor, got {type(x).__name__}")
-                if x.ndim >= 1 and x.shape[0] == 1:
-                    x = x.squeeze(0)
-                layer_outputs[name] = x.detach().float().cpu()
-            return _hook
+    return {
+        "tok": tok,
+        "loader": loader,
+        "model": model,
+        "cfg": cfg,
+        "resident_expert_ids": resident_expert_ids,
+        "layer_to_device": layer_to_device,
+        "placements": placements,
+        "needed_names": needed_names,
+        "is_last_layer": is_last_layer,
+        "backbone_dtype": backbone_dtype,
+    }
 
-        def make_misc_hook(name: str):
-            def _hook(_module, _inp, out):
-                x = out[0] if isinstance(out, tuple) else out
-                if not isinstance(x, torch.Tensor):
-                    raise TypeError(f"hook {name}: expected tensor, got {type(x).__name__}")
-                if x.ndim >= 1 and x.shape[0] == 1:
-                    x = x.squeeze(0)
-                misc_outputs[name] = x.detach().float().cpu()
-            return _hook
 
-        hooks = []
-        outputs = None
-        try:
-            for i in range(target_layer):
-                hooks.append(
-                    model.model.layers[i].register_forward_hook(
-                        make_layer_hook(f"layer_{i}_output")
-                    )
-                )
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model-dir", type=str, required=True)
+    ap.add_argument("--input-json", type=str, required=True)
+    ap.add_argument("--output-dir", type=str, required=True)
+    ap.add_argument(
+        "--devices",
+        type=str,
+        default="cuda:0",
+        help="Comma-separated CUDA devices, e.g. cuda:0,cuda:1,cuda:2,cuda:3",
+    )
+    ap.add_argument("--layer-id", type=int, required=True)
+    ap.add_argument("--topk", type=int, default=10)
+    return ap.parse_args()
 
-            with torch.no_grad():
-                hidden_states = model.model.embed_tokens(ids_t)
+def load_input_prompt_or_ids(
+    *,
+    model_dir: str,
+    input_json: str,
+) -> tuple[str, list[int], str]:
+    with open(input_json, "r", encoding="utf-8") as f:
+        inp = json.load(f)
 
-                position_ids = torch.arange(
-                    hidden_states.shape[1],
-                    device=hidden_states.device,
-                    dtype=torch.long,
-                ).unsqueeze(0)
+    prompt = inp.get("prompt")
+    input_ids = inp.get("input_ids")
 
-                hidden_states_list = [hidden_states]
+    tok = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
 
-                layer_timing = []
+    if input_ids is not None:
+        if not isinstance(input_ids, list):
+            raise TypeError(f"input_ids must be a list, got {type(input_ids).__name__}")
+        ids = [int(x) for x in input_ids]
+        if len(ids) == 0:
+            raise RuntimeError("input_ids must not be empty")
+        if prompt is None:
+            prompt = tok.decode(ids)
+    else:
+        if prompt is None:
+            raise RuntimeError("input_json must contain either prompt or input_ids")
+        enc = tok(prompt, add_special_tokens=True)
+        ids = enc["input_ids"]
+        if isinstance(ids, list) and ids and isinstance(ids[0], int):
+            ids = [int(x) for x in ids]
+        elif isinstance(ids, list) and ids and isinstance(ids[0], list):
+            ids = [int(x) for x in ids[0]]
+        else:
+            raise RuntimeError(f"unexpected tokenizer input_ids type: {type(ids).__name__}")
 
-                for i in range(target_layer + 1):
-                    layer_mod = model.model.layers[i]
+    decoded = tok.decode(ids)
+    return str(prompt), ids, decoded
 
-                    hidden_states = move_tensor_to_module_device(hidden_states, layer_mod)
 
-                    if position_ids is not None:
-                        position_ids = position_ids.to(hidden_states.device)
+def save_last_layer_outputs(
+    *,
+    outdir: Path,
+    outputs,
+    misc_outputs: dict[str, torch.Tensor],
+    tok,
+    topk: int,
+    saved: list[str],
+) -> None:
+    final_hidden = misc_outputs.get("final_hidden")
+    if final_hidden is None:
+        raise RuntimeError("missing final_hidden from explicit final-layer capture")
 
-                    dev = hidden_states.device
-                    if dev.type == "cuda":
-                        torch.cuda.synchronize(dev)
-                    t0 = time.perf_counter()
+    final_norm_output = misc_outputs.get("final_norm_output")
+    if final_norm_output is None:
+        raise RuntimeError("missing final_norm_output from explicit final-layer capture")
 
-                    layer_outputs_i = model.model.layers[i](
-                        hidden_states,
-                        attention_mask=None,
-                        position_ids=position_ids,
-                        past_key_value=None,
-                        output_attentions=False,
-                        use_cache=False,
-                    )
+    next_token_logits = misc_outputs.get("next_token_logits")
+    if next_token_logits is None:
+        raise RuntimeError("missing next_token_logits from explicit final-layer capture")
 
-                    if isinstance(layer_outputs_i, tuple):
-                        hidden_states = layer_outputs_i[0]
-                    else:
-                        hidden_states = layer_outputs_i
+    p = outdir / "final_hidden.pt"
+    torch.save(final_hidden, p)
+    saved.append(str(p))
 
-                    hidden_states_list.append(hidden_states)
+    p = outdir / "final_norm_output.pt"
+    torch.save(final_norm_output, p)
+    saved.append(str(p))
 
-                    dev = hidden_states.device
-                    if dev.type == "cuda":
-                        torch.cuda.synchronize(dev)
-                    t1 = time.perf_counter()
+    p = outdir / "next_token_logits.pt"
+    torch.save(next_token_logits, p)
+    saved.append(str(p))
 
-                    layer_ms = (t1 - t0) * 1000.0
-                    layer_timing.append(
-                        {
-                            "layer_id": int(i),
-                            "device": str(dev),
-                            "layer_ms": layer_ms,
-                            "is_sparse": bool(is_sparse_layer(cfg, i)),
-                        }
-                    )
+    topk_vals, topk_indices = torch.topk(next_token_logits, k=int(topk))
+    topk_ids = [int(x) for x in topk_indices.tolist()]
+    topk_logits = [float(x) for x in topk_vals.tolist()]
 
-                    print(
-                        f"[hf-layer-timing] layer={i} "
-                        f"device={dev} "
-                        f"is_sparse={is_sparse_layer(cfg, i)} "
-                        f"ms={layer_ms:.3f}"
-                    )
+    topk_json = []
+    for rank, (tok_id, val) in enumerate(zip(topk_ids, topk_logits), start=1):
+        topk_json.append(
+            {
+                "rank": int(rank),
+                "token_id": int(tok_id),
+                "logit": float(val),
+                "text": _decode_token_safe(tok, tok_id),
+            }
+        )
 
-                class _ManualOutputs:
-                    pass
+    p = outdir / "next_token_logits_topk.json"
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(topk_json, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    saved.append(str(p))
 
-                outputs = _ManualOutputs()
-                outputs.hidden_states = tuple(
-                    x.detach() for x in hidden_states_list
-                )
+    if outputs is None:
+        raise RuntimeError("model forward outputs is None")
+    if outputs.hidden_states is None or len(outputs.hidden_states) == 0:
+        raise RuntimeError("model forward did not return hidden_states")
+    if not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
+        raise RuntimeError("model forward did not return tensor logits")
 
-                if is_last_layer:
-                    # final_hidden: output of last decoder layer, BEFORE final norm
-                    final_hidden = hidden_states
-                    if not isinstance(final_hidden, torch.Tensor):
-                        raise TypeError(
-                            f"final_hidden expected torch.Tensor, got {type(final_hidden).__name__}"
-                        )
+    hidden_from_outputs = outputs.hidden_states[-1].detach().float().cpu()
+    if hidden_from_outputs.ndim >= 1 and hidden_from_outputs.shape[0] == 1:
+        hidden_from_outputs = hidden_from_outputs.squeeze(0).contiguous()
 
-                    final_hidden = final_hidden.to(model.model.norm.weight.device)
-                    final_norm_output = model.model.norm(final_hidden)
+    logits_from_outputs = outputs.logits.detach().float().cpu()
+    if logits_from_outputs.ndim >= 1 and logits_from_outputs.shape[0] == 1:
+        logits_from_outputs = logits_from_outputs.squeeze(0).contiguous()
 
-                    final_norm_output_for_lm = final_norm_output.to(model.lm_head.weight.device)
-                    logits = model.lm_head(final_norm_output_for_lm)
+    if logits_from_outputs.ndim != 2:
+        raise RuntimeError(
+            f"outputs.logits after squeeze expected shape [T, V], got {tuple(logits_from_outputs.shape)}"
+        )
+    next_token_logits_from_outputs = logits_from_outputs[-1].contiguous()
 
-                    if not isinstance(logits, torch.Tensor):
-                        raise TypeError(
-                            f"logits expected torch.Tensor, got {type(logits).__name__}"
-                        )
-                    if logits.ndim != 3 or logits.shape[0] != 1:
-                        raise RuntimeError(
-                            f"logits expected shape [1, T, V], got {tuple(logits.shape)}"
-                        )
+    p = outdir / "outputs_final_hidden.pt"
+    torch.save(hidden_from_outputs, p)
+    saved.append(str(p))
 
-                    misc_outputs["final_hidden"] = (
-                        final_hidden.detach().float().cpu().squeeze(0)
-                    )
-                    misc_outputs["final_norm_output"] = (
-                        final_norm_output.detach().float().cpu().squeeze(0)
-                    )
-                    misc_outputs["next_token_logits"] = (
-                        logits[:, -1, :].detach().float().cpu().squeeze(0)
-                    )
+    p = outdir / "outputs_logits.pt"
+    torch.save(logits_from_outputs, p)
+    saved.append(str(p))
 
-                    outputs.logits = logits
-                else:
-                    outputs.logits = None
+    p = outdir / "outputs_next_token_logits.pt"
+    torch.save(next_token_logits_from_outputs, p)
+    saved.append(str(p))
 
-        dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
-        router_dbg = {}
-        if is_sparse_layer(cfg, target_layer):
-            router_dbg = getattr(
-                model.model.layers[target_layer].mlp.gate,
-                "last_router_debug",
-                {},
-            ) or {}
+    hidden_diff = (final_hidden - hidden_from_outputs).abs()
+    logits_diff = (next_token_logits_from_outputs - next_token_logits).abs()
+
+    debug_compare = {
+        "final_hidden_explicit_vs_outputs_final_hidden": {
+            "shape_explicit": list(final_hidden.shape),
+            "shape_outputs_final_hidden": list(hidden_from_outputs.shape),
+            "max_abs": float(hidden_diff.max().item()),
+            "mean_abs": float(hidden_diff.mean().item()),
+        },
+        "next_token_logits_outputs_vs_explicit": {
+            "shape_outputs_next_token_logits": list(next_token_logits_from_outputs.shape),
+            "shape_explicit_next_token_logits": list(next_token_logits.shape),
+            "max_abs": float(logits_diff.max().item()),
+            "mean_abs": float(logits_diff.mean().item()),
+        },
+    }
+
+    p = outdir / "final_head_debug_compare.json"
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(debug_compare, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    saved.append(str(p))
+
+
+def save_layer_outputs(
+    *,
+    outdir: Path,
+    target_layer: int,
+    layer_outputs: dict[str, torch.Tensor],
+    saved: list[str],
+) -> None:
+    for i in range(target_layer):
+        name = f"layer_{i}_output"
+        if name not in layer_outputs:
+            raise RuntimeError(f"missing hook output for {name}")
+
+        p = outdir / f"{name}.pt"
+        torch.save(layer_outputs[name], p)
+        saved.append(str(p))
+
+
+def save_expert_debug_outputs(
+    *,
+    outdir: Path,
+    prefix: str,
+    dbg: dict,
+    saved: list[str],
+) -> None:
+    expert_dbg = dbg.get("debug_expert_outputs")
+    if not isinstance(expert_dbg, list):
+        return
+
+    meta = []
+    tensor_keys = [
+        "tokens_for_this_expert",
+        "expert_out",
+        "input",
+        "gate_linear",
+        "up_linear",
+        "act",
+        "mul",
+        "down_proj",
+    ]
+
+    for j, item in enumerate(expert_dbg):
+        if not isinstance(item, dict):
+            continue
+
+        meta_item = {
+            "expert_local_id": int(item["expert_local_id"]) if "expert_local_id" in item else None,
+            "num_tokens": int(item["num_tokens"]) if "num_tokens" in item else None,
+        }
+        meta.append(meta_item)
+
+        for key in tensor_keys:
+            x = item.get(key)
+            if isinstance(x, torch.Tensor):
+                p = outdir / f"{prefix}_hf_expert{j}_{key}.pt"
+                torch.save(x.detach().float().cpu(), p)
+                saved.append(str(p))
+
+    p = outdir / f"{prefix}_hf_expert_outputs_meta.json"
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    saved.append(str(p))
+
+
+def main() -> None:
+    args = parse_args()
+
+    devices = [x.strip() for x in args.devices.split(",") if x.strip()]
+    if not devices:
+        raise RuntimeError("no devices provided")
+
+    outdir = Path(args.output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    prompt, ids, decoded = load_input_prompt_or_ids(
+        model_dir=args.model_dir,
+        input_json=args.input_json,
+    )
+
+    target_layer = int(args.layer_id)
+
+    model_bundle = prepare_model_and_weights(
+        model_dir=args.model_dir,
+        devices=devices,
+        target_layer=target_layer,
+    )
+
+    tok = model_bundle["tok"]
+    model = model_bundle["model"]
+    cfg = model_bundle["cfg"]
+    is_last_layer = model_bundle["is_last_layer"]
+
+    try:
+        forward_bundle = run_forward_to_target_layer(
+            model=model,
+            cfg=cfg,
+            ids=ids,
+            target_layer=target_layer,
+        )
+
+        outputs = forward_bundle["outputs"]
+        layer_outputs = forward_bundle["layer_outputs"]
+        misc_outputs = forward_bundle["misc_outputs"]
+        layer_timing = forward_bundle["layer_timing"]
+        dbg = forward_bundle["dbg"]
+        router_dbg = forward_bundle["router_dbg"]
+        aux_keys = forward_bundle["aux_keys"]
 
         saved: list[str] = []
 
-        for i in range(target_layer):
-            name = f"layer_{i}_output"
-            if name not in layer_outputs:
-                raise RuntimeError(f"missing hook output for {name}")
-            p = outdir / f"{name}.pt"
-            torch.save(layer_outputs[name], p)
-            saved.append(str(p))
+        save_layer_outputs(
+            outdir=outdir,
+            target_layer=target_layer,
+            layer_outputs=layer_outputs,
+            saved=saved,
+        )
 
         prefix = f"layer_{target_layer}"
-
-        if is_sparse_layer(cfg, target_layer):
-            save_tensor_if_present(saved, outdir, dbg, "attention_input", f"{prefix}_attention_input.pt")
-            save_tensor_if_present(saved, outdir, dbg, "attention_output", f"{prefix}_attention_output.pt")
-            save_tensor_if_present(saved, outdir, dbg, "post_attention_hidden", f"{prefix}_post_attention_hidden.pt")
-            save_tensor_if_present(saved, outdir, dbg, "ffn_hidden", f"{prefix}_ffn_hidden.pt")
-            save_tensor_if_present(saved, outdir, dbg, "shared_expert_output", f"{prefix}_shared_expert_output.pt")
-            save_tensor_if_present(saved, outdir, dbg, "routed_output", f"{prefix}_routed_output.pt")
-            save_tensor_if_present(saved, outdir, dbg, "ffn_total", f"{prefix}_ffn_total.pt")
-            save_tensor_if_present(saved, outdir, dbg, "layer_output", f"{prefix}_output.pt")
-
-            save_tensor_if_present(saved, outdir, router_dbg, "logits", f"{prefix}_logits.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "scores", f"{prefix}_scores.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "scores_for_choice", f"{prefix}_scores_for_choice.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "group_scores", f"{prefix}_group_scores.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "selected_group_idx", f"{prefix}_selected_group_idx.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "score_mask", f"{prefix}_score_mask.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "topk_choice_vals", f"{prefix}_topk_choice_vals.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "topk_idx", f"{prefix}_topk_idx.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "topk_weight", f"{prefix}_topk_weight.pt")
-            save_tensor_if_present(saved, outdir, router_dbg, "resident_mask", f"{prefix}_resident_mask.pt")
-
-            save_tensor_if_present(saved, outdir, dbg, "topk_ids", f"{prefix}_moe_topk_ids.pt")
-            save_tensor_if_present(saved, outdir, dbg, "topk_weight", f"{prefix}_moe_topk_weight.pt")
-            save_tensor_if_present(saved, outdir, dbg, "flat_topk_ids", f"{prefix}_moe_flat_topk_ids.pt")
-            save_tensor_if_present(saved, outdir, dbg, "idxs", f"{prefix}_moe_idxs.pt")
-            save_tensor_if_present(saved, outdir, dbg, "kept_positions", f"{prefix}_moe_kept_positions.pt")
-            save_tensor_if_present(saved, outdir, dbg, "gatherd_idxs", f"{prefix}_moe_gatherd_idxs.pt")
-            save_tensor_if_present(saved, outdir, dbg, "outs", f"{prefix}_moe_outs.pt")
-            save_tensor_if_present(saved, outdir, dbg, "restored_sorted", f"{prefix}_moe_restored_sorted.pt")
-            save_tensor_if_present(saved, outdir, dbg, "inv_idxs", f"{prefix}_moe_inv_idxs.pt")
-            save_tensor_if_present(saved, outdir, dbg, "restored_flat", f"{prefix}_moe_restored_flat.pt")
-            save_tensor_if_present(saved, outdir, dbg, "restored_by_token", f"{prefix}_moe_restored_by_token.pt")
-            save_tensor_if_present(saved, outdir, dbg, "weighted_by_token", f"{prefix}_moe_weighted_by_token.pt")
-            save_tensor_if_present(saved, outdir, dbg, "final_out", f"{prefix}_moe_final_out.pt")
-
-            aux_keys = sorted(set(dbg.keys()) | set(router_dbg.keys()))
-        else:
-            save_tensor_if_present(saved, outdir, dbg, "attention_input", f"{prefix}_attention_input.pt")
-            save_tensor_if_present(saved, outdir, dbg, "attention_output", f"{prefix}_attention_output.pt")
-            save_tensor_if_present(saved, outdir, dbg, "post_attention_hidden", f"{prefix}_post_attention_hidden.pt")
-            save_tensor_if_present(saved, outdir, dbg, "ffn_hidden", f"{prefix}_ffn_hidden.pt")
-            save_tensor_if_present(saved, outdir, dbg, "dense_ffn_output", f"{prefix}_dense_ffn_output.pt")
-            save_tensor_if_present(saved, outdir, dbg, "layer_output", f"{prefix}_output.pt")
-            aux_keys = sorted(dbg.keys())
-
-        expert_dbg = dbg.get("debug_expert_outputs")
-        if isinstance(expert_dbg, list):
-            meta = []
-            tensor_keys = [
-                "tokens_for_this_expert",
-                "expert_out",
-                "input",
-                "gate_linear",
-                "up_linear",
-                "act",
-                "mul",
-                "down_proj",
-            ]
-
-            for j, item in enumerate(expert_dbg):
-                if not isinstance(item, dict):
-                    continue
-
-                meta_item = {
-                    "expert_local_id": int(item["expert_local_id"]) if "expert_local_id" in item else None,
-                    "num_tokens": int(item["num_tokens"]) if "num_tokens" in item else None,
-                }
-                meta.append(meta_item)
-
-                for key in tensor_keys:
-                    x = item.get(key)
-                    if isinstance(x, torch.Tensor):
-                        p = outdir / f"{prefix}_hf_expert{j}_{key}.pt"
-                        torch.save(x.detach().float().cpu(), p)
-                        saved.append(str(p))
-
-            p = outdir / f"{prefix}_hf_expert_outputs_meta.json"
-            with p.open("w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-            saved.append(str(p))
+        save_expert_debug_outputs(
+            outdir=outdir,
+            prefix=prefix,
+            dbg=dbg,
+            saved=saved,
+        )
 
         if is_last_layer:
-            final_hidden = misc_outputs.get("final_hidden")
-            if final_hidden is None:
-                raise RuntimeError("missing final_hidden from explicit final-layer capture")
-
-            final_norm_output = misc_outputs.get("final_norm_output")
-            if final_norm_output is None:
-                raise RuntimeError("missing final_norm_output from explicit final-layer capture")
-
-            next_token_logits = misc_outputs.get("next_token_logits")
-            if next_token_logits is None:
-                raise RuntimeError("missing next_token_logits from explicit final-layer capture")
-
-            p = outdir / "final_hidden.pt"
-            torch.save(final_hidden, p)
-            saved.append(str(p))
-
-            p = outdir / "final_norm_output.pt"
-            torch.save(final_norm_output, p)
-            saved.append(str(p))
-
-            p = outdir / "next_token_logits.pt"
-            torch.save(next_token_logits, p)
-            saved.append(str(p))
-
-            topk = torch.topk(next_token_logits, k=int(args.topk))
-            topk_ids = [int(x) for x in topk.indices.tolist()]
-            topk_vals = [float(x) for x in topk.values.tolist()]
-
-            topk_json = []
-            for rank, (tok_id, val) in enumerate(zip(topk_ids, topk_vals), start=1):
-                topk_json.append(
-                    {
-                        "rank": int(rank),
-                        "token_id": int(tok_id),
-                        "logit": float(val),
-                        "text": _decode_token_safe(tok, tok_id),
-                    }
-                )
-
-            p = outdir / "next_token_logits_topk.json"
-            with p.open("w", encoding="utf-8") as f:
-                json.dump(topk_json, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-            saved.append(str(p))
-
-            if outputs is None:
-                raise RuntimeError("model forward outputs is None")
-            if outputs.hidden_states is None or len(outputs.hidden_states) == 0:
-                raise RuntimeError("model forward did not return hidden_states")
-            if not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
-                raise RuntimeError("model forward did not return tensor logits")
-
-            hidden_from_outputs = outputs.hidden_states[-1].detach().float().cpu()
-            if hidden_from_outputs.ndim >= 1 and hidden_from_outputs.shape[0] == 1:
-                hidden_from_outputs = hidden_from_outputs.squeeze(0).contiguous()
-
-            logits_from_outputs = outputs.logits.detach().float().cpu()
-            if logits_from_outputs.ndim >= 1 and logits_from_outputs.shape[0] == 1:
-                logits_from_outputs = logits_from_outputs.squeeze(0).contiguous()
-
-            if logits_from_outputs.ndim != 2:
-                raise RuntimeError(
-                    f"outputs.logits after squeeze expected shape [T, V], got {tuple(logits_from_outputs.shape)}"
-                )
-            next_token_logits_from_outputs = logits_from_outputs[-1].contiguous()
-
-            p = outdir / "outputs_final_hidden.pt"
-            torch.save(hidden_from_outputs, p)
-            saved.append(str(p))
-
-            p = outdir / "outputs_logits.pt"
-            torch.save(logits_from_outputs, p)
-            saved.append(str(p))
-
-            p = outdir / "outputs_next_token_logits.pt"
-            torch.save(next_token_logits_from_outputs, p)
-            saved.append(str(p))
-
-            hidden_diff = (final_hidden - hidden_from_outputs).abs()
-            logits_diff = (next_token_logits_from_outputs - next_token_logits).abs()
-
-            debug_compare = {
-                "final_hidden_explicit_vs_outputs_final_hidden": {
-                    "shape_explicit": list(final_hidden.shape),
-                    "shape_outputs_final_hidden": list(hidden_from_outputs.shape),
-                    "max_abs": float(hidden_diff.max().item()),
-                    "mean_abs": float(hidden_diff.mean().item()),
-                },
-                "next_token_logits_outputs_vs_explicit": {
-                    "shape_outputs_next_token_logits": list(next_token_logits_from_outputs.shape),
-                    "shape_explicit_next_token_logits": list(next_token_logits.shape),
-                    "max_abs": float(logits_diff.max().item()),
-                    "mean_abs": float(logits_diff.mean().item()),
-                },
-            }
-
-            p = outdir / "final_head_debug_compare.json"
-            with p.open("w", encoding="utf-8") as f:
-                json.dump(debug_compare, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-            saved.append(str(p))
+            save_last_layer_outputs(
+                outdir=outdir,
+                outputs=outputs,
+                misc_outputs=misc_outputs,
+                tok=tok,
+                topk=int(args.topk),
+                saved=saved,
+            )
 
         report = {
             "backend": "hf_absorbed",
-            "layer_id": target_layer,
+            "layer_id": int(target_layer),
             "is_sparse": bool(is_sparse_layer(cfg, target_layer)),
             "prompt": prompt,
-            "input_ids": ids,
+            "input_ids": [int(x) for x in ids],
             "decoded_input": decoded,
-            "saved": saved,
+            "saved": list(saved),
             "debug_keys": sorted(list(dbg.keys())),
             "router_debug_keys": sorted(list(router_dbg.keys())),
-            "aux_keys": aux_keys,
+            "aux_keys": list(aux_keys),
             "has_final_hidden": bool(is_last_layer),
             "has_final_norm_output": bool(is_last_layer),
             "has_next_token_logits": bool(is_last_layer),
-            "layer_timing": layer_timing,
+            "layer_timing": list(layer_timing),
         }
+
         with (outdir / "hf_single_layer_manual.json").open("w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
             f.write("\n")
