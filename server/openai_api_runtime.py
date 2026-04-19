@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from server.backbone_store import make_even_explicit_partition
 from server.config import load_config
 from server.control_plane import setup_control_plane
 from server.coordinator import Coordinator
@@ -29,11 +30,16 @@ class OpenAIAPIRuntime:
 
         try:
             session.full_model_executor = DeepseekFullModelExecutor(session)
+            partition = make_even_explicit_partition(
+                num_layers=61,
+                devices=["cuda:0", "cuda:1", "cuda:2", "cuda:3"],
+            )
+
             session.initialize_full_model_runtime(
                 tensor_cache_dir="tmp/non_moe_backbone_cache",
-                split_layer=30,
                 backbone_dtype=torch.bfloat16,
                 kv_cache_cfg=cfg["kv_cache"],
+                partition=partition,
             )
 
             if not session.is_chat_runtime_ready():
