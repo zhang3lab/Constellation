@@ -243,6 +243,7 @@ class InferenceSession:
         backbone_dtype: torch.dtype = torch.bfloat16,
         kv_cache_cfg: dict,
         plan: BackboneLoadPlan | None = None,
+        partition: LayerPartition | None = None,
     ) -> None:
         if self.full_model_runtime_ready:
             return
@@ -252,7 +253,8 @@ class InferenceSession:
      
         self.mapped_tensor_store = MappedTensorStore(tensor_cache_dir)
      
-        partition = TwoGpuLayerPartition(split_layer=split_layer)
+        if partition is None:
+            partition = TwoGpuLayerPartition(split_layer=split_layer)
      
         if plan is None:
             plan = BackboneLoadPlan.full(
@@ -284,7 +286,11 @@ class InferenceSession:
             max_seq_len=int(kv_cache_cfg["max_seq_len"]),
         )
      
-        if self.backbone_store is None or self.attention_runtime is None or self.freq_cis_by_device is None:
+        if (
+            self.backbone_store is None
+            or self.attention_runtime is None
+            or self.freq_cis_by_device is None
+        ):
             raise RuntimeError("full model runtime initialization incomplete")
      
         self.page_attention_cache_managers = self._build_page_attention_cache_managers(

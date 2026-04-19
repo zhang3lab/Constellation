@@ -396,11 +396,16 @@ def main() -> None:
         session.full_model_executor = DeepseekFullModelExecutor(session)
 
         kv_cache_cfg = cfg["kv_cache"]
+        partition = make_even_explicit_partition(
+            num_layers=61,
+            devices=["cuda:0", "cuda:1", "cuda:2", "cuda:3"],
+        )
+
         session.initialize_full_model_runtime(
             tensor_cache_dir="tmp/non_moe_backbone_cache",
-            split_layer=30,
             backbone_dtype=torch.bfloat16,
             kv_cache_cfg=kv_cache_cfg,
+            partition=partition,
         )
 
         if session.backbone_store is None:

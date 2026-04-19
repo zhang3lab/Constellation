@@ -190,6 +190,42 @@ class BackboneStore:
         self._lm_head = t
 
 
+def make_even_explicit_partition(
+    *,
+    num_layers: int = 61,
+    devices: list[str] | tuple[str, ...] = ("cuda:0", "cuda:1", "cuda:2", "cuda:3"),
+    embed_device: str | None = None,
+    final_norm_device: str | None = None,
+    lm_head_device: str | None = None,
+) -> ExplicitLayerPartition:
+    devices = [str(x) for x in devices]
+    if not devices:
+        raise RuntimeError("devices must not be empty")
+    if num_layers <= 0:
+        raise RuntimeError(f"num_layers must be > 0, got {num_layers}")
+
+    layer_to_device: dict[int, str] = {}
+    ndev = len(devices)
+
+    for layer_id in range(num_layers):
+        dev_idx = min(ndev - 1, (layer_id * ndev) // num_layers)
+        layer_to_device[layer_id] = devices[dev_idx]
+
+    if embed_device is None:
+        embed_device = devices[0]
+    if final_norm_device is None:
+        final_norm_device = devices[-1]
+    if lm_head_device is None:
+        lm_head_device = devices[-1]
+
+    return ExplicitLayerPartition(
+        layer_to_device=layer_to_device,
+        embed_device=embed_device,
+        final_norm_device=final_norm_device,
+        lm_head_device=lm_head_device,
+    )
+
+
 def _load_cpu_tensor_from_source(
     tensor_name: str,
     *,
