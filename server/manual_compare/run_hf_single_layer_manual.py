@@ -11,6 +11,14 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from server.deepseek_model_loader import DeepseekModelLoader
 
 
+def _decode_token_safe(tok, token_id: int) -> str:
+    try:
+        s = tok.decode([int(token_id)])
+        return repr(s)
+    except Exception as e:
+        return f"<decode_error:{e}>"
+
+
 def get_attr_by_dotted_name(obj, dotted_name: str):
     cur = obj
     for part in dotted_name.split("."):
@@ -362,6 +370,7 @@ def main() -> None:
     ap.add_argument("--model-dir", type=str, required=True)
     ap.add_argument("--input-json", type=str, required=True)
     ap.add_argument("--output-dir", type=str, required=True)
+    ap.add_argument("--topk", type=int, default=10)
     ap.add_argument(
         "--devices",
         type=str,
@@ -506,13 +515,6 @@ def main() -> None:
                     )
                 )
 
-            if is_last_layer:
-                hooks.append(
-                    model.model.norm.register_forward_hook(
-                        make_misc_hook("final_hidden")
-                    )
-                )
-
             with torch.no_grad():
                 hidden_states = model.model.embed_tokens(ids_t)
 
@@ -531,8 +533,6 @@ def main() -> None:
 
                     hidden_states = move_tensor_to_module_device(hidden_states, layer_mod)
 
-                    #if attention_mask is not None:
-                    #    attention_mask = attention_mask.to(hidden_states.device)
                     if position_ids is not None:
                         position_ids = position_ids.to(hidden_states.device)
 
@@ -588,16 +588,41 @@ def main() -> None:
                 )
 
                 if is_last_layer:
-                    hidden_states = hidden_states.to(model.model.norm.weight.device)
-                    final_hidden_manual = model.model.norm(hidden_states)
-                    final_hidden_manual = final_hidden_manual.to(model.lm_head.weight.device)
-                    logits_manual = model.lm_head(final_hidden_manual)
-                    outputs.logits = logits_manual
+                    # final_hidden: output of last decoder layer, BEFORE final norm
+                    final_hidden = hidden_states
+                    if not isinstance(final_hidden, torch.Tensor):
+                        raise TypeError(
+                            f"final_hidden expected torch.Tensor, got {type(final_hidden).__name__}"
+                        )
+
+                    final_hidden = final_hidden.to(model.model.norm.weight.device)
+                    final_norm_output = model.model.norm(final_hidden)
+
+                    final_norm_output_for_lm = final_norm_output.to(model.lm_head.weight.device)
+                    logits = model.lm_head(final_norm_output_for_lm)
+
+                    if not isinstance(logits, torch.Tensor):
+                        raise TypeError(
+                            f"logits expected torch.Tensor, got {type(logits).__name__}"
+                        )
+                    if logits.ndim != 3 or logits.shape[0] != 1:
+                        raise RuntimeError(
+                            f"logits expected shape [1, T, V], got {tuple(logits.shape)}"
+                        )
+
+                    misc_outputs["final_hidden"] = (
+                        final_hidden.detach().float().cpu().squeeze(0)
+                    )
+                    misc_outputs["final_norm_output"] = (
+                        final_norm_output.detach().float().cpu().squeeze(0)
+                    )
+                    misc_outputs["next_token_logits"] = (
+                        logits[:, -1, :].detach().float().cpu().squeeze(0)
+                    )
+
+                    outputs.logits = logits
                 else:
                     outputs.logits = None
-        finally:
-            for h in hooks:
-                h.remove()
 
         dbg = getattr(model.model.layers[target_layer], "last_debug", {}) or {}
         router_dbg = {}
@@ -705,10 +730,47 @@ def main() -> None:
         if is_last_layer:
             final_hidden = misc_outputs.get("final_hidden")
             if final_hidden is None:
-                raise RuntimeError("missing final_hidden hook output from model.model.norm")
+                raise RuntimeError("missing final_hidden from explicit final-layer capture")
+
+            final_norm_output = misc_outputs.get("final_norm_output")
+            if final_norm_output is None:
+                raise RuntimeError("missing final_norm_output from explicit final-layer capture")
+
+            next_token_logits = misc_outputs.get("next_token_logits")
+            if next_token_logits is None:
+                raise RuntimeError("missing next_token_logits from explicit final-layer capture")
 
             p = outdir / "final_hidden.pt"
             torch.save(final_hidden, p)
+            saved.append(str(p))
+
+            p = outdir / "final_norm_output.pt"
+            torch.save(final_norm_output, p)
+            saved.append(str(p))
+
+            p = outdir / "next_token_logits.pt"
+            torch.save(next_token_logits, p)
+            saved.append(str(p))
+
+            topk = torch.topk(next_token_logits, k=int(args.topk))
+            topk_ids = [int(x) for x in topk.indices.tolist()]
+            topk_vals = [float(x) for x in topk.values.tolist()]
+
+            topk_json = []
+            for rank, (tok_id, val) in enumerate(zip(topk_ids, topk_vals), start=1):
+                topk_json.append(
+                    {
+                        "rank": int(rank),
+                        "token_id": int(tok_id),
+                        "logit": float(val),
+                        "text": _decode_token_safe(tok, tok_id),
+                    }
+                )
+
+            p = outdir / "next_token_logits_topk.json"
+            with p.open("w", encoding="utf-8") as f:
+                json.dump(topk_json, f, ensure_ascii=False, indent=2)
+                f.write("\n")
             saved.append(str(p))
 
             if outputs is None:
@@ -718,7 +780,6 @@ def main() -> None:
             if not hasattr(outputs, "logits") or not isinstance(outputs.logits, torch.Tensor):
                 raise RuntimeError("model forward did not return tensor logits")
 
-            hidden_from_hook = final_hidden                                  # cpu, [T,H]
             hidden_from_outputs = outputs.hidden_states[-1].detach().float().cpu()
             if hidden_from_outputs.ndim >= 1 and hidden_from_outputs.shape[0] == 1:
                 hidden_from_outputs = hidden_from_outputs.squeeze(0).contiguous()
@@ -727,20 +788,13 @@ def main() -> None:
             if logits_from_outputs.ndim >= 1 and logits_from_outputs.shape[0] == 1:
                 logits_from_outputs = logits_from_outputs.squeeze(0).contiguous()
 
-            lm_head_w = model.lm_head.weight
-            final_hidden_dev = hidden_from_hook.to(
-                device=lm_head_w.device,
-                dtype=lm_head_w.dtype,
-            )
-            with torch.no_grad():
-                logits_manual = torch.matmul(final_hidden_dev, lm_head_w.t())
-            logits_manual = logits_manual.detach().float().cpu()
+            if logits_from_outputs.ndim != 2:
+                raise RuntimeError(
+                    f"outputs.logits after squeeze expected shape [T, V], got {tuple(logits_from_outputs.shape)}"
+                )
+            next_token_logits_from_outputs = logits_from_outputs[-1].contiguous()
 
-            p = outdir / "logits.pt"
-            torch.save(logits_manual, p)
-            saved.append(str(p))
-
-            p = outdir / "outputs0_hidden.pt"
+            p = outdir / "outputs_final_hidden.pt"
             torch.save(hidden_from_outputs, p)
             saved.append(str(p))
 
@@ -748,19 +802,23 @@ def main() -> None:
             torch.save(logits_from_outputs, p)
             saved.append(str(p))
 
-            hidden_diff = (hidden_from_hook - hidden_from_outputs).abs()
-            logits_diff = (logits_from_outputs - logits_manual).abs()
+            p = outdir / "outputs_next_token_logits.pt"
+            torch.save(next_token_logits_from_outputs, p)
+            saved.append(str(p))
+
+            hidden_diff = (final_hidden - hidden_from_outputs).abs()
+            logits_diff = (next_token_logits_from_outputs - next_token_logits).abs()
 
             debug_compare = {
-                "hidden_hook_vs_outputs0": {
-                    "shape_hook": list(hidden_from_hook.shape),
-                    "shape_outputs0": list(hidden_from_outputs.shape),
+                "final_hidden_explicit_vs_outputs_final_hidden": {
+                    "shape_explicit": list(final_hidden.shape),
+                    "shape_outputs_final_hidden": list(hidden_from_outputs.shape),
                     "max_abs": float(hidden_diff.max().item()),
                     "mean_abs": float(hidden_diff.mean().item()),
                 },
-                "logits_outputs_vs_manual": {
-                    "shape_outputs_logits": list(logits_from_outputs.shape),
-                    "shape_manual_logits": list(logits_manual.shape),
+                "next_token_logits_outputs_vs_explicit": {
+                    "shape_outputs_next_token_logits": list(next_token_logits_from_outputs.shape),
+                    "shape_explicit_next_token_logits": list(next_token_logits.shape),
                     "max_abs": float(logits_diff.max().item()),
                     "mean_abs": float(logits_diff.mean().item()),
                 },
@@ -784,7 +842,8 @@ def main() -> None:
             "router_debug_keys": sorted(list(router_dbg.keys())),
             "aux_keys": aux_keys,
             "has_final_hidden": bool(is_last_layer),
-            "has_logits": bool(is_last_layer),
+            "has_final_norm_output": bool(is_last_layer),
+            "has_next_token_logits": bool(is_last_layer),
             "layer_timing": layer_timing,
         }
         with (outdir / "hf_single_layer_manual.json").open("w", encoding="utf-8") as f:
@@ -794,7 +853,8 @@ def main() -> None:
         print(f"[hf-single-layer] wrote {outdir / 'hf_single_layer_manual.json'}")
     finally:
         del model
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
